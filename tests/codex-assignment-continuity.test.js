@@ -6,37 +6,55 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
+const { createHash } = require('node:crypto');
 const ROOT = path.resolve(__dirname, '..');
 const SESSION = '11111111-1111-4111-8111-111111111111';
 const TURN = '22222222-2222-4222-8222-222222222222';
 const SOURCE = '33333333-3333-4333-8333-333333333333';
 const continuity = require('../runtimes/codex/assignment-continuity');
-const { readNativeTurn } = require('../runtimes/codex/native-turn-reader');
+const { readNativeTurn, projectedFrames, MAX_TRANSPORT_BYTES } = require('../runtimes/codex/native-turn-reader');
 
 function fixture() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'codex-assignment-')));
   const command = path.join(root, 'native');
   const requestFile = path.join(root, 'requests');
+  const payloadFile = path.join(root, 'request-payloads');
   fs.writeFileSync(command, `#!${process.execPath}
 const fs=require('node:fs'), readline=require('node:readline');
 const data=JSON.parse(fs.readFileSync(process.env.FIXTURE,'utf8'));
+let turnPage=0;
 readline.createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);fs.appendFileSync(${JSON.stringify(requestFile)},m.method+'\\n');
- const reply=result=>process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');
+ fs.appendFileSync(${JSON.stringify(payloadFile)},JSON.stringify(m)+'\\n');
+ const reply=result=>{
+  const wire=JSON.stringify({id:m.id,result})+'\\n', marker='"VIRTUAL_OUTPUT"', at=wire.indexOf(marker);
+  if(at<0)return process.stdout.write(wire);
+  process.stdout.write(wire.slice(0,at)+'"');
+  let remaining=data.largeBytes;
+  const pump=()=>{
+   while(remaining>0){const size=Math.min(remaining,16384);remaining-=size;if(!process.stdout.write('x'.repeat(size)))return process.stdout.once('drain',pump);}
+   process.stdout.write('"'+wire.slice(at+marker.length));
+  };pump();
+ };
  if(data.hang)return;
  if(data.error){process.stdout.write(JSON.stringify({id:m.id,error:{code:-32601}})+'\\n');return;}
  if(m.method==='initialize')reply({});
- else if(m.method==='thread/turns/list')reply({data:[{id:data.turnId||${JSON.stringify(TURN)},startedAt:1700000000,status:'interrupted'}]});
+ else if(m.method==='thread/turns/list'){
+  const n=turnPage++;
+  reply({data:data.turnPages?(data.turnPages[n]||data.turnPages.at(-1)):[{id:data.turnId||${JSON.stringify(TURN)},startedAt:1700000000,status:'interrupted'}],
+   nextCursor:Object.hasOwn(data,'turnCursor')?data.turnCursor:(data.turnPages&&n+1<data.turnPages.length?String(n+1):null)});
+ }
  else if(m.method==='thread/items/list'){
    const n=m.params.cursor?Number(m.params.cursor):0;
-   reply({data:data.pages?data.pages[n]:data.items,nextCursor:data.loop?'same':(data.pages&&n+1<data.pages.length?String(n+1):null)});
+   if(data.pagedItems)reply({data:data.pagedItems.slice(n,n+m.params.limit),nextCursor:n+m.params.limit<data.pagedItems.length?String(n+m.params.limit):null});
+   else reply({data:data.pages?data.pages[n]:data.items,nextCursor:data.loop?'same':(data.pages&&n+1<data.pages.length?String(n+1):null)});
  }else if(m.method!=='initialized')process.exit(9);
 });
 `, { mode: 0o700 });
   const env = { PATH: '/usr/bin:/bin', HOME: root, CODEX_HOME: root, CODEX_THREAD_ID: SESSION,
     JARVOS_CODEX_NATIVE_COMMAND: command, FIXTURE: path.join(root, 'fixture.json') };
   fs.writeFileSync(env.FIXTURE, JSON.stringify({ items: [] }));
-  return { root, env, requestFile, set(data) { fs.writeFileSync(env.FIXTURE, JSON.stringify(data)); },
+  return { root, env, requestFile, payloadFile, set(data) { fs.writeFileSync(env.FIXTURE, JSON.stringify(data)); },
     close() { fs.rmSync(root, { recursive: true, force: true }); } };
 }
 const input = { hook_event_name: 'PreCompact', trigger: 'auto', session_id: SESSION, turn_id: TURN };
@@ -243,6 +261,145 @@ test('supported native reader bounds pagination, preserves Unicode and ignores s
       await assert.rejects(readNativeTurn({ sessionId: SESSION, turnId: TURN, command: f.env.JARVOS_CODEX_NATIVE_COMMAND, env: f.env }));
     }
   } finally { f.close(); }
+});
+
+test('reader finds only the supplied turn on a later metadata page and keeps its original start', async () => {
+  const f = fixture();
+  try {
+    f.set({ turnPages: [[{ id: SOURCE, startedAt: 1800000000, status: 'completed' }],
+      [{ id: TURN, startedAt: 1700000000, status: 'interrupted' }]], items: [peer('p', assignment)] });
+    const result = await readNativeTurn({ sessionId: SESSION, turnId: TURN, command: f.env.JARVOS_CODEX_NATIVE_COMMAND, env: f.env });
+    assert.equal(result.startedAt, 1700000000); assert.equal(result.items.length, 1);
+    const requests = fs.readFileSync(f.payloadFile, 'utf8').trim().split('\n').map(JSON.parse);
+    const metadata = requests.filter((message) => message.method === 'thread/turns/list');
+    assert.equal(metadata.length, 2); assert.equal(metadata[1].params.cursor, '1');
+    assert.ok(metadata.every((message) => message.params.itemsView === 'notLoaded'));
+    assert.deepEqual(requests.filter((message) => message.method === 'thread/items/list').map((message) => message.params.turnId), [TURN]);
+  } finally { f.close(); }
+});
+
+test('metadata lookup rejects absent targets, malformed identities/cursors, repeats and exhausted pages before any item read', async () => {
+  const f = fixture();
+  try {
+    for (const data of [
+      { turnPages: [[{ id: SOURCE, startedAt: 1800000000 }]] },
+      { turnPages: [[{ id: 'not-a-native-turn', startedAt: 1800000000 }]] },
+      { turnPages: [[{ id: SOURCE }, { id: SOURCE }]] },
+      { turnPages: [[{ id: SOURCE }], [{ id: SOURCE }]] },
+      { turnPages: [[]], turnCursor: 0 },
+      { turnPages: [[]], turnCursor: '' },
+      { turnPages: [[], []], turnCursor: 'same' },
+      { turnPages: [[{ id: TURN }]] },
+      { turnPages: Array.from({ length: 9 }, () => []) },
+    ]) {
+      f.set({ ...data, items: [peer('must-not-read', assignment)] });
+      fs.writeFileSync(f.payloadFile, '');
+      await assert.rejects(readNativeTurn({ sessionId: SESSION, turnId: TURN, command: f.env.JARVOS_CODEX_NATIVE_COMMAND, env: f.env }), /turn-identity|invalid-cursor|turn-page-limit/);
+      const requests = fs.readFileSync(f.payloadFile, 'utf8').trim().split('\n').map(JSON.parse);
+      assert.ok(!requests.some((message) => message.method === 'thread/items/list'));
+      assert.ok(requests.filter((message) => message.method === 'thread/turns/list').length <= 8);
+    }
+  } finally { f.close(); }
+});
+
+test('bounded item batches preserve every receipt and late cancellation beyond 200 records', async () => {
+  const f = fixture();
+  try {
+    const items = Array.from({ length: 250 }, (_, index) => entry({ id: `effect-${index}`, type: 'mcpToolCall', status: 'completed', result: { ignored: 'tool body' } }));
+    items.push(peer('late-assignment', assignment), entry({ id: 'late-cancel', type: 'userMessage', content: 'Cancel this task; no more effects.' }));
+    f.set({ pagedItems: items });
+    const result = await readNativeTurn({ sessionId: SESSION, turnId: TURN, command: f.env.JARVOS_CODEX_NATIVE_COMMAND, env: f.env });
+    const projection = continuity.projectItems(result.items, TURN);
+    assert.equal(result.items.length, 252); assert.equal(projection.effects.length, 250);
+    assert.equal(projection.inputs[1].content, 'Cancel this task; no more effects.');
+    assert.ok(projection.inputs[0].body.includes(assignment));
+    const reads = fs.readFileSync(f.payloadFile, 'utf8').trim().split('\n').map(JSON.parse).filter((message) => message.method === 'thread/items/list');
+    assert.equal(reads.length, 3); assert.ok(reads.every((message) => message.params.limit === 100 && message.params.turnId === TURN));
+  } finally { f.close(); }
+});
+
+test('complete context above 24 KB preserves original caps, late cancellation and every effect within 64 KiB', async () => {
+  const f = fixture();
+  try {
+    const original = [peer('original', assignment), ...Array.from({ length: 200 }, (_, index) =>
+      entry({ id: `effect-${index}`, type: 'mcpToolCall', status: 'completed', result: { discarded: 'body' } }))];
+    f.set({ pagedItems: original });
+    assert.equal((await continuity.capture(input, { env: f.env })).status, 'captured');
+    assert.ok(fs.statSync(pending(f)).size > 24000);
+    f.set({ pagedItems: [...original,
+      entry({ id: 'late-cancel', type: 'userMessage', content: 'Cancel the original task; its budget is not renewed.' }),
+      entry({ id: 'late-effect', type: 'commandExecution', status: 'completed', exitCode: 0 })] });
+    const text = context(await continuity.consume(compact, { env: f.env }));
+    assert.ok(Buffer.byteLength(text) > 24000); assert.ok(Buffer.byteLength(text) < 64 * 1024);
+    assert.ok(text.includes(assignment)); assert.ok(text.includes('Cancel the original task; its budget is not renewed.'));
+    const projection = JSON.parse(text.split('\n').at(-1));
+    assert.equal(projection.effects.length, 201);
+    assert.deepEqual(new Set(projection.effects.map((effect) => effect.id)),
+      new Set([...Array.from({ length: 200 }, (_, index) => `effect-${index}`), 'late-effect']));
+    assert.equal(projection.originalTurnStartedAt, 1700000000);
+    assert.ok(projection.effects.every((effect) => /^[a-f0-9]{64}$/.test(effect.sourceWireDigest)));
+    assert.equal(fs.existsSync(pending(f)), false);
+    assert.equal((await continuity.capture(input, { env: f.env, readTurn: source([peer('oversize', 'x'.repeat(64 * 1024))]) })).status, 'unavailable');
+    await continuity.capture(input, { env: f.env, readTurn: source([peer('small', assignment)]) });
+    assert.equal(context(await continuity.consume(compact, { env: f.env,
+      readTurn: source([entry({ id: 'oversize-late', type: 'userMessage', content: 'x'.repeat(64 * 1024) })]) })), '');
+  } finally { f.close(); }
+});
+
+test('reader projects large irrelevant bodies at transport boundary and retains late authority and effect evidence', async () => {
+  const f = fixture();
+  try {
+    const large = entry({ output: 'VIRTUAL_OUTPUT', id: 'large-effect', type: 'functionCallOutput', namespace: 'other', name: 'read' });
+    const cancellation = entry({ id: 'late-cancel', type: 'userMessage', content: [{ type: 'text', text: 'Cancel the task; no further sends. ✓' }] });
+    f.set({ largeBytes: 2 * 1024 * 1024, pages: [[large], [peer('original', assignment)], [cancellation,
+      entry({ id: 'late-completed', type: 'commandExecution', status: 'completed', exitCode: 0 })]] });
+    assert.equal((await continuity.capture(input, { env: f.env })).status, 'captured');
+    const text = context(await continuity.consume(compact, { env: f.env }));
+    assert.ok(text.includes(assignment)); assert.ok(text.includes('Cancel the task; no further sends. ✓'));
+    assert.ok(text.includes('large-effect')); assert.ok(text.includes('late-completed'));
+    assert.ok(!text.includes('VIRTUAL_OUTPUT')); assert.ok(!text.includes('x'.repeat(1000)));
+    assert.ok(Buffer.byteLength(text) < continuity.MAX_CONTEXT_BYTES);
+    const projection = JSON.parse(text.split('\n').at(-1));
+    const hash = createHash('sha256');
+    hash.update('{"output":"');
+    for (let n = 0; n < 128; n++) hash.update('x'.repeat(16384));
+    hash.update('","id":"large-effect","type":"functionCallOutput","namespace":"other","name":"read"}');
+    const receipt = projection.effects.find((item) => item.id === 'large-effect');
+    assert.equal(receipt.sourceWireDigest, hash.digest('hex'));
+    assert.equal(receipt.sourceDigest, undefined);
+  } finally { f.close(); }
+});
+
+test('streamed projection validates discarded nested bodies and escapes across every character boundary', () => {
+  const ignored = entry({ id: 'ignored', type: 'mcpToolCall', status: 'completed',
+    result: { data: Array.from({ length: 7000 }, () => ({ nested: ['quote"', '\\', 'résumé ✓', '\n'] })) } });
+  const authority = peer('late', 'Original deadline and cap; "quote", \\ path, résumé ✓');
+  const message = { id: 2, result: { data: [ignored, authority], nextCursor: null } };
+  let result;
+  const parse = projectedFrames((value) => { result = value; });
+  const wire = JSON.stringify(message) + '\n';
+  for (const char of wire) parse(char);
+  assert.equal(result.result.data[0].item.result, undefined);
+  assert.equal(result.result.data[1].item.output, authority.item.output);
+  for (const bad of [
+    '{"id":2,"result":{"data":[{"turnId":"x","item":{"id":"e","type":"mcpToolCall","result":"bad\\q"}}]}}\n',
+    '{"id":2,"result":{"data":[{"turnId":"x","item":{"id":"e","type":"mcpToolCall","result":[1,]}}]}}\n',
+    '{"id":2,"result":{"data":[],"data":[]}}\n',
+    '{"id":2,"result":{"data":[]}}garbage\n',
+    '{"id":2,"result":{"data":[]},}\n',
+    '{"id":2,"result":{"data":[]}\u00a0}\n',
+    '{"id":2,"result":{"data":[]}\n',
+    '{"id":2,"result":{"data":[{"item":{"id":"e","type":"mcpToolCall","result":' + '['.repeat(65),
+  ]) assert.throws(() => projectedFrames(() => assert.fail('malformed frame accepted'))(bad), /native-reader/);
+});
+
+test('finite raw transport traversal fails closed even for discardable output', () => {
+  const parse = projectedFrames(() => assert.fail('incomplete oversize frame accepted'));
+  const prefix = '{"id":2,"result":{"data":[{"item":{"id":"e","type":"mcpToolCall","output":"';
+  const chunk = 'x'.repeat(16384);
+  parse(prefix);
+  for (let bytes = prefix.length; bytes + chunk.length <= MAX_TRANSPORT_BYTES; bytes += chunk.length) parse(chunk);
+  assert.throws(() => parse(chunk), /transport-limit/);
 });
 
 test('native reader timeout is bounded and has no model/dispatch fallback', async () => {

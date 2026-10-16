@@ -290,16 +290,23 @@ pre-compaction action. No installed configuration is changed by source tests.
 PreCompact supplies the exact native session and turn identities. The reader uses
 only `initialize`, `thread/turns/list` and `thread/items/list`; it never starts or
 resumes a thread, reads raw transcripts, calls a model or executes a task. The
-latest-one turn metadata must match the supplied identity; its stored status is
-never interpreted as live ownership, cancellation or goal completion. The native
+reader searches at most eight pages of 25 metadata records for the supplied turn
+identity, with item bodies excluded. Only that exact turn's items are requested;
+absence or invalid metadata fails closed. Stored status is never interpreted as
+live ownership, cancellation or goal completion. The native
 original start accompanies the unchanged assignment constraints and deadlines.
 
 A derived profile-local projection uses an owner-only directory and mode-0600
 files, a source/selected-owner generation, a separate invalidation fence and a
 one-use pending capture. Every new capture invalidates its predecessor before
 reading input. Captures expire after 120 seconds. The reader has a 2.5-second
-deadline, eight pages and 256 KiB total output; delivered context is bounded to
-24,000 bytes. Oversize or unavailable evidence is visible degradation, not silent
+deadline, eight item pages of 100 records, 32 MiB total transport and 256 KiB retained projection;
+delivered context is bounded to 64 KiB. Native item listing supports exact
+turn filtering but no field projection. Streaming parsing therefore discards
+irrelevant bodies before retaining a frame, bounds candidate fields, nesting and
+token count, and fingerprints each complete original item. Native effect receipts
+label that fingerprint `sourceWireDigest`; it is not a canonical object hash.
+Attributed input bodies remain intact or fail closed. Oversize or unavailable evidence is visible degradation, not silent
 truncation or a renewed budget. Setup disables hook context previewing only for
 the opted-in handler, whose own context limit remains enforced.
 

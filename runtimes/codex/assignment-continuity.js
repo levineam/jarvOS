@@ -3,12 +3,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { readNativeTurn } = require('./native-turn-reader');
+const { readNativeTurn, ITEM_WIRE_DIGEST } = require('./native-turn-reader');
 const { trustedExecutable } = require('../../modules/jarvos-runtime-kit/src/trusted-native-command');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SCHEMA = 'jarvos.codex-assignment-context/v1';
-const MAX_CONTEXT_BYTES = 24000;
+const MAX_CONTEXT_BYTES = 64 * 1024;
 const MAX_AGE_MS = 120000;
 const RECEIPT_TYPES = new Set(['commandExecution', 'fileChange', 'mcpToolCall', 'dynamicToolCall',
   'functionCall', 'functionCallOutput', 'customToolCall', 'customToolCallOutput', 'collabAgentToolCall',
@@ -92,7 +92,10 @@ function projectItems(entries, turnId, requireAssignment = true) {
     else if (item.type === 'agentMessage') progress.push({ id: item.id, phase: item.phase, text: item.text });
     else if (!['reasoning', 'contextCompaction', 'webSearch'].includes(item.type)) {
       if (!RECEIPT_TYPES.has(item.type)) throw new Error('source-item-type');
-      effects.push({ id: item.id, type: item.type, status: item.status || 'unknown', exitCode: item.exitCode ?? null, sourceDigest: digest(JSON.stringify(item)) });
+      const wireDigest = entry[ITEM_WIRE_DIGEST];
+      if (wireDigest !== undefined && !/^[a-f0-9]{64}$/.test(wireDigest)) throw new Error('source-digest');
+      effects.push({ id: item.id, type: item.type, status: item.status || 'unknown', exitCode: item.exitCode ?? null,
+        ...(wireDigest ? { sourceWireDigest: wireDigest } : { sourceDigest: digest(JSON.stringify(item)) }) });
     }
   }
   if (requireAssignment && !inputs.some((item) => item.origin === 'peer')) throw new Error('no-app-assignment');
