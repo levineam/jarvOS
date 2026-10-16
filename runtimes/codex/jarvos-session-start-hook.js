@@ -72,7 +72,13 @@ async function startupHydration(options = {}) {
 
 async function main() {
   try {
-    const env = bridgeEnvironment(readSessionStartInput());
+    const continuity = require('./assignment-continuity');
+    const input = continuity.readInput();
+    if (input?.source && !['startup', 'resume'].includes(input.source)) {
+      writeJson(await continuity.consume(input));
+      return;
+    }
+    const env = bridgeEnvironment(hookSessionId(input, 'SessionStart'));
     let projectsContextMarkdown = '';
     let judgment = '';
     if (env) {

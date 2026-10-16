@@ -6,6 +6,7 @@ MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 MANAGED_HOOKS_JSON="$ROOT/runtimes/codex/hooks.json"
 HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-session-turn-hook.js"
+PRECOMPACT_HOOK_SCRIPT="$ROOT/runtimes/codex/jarvos-precompact-hook.js"
 TRUST_SCRIPT="$ROOT/runtimes/codex/trust-session-start-hook.js"
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 CODEX_CONFIG="${CODEX_CONFIG:-$CODEX_HOME/config.toml}"
@@ -439,10 +440,12 @@ function dedupe(entries) {
   });
 }
 
-const ownedHookPaths = [hookScript, turnHookScript, dispatcher].filter(Boolean);
+const precompactHookScript = path.join(path.dirname(hookScript), 'jarvos-precompact-hook.js');
+const ownedHookPaths = [hookScript, turnHookScript, precompactHookScript, dispatcher].filter(Boolean);
 if (path.isAbsolute(stagedRoot || '')) {
   ownedHookPaths.push(path.join(stagedRoot, 'runtimes', 'codex', 'jarvos-session-start-hook.js'));
   ownedHookPaths.push(path.join(stagedRoot, 'runtimes', 'codex', 'jarvos-session-turn-hook.js'));
+  ownedHookPaths.push(path.join(stagedRoot, 'runtimes', 'codex', 'jarvos-precompact-hook.js'));
 }
 function isManagedJarvosHook(entry) {
   return ownedHookPaths.some((target) => new RegExp(`(?:^|[^A-Za-z0-9._/-])${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[^A-Za-z0-9._/-])`).test(entry));
@@ -590,6 +593,7 @@ const STEWARDSHIP_ENVIRONMENT_KEYS = [
   'JARVOS_STEWARDSHIP_BRIDGE_COMMAND',
   'JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
   'JARVOS_STEWARDSHIP_BRIDGE_CONTEXT_FILE',
+  'JARVOS_CODEX_NATIVE_COMMAND',
 ];
 
 function environmentSetAssignment(lines, range) {
@@ -710,11 +714,23 @@ if (fs.existsSync(legacyHooksPath)) {
 }
 
 const bridgeEnvironment = stewardshipBridgeEnvironment(bridgeCommand, codexSessionMapRoot);
+const nativeCommand = process.env.JARVOS_CODEX_NATIVE_COMMAND;
+if (nativeCommand && !trustedExecutable(nativeCommand)) fail('native Codex reader must be a trusted absolute executable');
+let continuityEnabled = Boolean(nativeCommand);
+if (continuityEnabled && dispatcher) {
+  const { spawnSync } = require('node:child_process');
+  const probe = spawnSync(dispatcher, ['--harness', 'codex', '--action', 'provenance-probe'], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536 });
+  try { continuityEnabled = !probe.error && probe.status === 0 && JSON.parse(probe.stdout).capabilities?.assignmentContinuity === true; }
+  catch { continuityEnabled = false; }
+  if (!continuityEnabled) process.stderr.write('jarvOS assignment continuity not registered: selected dispatcher/source capability unavailable.\n');
+}
+const hookEnvironment = nativeCommand ? { ...(bridgeEnvironment || {}), JARVOS_CODEX_NATIVE_COMMAND: nativeCommand } : bridgeEnvironment;
 
 if (rollback === '1') {
   validateHookTable(next);
   next = setHook(next, 'SessionStart', null, true);
   next = setHook(next, 'UserPromptSubmit', null, true);
+  next = setHook(next, 'PreCompact', null, true);
   next = setStewardshipBridgeEnvironment(next, null);
 } else {
   validateHookTable(next);
@@ -724,9 +740,13 @@ if (rollback === '1') {
   const turnCommand = dispatcher
     ? `${shellQuote(dispatcher)} --harness codex --action session-turn`
     : `node ${shellQuote(turnHookScript)}`;
-  next = setHook(next, 'SessionStart', renderHookEntry({ matcher: 'startup|resume', hooks: [{ type: 'command', command: startCommand, async: false, timeout: 30 }] }), true);
+  next = setHook(next, 'SessionStart', renderHookEntry({ matcher: continuityEnabled ? 'startup|resume|compact' : 'startup|resume', hooks: [{ type: 'command', command: startCommand, async: false, timeout: 30, ...(continuityEnabled ? { additionalContextLimit: 0 } : {}) }] }), true);
   next = setHook(next, 'UserPromptSubmit', renderHookEntry({ hooks: [{ type: 'command', command: turnCommand, async: false, timeout: 30 }] }), true);
-  next = setStewardshipBridgeEnvironment(next, bridgeEnvironment);
+  const precompactCommand = dispatcher
+    ? `${shellQuote(dispatcher)} --harness codex --action session-precompact`
+    : `node ${shellQuote(precompactHookScript)}`;
+  next = setHook(next, 'PreCompact', continuityEnabled ? renderHookEntry({ matcher: 'manual|auto', hooks: [{ type: 'command', command: `if jarvos_out=$(${precompactCommand}); then printf '%s' "$jarvos_out"; else printf '%s' '{}'; fi`, async: false, timeout: 5 }] }) : null, true);
+  next = setStewardshipBridgeEnvironment(next, hookEnvironment);
 }
 next = setFeature(next, 'hooks', 'true');
 next = removeFeature(next, 'codex_hooks');
@@ -777,7 +797,7 @@ if ! update_codex_config apply; then
 fi
 
 if [ "$CODEX_CONFIG" = "$HOME/.codex/config.toml" ]; then
-  if node "$TRUST_SCRIPT" "$ROOT" "$HOOK_SCRIPT" && node "$TRUST_SCRIPT" "$ROOT" "$TURN_HOOK_SCRIPT"; then
+  if node "$TRUST_SCRIPT" "$ROOT" "$HOOK_SCRIPT" && node "$TRUST_SCRIPT" "$ROOT" "$TURN_HOOK_SCRIPT" && { [ -z "${JARVOS_CODEX_NATIVE_COMMAND:-}" ] || node "$TRUST_SCRIPT" "$ROOT" "$PRECOMPACT_HOOK_SCRIPT"; }; then
     echo "Trusted jarvOS Codex lifecycle hooks."
   else
     echo "Could not automatically trust jarvOS Codex lifecycle hooks; review them in Codex hooks settings." >&2

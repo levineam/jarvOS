@@ -276,3 +276,51 @@ then persists the resulting absolute identity. Session environment persistence
 does not extend PATH. Unconfigured or unsafe commands remain unavailable without
 probing workspace commands. Platforms without POSIX ownership verification fail
 closed. Protected selected-runtime adoption remains a separate operation.
+
+## Assignment context across compaction
+
+This source route preserves an attributed peer assignment through automatic or
+manual root-session compaction. It is opt-in: the existing setup owner supplies
+`JARVOS_CODEX_NATIVE_COMMAND`, a trusted absolute path to the qualified native
+Codex executable, rather than a managed launcher wrapper. Managed setup also
+requires the selected dispatcher's `assignmentContinuity` capability receipt.
+An older dispatcher does not qualify merely because it advertises a generic
+pre-compaction action. No installed configuration is changed by source tests.
+
+PreCompact supplies the exact native session and turn identities. The reader uses
+only `initialize`, `thread/turns/list` and `thread/items/list`; it never starts or
+resumes a thread, reads raw transcripts, calls a model or executes a task. The
+latest-one turn metadata must match the supplied identity; its stored status is
+never interpreted as live ownership, cancellation or goal completion. The native
+original start accompanies the unchanged assignment constraints and deadlines.
+
+A derived profile-local projection uses an owner-only directory and mode-0600
+files, a source/selected-owner generation, a separate invalidation fence and a
+one-use pending capture. Every new capture invalidates its predecessor before
+reading input. Captures expire after 120 seconds. The reader has a 2.5-second
+deadline, eight pages and 256 KiB total output; delivered context is bounded to
+24,000 bytes. Oversize or unavailable evidence is visible degradation, not silent
+truncation or a renewed budget. Setup disables hook context previewing only for
+the opted-in handler, whose own context limit remains enforced.
+
+SessionStart with source `compact` consumes only a fresh matching capture and
+rereads that exact turn for late input. It does not call ordinary start/resume,
+SessionWait binding, Projects refresh, journal or hydration operations. Original
+peer deliveries and native user-input records retain their attribution; native
+user-role text is not itself proof of human authorization. Recent assistant
+checkpoints are context, and effect IDs/statuses/digests are receipts to reconcile,
+never an action replay plan. Cancellation, supersession, completed work and
+ambiguous effects must be reconciled under the original authority before acting.
+The hook contains no semantic task classifier, controller, scheduler or Stop loop.
+
+Focused tests exercise both stale-question shapes through the owning hooks,
+late peer/human changes, capture invalidation, repeat compaction, provenance,
+resource bounds, corrupt state, setup coexistence and rollback. They prove source
+and input behavior only. The installation owner still must verify the selected
+runtime, native immediate post-compaction delivery, and a correct current-task
+final or genuine stop in a separately bounded synthetic live test. They must not
+promote these fixture results into real continuation proof.
+
+Rollback uses the existing setup rollback transaction to remove only the owned
+PreCompact/start/turn entries and native-reader binding. Profile-local derived
+captures are not a canonical work ledger; they cannot grant execution authority.

@@ -2,13 +2,14 @@
   "hooks": {
     "SessionStart": [
       {
-        "matcher": "startup|resume",
+        "matcher": "startup|resume|compact",
         "hooks": [
           {
             "type": "command",
             "command": "node \"$JARVOS_REPO_ROOT/runtimes/codex/jarvos-session-start-hook.js\"",
             "async": false,
-            "timeout": 30
+            "timeout": 30,
+            "additionalContextLimit": 0
           }
         ]
       }
@@ -21,6 +22,19 @@
             "command": "node \"$JARVOS_REPO_ROOT/runtimes/codex/jarvos-session-turn-hook.js\"",
             "async": false,
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$JARVOS_REPO_ROOT/runtimes/codex/jarvos-precompact-hook.js\"",
+            "async": false,
+            "timeout": 5
           }
         ]
       }
