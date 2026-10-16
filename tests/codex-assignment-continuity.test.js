@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
+const { once } = require('node:events');
 const ROOT = path.resolve(__dirname, '..');
 const SESSION = '11111111-1111-4111-8111-111111111111';
 const TURN = '22222222-2222-4222-8222-222222222222';
@@ -45,7 +46,11 @@ const peer = (id, body) => entry({ id, type: 'functionCallOutput', namespace: 'c
   output: `<codex_delegation>\n<source_thread_id>${SOURCE}</source_thread_id>\n<input>${body}</input>\n</codex_delegation>` });
 const assignment = 'Current task: inspect the sample. Deadline 2030-01-01T10:00:00Z; 15 minutes from ORIGINAL pickup; cap 5 MB; no sends. Résumé ✓';
 const source = (items) => async () => ({ startedAt: 1700000000, items });
-const pending = (f) => path.join(f.root, 'jarvos-assignment-context', `${SESSION}.json`);
+const pending = (f) => {
+  const directory = path.join(f.root, 'jarvos-assignment-context');
+  const { token } = JSON.parse(fs.readFileSync(path.join(directory, `${SESSION}.fence`), 'utf8'));
+  return path.join(directory, `${SESSION}.${token}.json`);
+};
 const context = (result) => result.hookSpecificOutput?.additionalContext || '';
 
 for (const oldQuestion of ['What upgrade?', 'Why are these blocked?']) {
@@ -79,10 +84,10 @@ for (const oldQuestion of ['What upgrade?', 'Why are these blocked?']) {
   });
 }
 
-test('new failed/malformed/child capture invalidates older pending context', async () => {
+test('new failed/malformed capture invalidates older pending context', async () => {
   const f = fixture();
   try {
-    for (const bad of [null, { ...input, agent_id: 'child' }, { ...input, session_id: SOURCE }, { ...input, trigger: 'future' }]) {
+    for (const bad of [null, { ...input, session_id: SOURCE }, { ...input, trigger: 'future' }]) {
       assert.equal((await continuity.capture(input, { env: f.env, readTurn: source([peer('p', assignment)]) })).status, 'captured');
       assert.equal((await continuity.capture(bad, { env: f.env })).status, 'unavailable');
       assert.equal(context(await continuity.consume(compact, { env: f.env })), '');
@@ -118,6 +123,58 @@ test('repeat compaction captures fresh source; a late old reader cannot replace 
     await continuity.capture(input, { env: f.env, readTurn: source([peer('next', assignment)]) });
     assert.ok(context(await continuity.consume(compact, { env: f.env })).includes(assignment));
   } finally { f.close(); }
+});
+
+test('a child capture cannot invalidate its root session capture', async () => {
+  const f = fixture();
+  try {
+    await continuity.capture(input, { env: f.env, readTurn: source([peer('root', assignment)]) });
+    assert.equal((await continuity.capture({ ...input, agent_id: 'child' }, { env: f.env })).status, 'unavailable');
+    assert.ok(context(await continuity.consume(compact, { env: f.env })).includes(assignment));
+  } finally { f.close(); }
+});
+
+test('an older process paused at final publication cannot clobber a newer capture', async () => {
+  const f = fixture(); let older;
+  const ready = path.join(f.root, 'ready'); const release = path.join(f.root, 'release');
+  try {
+    f.set({ items: [peer('old', 'Task A')] });
+    const preload = path.join(f.root, 'pause-publication.cjs');
+    fs.writeFileSync(preload, `const fs=require('node:fs'), rename=fs.renameSync;
+fs.renameSync=function(from,to){
+ let record;try{record=JSON.parse(fs.readFileSync(from,'utf8'));}catch{}
+ if(record?.state==='ready'){
+  fs.writeFileSync(${JSON.stringify(ready)},'ready');
+  const deadline=Date.now()+5000;
+  while(!fs.existsSync(${JSON.stringify(release)})){
+   if(Date.now()>deadline)throw Error('publication test timeout');
+   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);
+  }
+ }
+ return rename.apply(fs,arguments);
+};`);
+    const hook = path.join(ROOT, 'runtimes/codex/jarvos-precompact-hook.js');
+    older = spawn(process.execPath, ['--require', preload, hook], { env: f.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const closed = once(older, 'close'); let output = '';
+    older.stdout.setEncoding('utf8'); older.stdout.on('data', (data) => { output += data; });
+    older.stdin.end(JSON.stringify(input));
+    const deadline = Date.now() + 3000;
+    while (!fs.existsSync(ready)) {
+      if (Date.now() > deadline) throw Error('older process never reached publication');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    f.set({ items: [peer('new', 'Current task B')] });
+    const newer = spawnSync(process.execPath, [hook], { env: f.env, input: JSON.stringify(input), encoding: 'utf8', timeout: 6000 });
+    assert.equal(newer.status, 0, newer.stderr); assert.deepEqual(JSON.parse(newer.stdout), {});
+    fs.writeFileSync(release, 'release');
+    assert.equal((await closed)[0], 0); assert.match(JSON.parse(output).systemMessage, /unavailable/);
+    f.set({ items: [] });
+    const text = context(await continuity.consume(compact, { env: f.env }));
+    assert.match(text, /Current task B/); assert.ok(!text.includes('Task A'));
+  } finally {
+    if (older && older.exitCode === null) older.kill('SIGKILL');
+    f.close();
+  }
 });
 
 test('stale/future/corrupt/changed-generation/oversize state fails visibly without fallback', async () => {
@@ -216,6 +273,7 @@ test('setup opts into both owned hooks with bounded full context and preserves u
     assert.match(configured, /jarvos-precompact-hook/); assert.match(configured, /user-precompact/);
     assert.match(configured, /JARVOS_CODEX_NATIVE_COMMAND/);
     assert.equal(setup().status, 0); assert.equal(fs.readFileSync(config, 'utf8'), configured);
+    fs.unlinkSync(f.env.JARVOS_CODEX_NATIVE_COMMAND);
     const rolledBack = setup({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' }); assert.equal(rolledBack.status, 0, rolledBack.stderr);
     const restored = fs.readFileSync(config, 'utf8');
     assert.match(restored, /user-start/); assert.match(restored, /user-precompact/);

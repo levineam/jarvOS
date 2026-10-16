@@ -715,8 +715,8 @@ if (fs.existsSync(legacyHooksPath)) {
 
 const bridgeEnvironment = stewardshipBridgeEnvironment(bridgeCommand, codexSessionMapRoot);
 const nativeCommand = process.env.JARVOS_CODEX_NATIVE_COMMAND;
-if (nativeCommand && !trustedExecutable(nativeCommand)) fail('native Codex reader must be a trusted absolute executable');
-let continuityEnabled = Boolean(nativeCommand);
+if (rollback !== '1' && nativeCommand && !trustedExecutable(nativeCommand)) fail('native Codex reader must be a trusted absolute executable');
+let continuityEnabled = rollback !== '1' && Boolean(nativeCommand);
 if (continuityEnabled && dispatcher) {
   const { spawnSync } = require('node:child_process');
   const probe = spawnSync(dispatcher, ['--harness', 'codex', '--action', 'provenance-probe'], { encoding: 'utf8', timeout: 5000, maxBuffer: 65536 });

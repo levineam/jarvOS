@@ -46,7 +46,12 @@ function stateFiles(env) {
   const root = path.join(home, 'jarvos-assignment-context');
   try { fs.mkdirSync(root, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
   safeDirectory(root, true);
-  return { sessionId, root, pending: path.join(root, `${sessionId}.json`), fence: path.join(root, `${sessionId}.fence`) };
+  return { sessionId, root, fence: path.join(root, `${sessionId}.fence`) };
+}
+
+function pendingFile(files, token) {
+  if (!UUID.test(token || '')) throw new Error('state-generation');
+  return path.join(files.root, `${files.sessionId}.${token}.json`);
 }
 
 function atomicWrite(file, value) {
@@ -95,12 +100,16 @@ function projectItems(entries, turnId, requireAssignment = true) {
 }
 
 async function capture(input, { env = process.env, readTurn = readNativeTurn, now = Date.now } = {}) {
-  let files; let token;
+  let files; let token; let pending;
   try {
+    if (input?.agent_id) return { status: 'unavailable' };
     files = stateFiles(env); token = crypto.randomUUID();
+    let previous;
+    try { previous = readPrivate(files.fence).token; } catch {}
     // The independent fence prevents a late older reader from restoring stale context.
     atomicWrite(files.fence, { token });
-    atomicWrite(files.pending, { schema: SCHEMA, token, state: 'unavailable' });
+    if (UUID.test(previous || '')) { try { fs.unlinkSync(pendingFile(files, previous)); } catch {} }
+    pending = pendingFile(files, token);
     if (input?.hook_event_name !== 'PreCompact' || input.session_id !== files.sessionId || !UUID.test(input.turn_id || '')
       || input.agent_id || !['manual', 'auto'].includes(input.trigger)) throw new Error('hook-identity');
     if (!trustedExecutable(env.JARVOS_CODEX_NATIVE_COMMAND)) throw new Error('native-reader-unavailable');
@@ -112,9 +121,14 @@ async function capture(input, { env = process.env, readTurn = readNativeTurn, no
       ownerGeneration: ownerGeneration(env), capturedAt, projection, projectionDigest: digest(JSON.stringify(projection)) };
     if (Buffer.byteLength(render(record), 'utf8') > MAX_CONTEXT_BYTES) throw new Error('context-byte-limit');
     if (readPrivate(files.fence).token !== token) throw new Error('capture-superseded');
-    atomicWrite(files.pending, record);
+    // Publish to this generation's own slot: an old writer cannot clobber a new capture.
+    atomicWrite(pending, record);
+    if (readPrivate(files.fence).token !== token) throw new Error('capture-superseded');
     return { status: 'captured' };
-  } catch { return { status: 'unavailable' }; }
+  } catch {
+    if (pending) { try { fs.unlinkSync(pending); } catch {} }
+    return { status: 'unavailable' };
+  }
 }
 
 function render(record) {
@@ -134,8 +148,9 @@ async function consume(input, { env = process.env, now = Date.now, readTurn = re
   try {
     if (input?.hook_event_name !== 'SessionStart' || input.source !== 'compact' || input.agent_id || input.session_id !== env.CODEX_THREAD_ID) throw new Error('hook-identity');
     const files = stateFiles(env);
-    moved = `${files.pending}.consuming-${crypto.randomUUID()}`;
-    fs.renameSync(files.pending, moved);
+    const pending = pendingFile(files, readPrivate(files.fence).token);
+    moved = `${pending}.consuming-${crypto.randomUUID()}`;
+    fs.renameSync(pending, moved);
     const record = readPrivate(moved);
     if (record.schema !== SCHEMA || record.state !== 'ready' || record.sessionId !== files.sessionId || !UUID.test(record.turnId || '')
       || !UUID.test(record.token || '') || record.token !== readPrivate(files.fence).token || record.ownerGeneration !== ownerGeneration(env)
