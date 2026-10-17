@@ -423,7 +423,9 @@ function createProtectedResourceRegistry(definitions = []) {
   function evaluate(input = {}) {
     if (input.resourceId && !input.resource) {
       const definition = get(input.resourceId);
-      return evaluateProtectedMutation({ ...input, resource: definition });
+      if (definition) {
+        return evaluateProtectedMutation({ ...input, resource: definition });
+      }
     }
     if (!input.resource && input.identity) {
       const found = matchIdentity(input.identity);
