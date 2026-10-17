@@ -150,6 +150,18 @@ function createFileStore(rootDir, options = {}) {
       throw error;
     }
 
+    try {
+      const text = fs.readFileSync(lockPath, 'utf8');
+      if (text) lock = JSON.parse(text);
+    } catch (error) {
+      if (error.code === 'ENOENT') return false;
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    const ageMs = Date.now() - stat.mtimeMs;
+    // Never remove the canonical lock until the observed owner is known to be
+    // dead and the lock is old enough to recover.
+    if (lockOwnerIsRunning(lock) || ageMs < staleLockMs) return false;
+
     const takeoverPath = `${lockPath}.takeover-${stat.dev}-${stat.ino}-${process.pid}-${Math.random().toString(16).slice(2)}`;
     try {
       fs.renameSync(lockPath, takeoverPath);
@@ -163,7 +175,7 @@ function createFileStore(rootDir, options = {}) {
       const takeoverStat = fs.statSync(takeoverPath);
       if (takeoverStat.dev !== stat.dev || takeoverStat.ino !== stat.ino) {
         try {
-          fs.renameSync(takeoverPath, lockPath);
+          fs.linkSync(takeoverPath, lockPath);
         } catch (error) {
           if (error.code !== 'EEXIST') throw error;
           preserveTakeoverPath = true;
@@ -177,13 +189,6 @@ function createFileStore(rootDir, options = {}) {
         if (error.code === 'ENOENT') return false;
         if (!(error instanceof SyntaxError)) throw error;
       }
-      const ageMs = Date.now() - fs.statSync(takeoverPath).mtimeMs;
-      // A matching process-start marker proves this is a live owner; a recycled
-      // PID fails the comparison and is recoverable once the stale interval passes.
-      if (lockOwnerIsRunning(lock) || ageMs < staleLockMs) {
-        try { fs.renameSync(takeoverPath, lockPath); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-        return false;
-      }
       fs.unlinkSync(takeoverPath);
       return true;
     } catch (error) {
@@ -196,11 +201,12 @@ function createFileStore(rootDir, options = {}) {
     }
   }
   function withLock(fn) {
-    let fd; const deadline = Date.now() + (options.lockTimeoutMs || 5000);
+    let fd; let token; const deadline = Date.now() + (options.lockTimeoutMs || 5000);
     while (!fd) {
       try {
         fd = fs.openSync(lockPath, 'wx', 0o600);
-        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, processStart: processStartMarker(process.pid), token: `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: nowIso() }), 'utf8');
+        token = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, processStart: processStartMarker(process.pid), token, createdAt: nowIso() }), 'utf8');
         fs.fsyncSync(fd);
       } catch (error) {
         if (fd) { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); fd = undefined; throw error; }
@@ -208,7 +214,15 @@ function createFileStore(rootDir, options = {}) {
         if (!recoverStaleLock()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
       }
     }
-    try { return fn(); } finally { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); }
+    try { return fn(); } finally {
+      fs.closeSync(fd);
+      try {
+        const current = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+        if (current.token === token) fs.unlinkSync(lockPath);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
   }
   function load() {
     const hasCheckpoint = fs.existsSync(statePath);
