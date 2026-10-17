@@ -184,6 +184,34 @@ link exactly once from `Journal/YYYY-MM-DD.md`, preserve source-backed
 provenance, and leave QMD/search freshness as `pending-refresh`. Do not create
 guessed daily journal files under `Notes/`.
 
+Provenance: universal capture uses source `claude-code`; the note/journal
+contract uses `personality: "claude-code"`; your current drafting entries
+use `harness: "claude-code"`. These name the tool, not the origin of the
+words. When your current contribution generated or materially edited the
+text, also pass `content_origin`, `content_origin_basis` and a
+`content_origin_drafting` array for that contribution only, e.g.
+`[{"kind":"assistant_draft","harness":"claude-code","model":"<reported id>","model_evidence":"declared"}]`;
+a top-level `model` is not drafting provenance. Generated text is
+`assistant`/`assistant_generated` with `assistant_draft`; an edit of
+AI-only text stays `assistant`/`assistant_generated` with
+`assistant_edit`; use `mixed`/`mixed_composition` with `assistant_edit`
+only when human and AI contributions coexist; if origin cannot be
+established, use `unknown`/`unknown` and still record the known AI
+contribution. Declare only the model actually reported as producing this
+contribution, otherwise `"model":"unknown","model_evidence":"unknown"`;
+never credit earlier text to the model now editing or capturing it, and
+never call a configured or requested model or a bare response ID
+`served` (JSON calls cannot prove it). Verbatim or transcribed user
+text, formatting and backlinks are not AI contributions. Never
+manufacture human origin, `user_source` or `human_evidence_eligible`;
+only the existing host-validated source path grants human status, so
+unvalidated user text saves as `unknown`/`unknown` without blocking.
+Formatting maintenance adds no drafting entry and keeps stored
+origin/basis only while still host-valid; an invalid human receipt
+becomes `unknown`/`unknown`. Send the current contribution only: the
+writer preserves and dedupes earlier history, including other harnesses.
+Never clear or relabel history, sign prose or backfill old notes.
+
 ## jarvOS Tool Doctrine
 
 - `jarvos_recall` — for people, decisions, prior reasoning, and history.

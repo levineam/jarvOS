@@ -2,6 +2,13 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [Unreleased]
+
+### Fixed
+
+- Declare Claude-specific note origin and drafting-model history without
+  labeling transcription or formatting-only maintenance as AI drafting.
+
 ## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
 
 
