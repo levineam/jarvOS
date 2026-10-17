@@ -335,6 +335,9 @@ the Steward's release-level approval and verification.
   never rewritten in bulk.
 
 ### Fixed
+- `source_personality` names the tool that saved the note, not whose words it
+  holds: a save by a different tool is recorded through the same guarded replace,
+  an unchanged body is kept byte for byte, and no drafting entry is added.
 - Declare Claude-specific note origin and drafting-model history without
   labeling transcription or formatting-only maintenance as AI drafting.
 - Managed Claude Code, Claude Desktop, and Codex setup now registers the

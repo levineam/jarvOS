@@ -341,6 +341,213 @@ test('valid human receipt saved by an assistant stays eligible, and a later mixe
   });
 });
 
+// SUP-4054: source_personality names the saving tool, not whose words the note
+// holds. A save by a different harness that contributes no prose records the
+// new tool while body bytes, journal bytes, origin and drafting stay exact.
+function unchangedSaveEnv(root) {
+  return {
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  };
+}
+
+function savedNoteState(notePath, journalPath, title) {
+  const { frontmatterToObject, parseFrontmatter } = require('../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
+  const markdown = fs.readFileSync(notePath, 'utf8');
+  const parsed = parseFrontmatter(markdown);
+  const journal = fs.readFileSync(journalPath, 'utf8');
+  return {
+    markdown,
+    body: String(parsed?.remainder ?? markdown),
+    frontmatter: frontmatterToObject(parsed),
+    journal,
+    backlinks: journal.split(`- [[${title}]]`).length - 1,
+  };
+}
+
+const UNCHANGED_SAVE_FRONTMATTER = { status: 'draft', type: 'reference', project: 'SUP-4054', author: 'jarvis' };
+const CODEX_DRAFT_MODEL_A = { kind: 'assistant_draft', harness: 'codex', model: 'fixture-model-a', model_evidence: 'declared' };
+const CODEX_EDIT_MODEL_A = { kind: 'assistant_edit', harness: 'codex', model: 'fixture-model-a', model_evidence: 'declared' };
+
+test('an unchanged save by a different harness records the saving tool and keeps body, journal, origin and history exact', () => {
+  // Trailing spaces and blank lines that a metadata repair must not normalize away.
+  const content = 'Codex drafted this explanation.\n\nA closing line with trailing spaces.   \n\n\n';
+  const cases = [
+    { name: 'assistant', declaration: { content_origin: 'assistant', content_origin_basis: 'assistant_generated', drafting: [CODEX_DRAFT_MODEL_A] }, origin: 'assistant', basis: 'assistant_generated', history: [CODEX_DRAFT_MODEL_A] },
+    { name: 'mixed', declaration: { content_origin: 'mixed', content_origin_basis: 'mixed_composition', drafting: [CODEX_EDIT_MODEL_A] }, origin: 'mixed', basis: 'mixed_composition', history: [CODEX_EDIT_MODEL_A] },
+    { name: 'unknown', declaration: {}, origin: 'unknown', basis: 'unknown', history: undefined },
+  ];
+  for (const testCase of cases) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `sup-4054-unchanged-${testCase.name}-`));
+    withEnv(unchangedSaveEnv(root), () => {
+      const mutationService = makeTestMutationService(root);
+      const title = `SUP-4054 unchanged ${testCase.name} save`;
+      const input = { title, content, frontmatter: UNCHANGED_SAVE_FRONTMATTER, ...testCase.declaration };
+      const first = writeNoteThroughContract({ personality: 'codex', ...input }, { mutationService });
+      const before = savedNoteState(first.notePath, first.journalPath, title);
+      assert.equal(before.frontmatter.source_personality, 'codex');
+      assert.deepEqual(before.frontmatter.content_origin_drafting, testCase.history);
+      assert.equal(before.backlinks, 1);
+
+      for (const attempt of ['save', 'retry']) {
+        const label = `${testCase.name} ${attempt}`;
+        const saved = writeNoteThroughContract({ personality: 'claude-code', ...input }, { mutationService });
+        const after = savedNoteState(saved.notePath, saved.journalPath, title);
+        assert.equal(saved.created, false, label);
+        assert.ok(['committed', 'already_satisfied'].includes(saved.mutationStatus), label);
+        assert.equal(saved.personality, 'claude-code', label);
+        assert.equal(after.frontmatter.source_personality, 'claude-code', label);
+        assert.equal(after.frontmatter.contract, 'obsidian-note-journal-v1', label);
+        for (const field of ['jarvos_note_id', 'created', 'author', 'content_origin', 'content_origin_basis', 'human_evidence_eligible']) {
+          assert.deepEqual(after.frontmatter[field], before.frontmatter[field], `${label}: ${field}`);
+        }
+        assert.equal(after.frontmatter.content_origin, testCase.origin, label);
+        assert.equal(after.frontmatter.content_origin_basis, testCase.basis, label);
+        assert.equal(after.frontmatter.human_evidence_eligible, false, label);
+        // No contribution is invented for the saving tool or its model.
+        assert.deepEqual(after.frontmatter.content_origin_drafting, testCase.history, label);
+        assert.equal(after.body, before.body, label);
+        assert.equal(after.journal, before.journal, label);
+        assert.equal(after.backlinks, 1, label);
+      }
+
+      // A fresh served claim without the host resolver stays refused and writes nothing.
+      const settled = savedNoteState(first.notePath, first.journalPath, title);
+      assert.throws(() => writeNoteThroughContract({
+        personality: 'claude-code',
+        ...input,
+        drafting: [...(testCase.history || []), { kind: 'assistant_edit', harness: 'claude-code', model: 'fixture-model-b', model_evidence: 'served', served_ref: 'fixture-served-ref-1' }],
+      }, { mutationService }), /served_unresolved/);
+      const refused = savedNoteState(first.notePath, first.journalPath, title);
+      assert.equal(refused.markdown, settled.markdown, testCase.name);
+      assert.equal(refused.journal, settled.journal, testCase.name);
+    });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unchanged save by a different harness keeps valid human evidence and never upgrades a forged human claim', () => {
+  const { projectNoteMarkdown } = require('../bridge/provenance/src/content-origin-evidence.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-unchanged-human-'));
+  withEnv(unchangedSaveEnv(root), () => {
+    const mutationService = makeTestMutationService(root);
+    const frontmatter = { ...UNCHANGED_SAVE_FRONTMATTER, author: 'andrew' };
+
+    const text = 'The user said exactly this and wants it kept verbatim.';
+    const captureEventId = 'capture-unchanged-human-1';
+    const receipt = { capture_event_id: captureEventId, actor: 'user', source_digest: digestText(text), content_digest: digestText(text) };
+    const resolveUserSource = (id) => (id === captureEventId ? { capture_event_id: id, actor: 'user', text } : null);
+    const humanTitle = 'SUP-4054 unchanged human save';
+    const humanInput = { title: humanTitle, content: text, captureEventId, content_origin: 'human', content_origin_basis: 'verbatim_user', user_source: receipt, frontmatter };
+    const human = writeNoteThroughContract({ personality: 'codex', ...humanInput }, { mutationService, resolveUserSource });
+    const humanBefore = savedNoteState(human.notePath, human.journalPath, humanTitle);
+    assert.equal(humanBefore.frontmatter.human_evidence_eligible, true);
+
+    const humanSaved = writeNoteThroughContract({ personality: 'claude-code', ...humanInput }, { mutationService, resolveUserSource });
+    const humanAfter = savedNoteState(humanSaved.notePath, humanSaved.journalPath, humanTitle);
+    assert.equal(humanAfter.frontmatter.source_personality, 'claude-code');
+    assert.equal(humanAfter.frontmatter.content_origin, 'human');
+    assert.equal(humanAfter.frontmatter.content_origin_basis, 'verbatim_user');
+    assert.equal(humanAfter.frontmatter.human_evidence_eligible, true);
+    assert.deepEqual(humanAfter.frontmatter.content_origin_source, humanBefore.frontmatter.content_origin_source);
+    assert.equal(humanAfter.frontmatter.content_origin_drafting, undefined);
+    assert.equal(humanAfter.body, humanBefore.body);
+    assert.equal(humanAfter.journal, humanBefore.journal);
+    assert.equal(humanAfter.backlinks, 1);
+    assert.equal(projectNoteMarkdown(humanAfter.markdown, { title: humanTitle, resolveUserSource }).human_evidence_eligible, true);
+
+    const forgedTitle = 'SUP-4054 unchanged forged human claim';
+    const forgedText = 'Assistant prose that a later save tries to pass off as the user.';
+    const forgedId = 'capture-unchanged-forged-1';
+    const forgedResolver = (id) => ({ capture_event_id: id, actor: 'user', text: 'Different words the user actually said.' });
+    const unknown = writeNoteThroughContract({ personality: 'codex', title: forgedTitle, content: forgedText, frontmatter }, { mutationService });
+    const forgedBefore = savedNoteState(unknown.notePath, unknown.journalPath, forgedTitle);
+    assert.equal(forgedBefore.frontmatter.content_origin, 'unknown');
+
+    const forged = writeNoteThroughContract({
+      personality: 'claude-code',
+      title: forgedTitle,
+      content: forgedText,
+      captureEventId: forgedId,
+      content_origin: 'human',
+      content_origin_basis: 'verbatim_user',
+      user_source: { capture_event_id: forgedId, actor: 'user', source_digest: digestText(forgedText), content_digest: digestText(forgedText) },
+      human_evidence_eligible: true,
+      frontmatter,
+    }, { mutationService, resolveUserSource: forgedResolver });
+    const forgedAfter = savedNoteState(forged.notePath, forged.journalPath, forgedTitle);
+    assert.equal(forgedAfter.frontmatter.source_personality, 'claude-code');
+    assert.equal(forgedAfter.frontmatter.content_origin, 'unknown');
+    assert.equal(forgedAfter.frontmatter.content_origin_basis, 'unknown');
+    assert.equal(forgedAfter.frontmatter.human_evidence_eligible, false);
+    assert.equal(forgedAfter.frontmatter.content_origin_source, undefined);
+    assert.equal(forgedAfter.frontmatter.content_origin_drafting, undefined);
+    assert.equal(forgedAfter.body, forgedBefore.body);
+    assert.equal(forgedAfter.journal, forgedBefore.journal);
+    assert.equal(forgedAfter.backlinks, 1);
+    assert.equal(projectNoteMarkdown(forgedAfter.markdown, { title: forgedTitle, resolveUserSource: forgedResolver }).human_evidence_eligible, false);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('a tool-only metadata change is a compare-and-swap replace that refuses a concurrent edit', () => {
+  const crypto = require('crypto');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-4054-unchanged-cas-'));
+  withEnv(unchangedSaveEnv(root), () => {
+    const base = makeTestMutationService(root);
+    const title = 'SUP-4054 concurrent tool change';
+    const input = {
+      title,
+      content: 'Codex drafted this explanation.\n\nA closing line with trailing spaces.   \n',
+      content_origin: 'assistant',
+      content_origin_basis: 'assistant_generated',
+      drafting: [CODEX_DRAFT_MODEL_A],
+      frontmatter: UNCHANGED_SAVE_FRONTMATTER,
+    };
+    const first = writeNoteThroughContract({ personality: 'codex', ...input }, { mutationService: base });
+    const before = savedNoteState(first.notePath, first.journalPath, title);
+    const concurrent = `${before.markdown.trimEnd()}\n\nA concurrent edit from another device.\n`;
+
+    // Another writer lands after the save read the note and before it commits.
+    const noteOperations = [];
+    const racing = {
+      ...base,
+      createWriteContext(args) {
+        const context = base.createWriteContext(args);
+        return {
+          ...context,
+          mutationExecutor: (operation) => {
+            if (String(operation.vaultRelativePath).startsWith('Notes/') && noteOperations.length === 0) {
+              noteOperations.push(operation);
+              fs.writeFileSync(first.notePath, concurrent, 'utf8');
+            }
+            return context.mutationExecutor(operation);
+          },
+        };
+      },
+    };
+
+    let outcome;
+    try {
+      outcome = writeNoteThroughContract({ personality: 'claude-code', ...input }, { mutationService: racing });
+    } catch (error) {
+      outcome = error;
+    }
+    assert.equal(noteOperations.length, 1);
+    const [operation] = noteOperations;
+    assert.equal(operation.operationKind, 'replace');
+    assert.equal(operation.expectedContent, before.markdown);
+    assert.equal(operation.expectedHash, crypto.createHash('sha256').update(before.markdown, 'utf8').digest('hex'));
+    const status = outcome instanceof Error ? outcome.result?.receipt?.status : outcome.mutationStatus;
+    assert.ok(!['committed', 'already_satisfied'].includes(status), `a refused swap is never reported as saved (${status})`);
+    assert.equal(fs.readFileSync(first.notePath, 'utf8'), concurrent);
+    assert.equal(fs.readFileSync(first.journalPath, 'utf8'), before.journal);
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('personality contract carries an explicit assistant origin without adopting deferred state', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-provenance-contract-'));
   withEnv({

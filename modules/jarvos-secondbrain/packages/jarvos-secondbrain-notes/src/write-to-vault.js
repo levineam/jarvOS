@@ -69,6 +69,16 @@ function provenanceDeclarationsDiffer(existing = {}, next = {}) {
     .some((field) => JSON.stringify(existing[field]) !== JSON.stringify(next[field]));
 }
 
+// `source_personality` names the tool that saved the note, not whose words it
+// holds. A save by a different tool must record that tool even when the body
+// and the origin declaration are unchanged; it is operation metadata, so it
+// never adds a drafting entry. A writer that does not stamp a tool keeps the
+// stored one.
+function savingToolDiffers(existing = {}, next = {}) {
+  return next.source_personality !== undefined
+    && existing.source_personality !== next.source_personality;
+}
+
 // Metadata-only provenance repair needs the stored body to survive byte for
 // byte, which the default render path cannot promise: `renderFrontmatter` ends
 // with a blank separator line while a parsed remainder already carries its own
@@ -137,12 +147,6 @@ function bodyPreservingContent(normalizedFrontmatter, existingContent) {
     throw new NoteBodyPreservationError('body_bytes_not_reproducible');
   }
   return nextContent;
-}
-
-function readExistingFrontmatter(filePath) {
-  if (!existsSync(filePath)) return {};
-  const existing = readFileSync(filePath, 'utf8');
-  return frontmatterToObject(parseFrontmatter(existing));
 }
 
 // Receipt checks for a human declaration need the note content and the
@@ -255,12 +259,18 @@ function createNoteMutationOperation({ operationId, vaultId, vaultRelativePath, 
   // Already-canonical notes are unaffected: their normalized declaration equals
   // the stored one, so the comparison is false and the append-only transforms
   // are still selected.
-  const provenanceRewrite = Boolean(existingContent)
-    && provenanceDeclarationsDiffer(existingFrontmatter, normalizedFrontmatter);
+  //
+  // A different saving tool is also persisted through this guarded replace.
+  // When nothing else changes, the stored body remainder is carried byte for
+  // byte so the tool transition cannot normalize the prose.
+  const declarationChanged = provenanceDeclarationsDiffer(existingFrontmatter, normalizedFrontmatter);
+  const toolChanged = savingToolDiffers(existingFrontmatter, normalizedFrontmatter);
+  const provenanceRewrite = Boolean(existingContent) && (declarationChanged || toolChanged);
+  const toolOnlyChange = toolChanged && !declarationChanged && !materialBodyChange;
   if (provenanceRewrite) {
     // Compare-and-swap semantics are identical either way: the whole note is
     // replaced against the hash of the exact pre-state read above.
-    const nextContent = preserveExistingBodyBytes
+    const nextContent = preserveExistingBodyBytes || toolOnlyChange
       ? bodyPreservingContent(normalizedFrontmatter, existingContent)
       : `${renderFrontmatter(normalizedFrontmatter)}${appendBlock(existingBody, appendBody).trimEnd()}\n`;
     return {
@@ -329,13 +339,14 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   if (bindExpectedState && (created || readFileSync(filePath, 'utf8') !== expectedExistingContent)) {
     throw new NoteExpectedStateError('changed_since_expected_state');
   }
-  const existingFrontmatter = bindExpectedState
-    ? frontmatterToObject(parseFrontmatter(expectedExistingContent))
-    : readExistingFrontmatter(filePath);
-  const body = buildNoteBody(title, content);
   const existingContent = bindExpectedState
     ? expectedExistingContent
     : created ? '' : readFileSync(filePath, 'utf8');
+  // The metadata rendered below and the compare-and-swap guard come from the
+  // same bytes, so a change landing between two reads cannot be committed under
+  // a guard for the newer bytes while the write renders the older metadata.
+  const existingFrontmatter = existingContent ? frontmatterToObject(parseFrontmatter(existingContent)) : {};
+  const body = buildNoteBody(title, content);
   const existingBody = parseFrontmatter(existingContent)?.remainder || existingContent;
   const appendBody = appendEntry ? String(appendEntry).trim() : buildNoteBody(title, content);
   const materialBodyChange = Boolean(existingContent) && !hasExactBlock(existingBody, appendBody);
