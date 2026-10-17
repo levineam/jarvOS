@@ -217,6 +217,12 @@ const {
 - `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
 - `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime resolver bundle with direct GBrain search, optional QMD broad lookup, and graph sidecar expansion.
 - `renderRecallMarkdown(bundle)` renders a bundle into context-ready Markdown.
+
+Failed direct GBrain searches include a `Failure:` JSON line with only bounded
+`status`, `signal`, `timedOut` and `failureClass` metadata. This distinguishes
+timeouts, missing executables, failed commands and empty candidate sets without
+exposing provider stderr, spawn errors, executable paths or arguments. Unknown
+metadata is omitted or reported as `unknown`; retrieval budgets are unchanged.
 - `loadManagedRuntimeDescriptor(path)` validates the owner-only runtime descriptor and both pinned executables.
 - `prepareManagedGbrainProvider(path)` returns the revalidated provider-native stdio invocation without proxying GBrain tools.
 - `doctor(config)` checks manifest, eval file, brain directory, GBrain directory, and CLI availability.
