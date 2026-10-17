@@ -49,7 +49,10 @@ that record in the same operation that writes the prose: when the normalized
 declaration differs from the stored one — including when the note stores none —
 the canonical writer replaces the whole note rather than selecting an
 append-only transform, so a pre-contract note cannot keep taking new prose and
-stay undeclared. Journal bullets carry an adjacent hidden marker
+stay undeclared. `source_personality` names the tool that saved the note, not
+whose words it holds: a save by a different tool is recorded through the same
+guarded replace, an unchanged body is kept byte for byte, and no drafting entry
+is added. Journal bullets carry an adjacent hidden marker
 bound to the digest of the clean bullet text; the marker never contains source
 prose and is stripped from any clean text used for embeddings or prompts.
 

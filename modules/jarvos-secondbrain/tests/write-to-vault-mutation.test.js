@@ -797,6 +797,68 @@ test('an expected state that cannot be enforced by a guarded replace is refused'
   });
 });
 
+// SUP-4054 (Astra P2): the metadata a write renders and the compare-and-swap
+// guard it submits must come from the same read of the note. Loads a private
+// copy of the writer whose `fs` lands a frontmatter-only edit right after the
+// first read of the target note, so a writer that reads twice would render
+// stale metadata under a guard that accepts the newer bytes.
+function loadWriterWithFs(fsForWriter) {
+  const Module = require('node:module');
+  const writerPath = require.resolve('../packages/jarvos-secondbrain-notes/src/write-to-vault');
+  const realRequire = Module.createRequire(writerPath);
+  const source = fs.readFileSync(writerPath, 'utf8').replace(/^#!/, '//');
+  const isolated = { exports: {} };
+  const wrapper = vm.runInThisContext(Module.wrap(source), { filename: writerPath });
+  const scopedRequire = (specifier) => (specifier === 'fs' ? fsForWriter : realRequire(specifier));
+  wrapper.call(isolated.exports, isolated.exports, scopedRequire, isolated, writerPath, path.dirname(writerPath));
+  return isolated.exports;
+}
+
+test('a saving-tool rewrite renders and guards from one read, so a concurrent metadata edit survives', () => {
+  withVault(({ root }) => {
+    const notePath = path.join(root, 'Notes', 'Stored Legacy.md');
+    fs.mkdirSync(path.dirname(notePath), { recursive: true });
+    const stored = STORED_DECLARED_NOTE.replace('author: andrew\n', 'author: andrew\nsource_personality: codex\ncontract: obsidian-note-journal-v1\n');
+    const concurrent = stored.replace('status: active\n', 'status: active\nconcurrent_marker: from-another-device\n');
+    fs.writeFileSync(notePath, stored, 'utf8');
+
+    let raced = false;
+    const racingFs = {
+      existsSync: fs.existsSync,
+      readFileSync(file, ...rest) {
+        const value = fs.readFileSync(file, ...rest);
+        if (!raced && path.resolve(String(file)) === notePath) {
+          raced = true;
+          fs.writeFileSync(notePath, concurrent, 'utf8');
+        }
+        return value;
+      },
+    };
+    const { writeNoteFile: racingWriteNoteFile } = loadWriterWithFs(racingFs);
+    const submitted = [];
+    const result = racingWriteNoteFile({
+      title: 'Stored Legacy',
+      content: 'Prose that predates the contract.',
+      frontmatter: { source_personality: 'claude-code' },
+      operationId: 'note-saving-tool-single-read',
+      vaultId: 'vault-saving-tool',
+      vaultRoot: root,
+      mutationExecutor: guardedExecutor(root, submitted),
+    });
+
+    assert.equal(raced, true);
+    assert.equal(submitted.length, 1);
+    assert.equal(submitted[0].operationKind, 'replace');
+    // The concurrent metadata is neither erased nor rendered over.
+    assert.equal(fs.readFileSync(notePath, 'utf8'), concurrent);
+    // The guard binds the bytes the writer actually rendered from.
+    assert.equal(submitted[0].expectedContent, stored);
+    assert.equal(submitted[0].expectedHash, sha256Utf8(stored));
+    assert.equal(result.receipt.status, 'conflict');
+    assert.equal(result.written, false);
+  });
+});
+
 // SUP-3959: a legacy note must not be able to keep taking new prose while
 // staying undeclared. `note-append-body` and `session-thread-append` cannot
 // carry frontmatter, so selecting one for an undeclared note was an escape from
