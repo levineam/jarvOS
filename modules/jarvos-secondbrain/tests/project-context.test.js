@@ -14,6 +14,7 @@ const input = {
 
 function issue(overrides = {}) {
   return context.issueProjectContext({
+    input,
     authorization: { allowed: true },
     destinationSelectors: ['projects:stewardship'],
     allowedVisibilities: ['private', 'internal', 'mixed'],
@@ -32,9 +33,10 @@ test('issues a caller-authorized, unsigned bounded project context capability', 
   assert.deepEqual(capability.destinationSelectors, ['projects:stewardship']);
   assert.deepEqual(capability.allowedVisibilities, ['internal', 'mixed', 'private']);
   assert.deepEqual(Object.keys(capability).sort(), [
-    'allowedVisibilities', 'audience', 'capabilityRevision', 'destinationSelectors', 'expiresAt',
-    'issuedAt', 'purpose', 'type',
+    'allowedVisibilities', 'audience', 'capabilityRevision', 'contextKey', 'destinationSelectors',
+    'expiresAt', 'issuedAt', 'purpose', 'type',
   ]);
+  assert.equal(capability.contextKey, context.deriveContextKey(input));
   assert.doesNotMatch(JSON.stringify(capability), /signature|activation|finding-42|execution-42|release-42/i);
 });
 
@@ -81,14 +83,28 @@ test('projection only uses a current private/internal capability and preserves o
 });
 
 test('a mixed candidate visibility remains delivery-disabled at a private/internal destination', () => {
-  const capability = issue({ allowedVisibilities: ['mixed'] });
   const mixedInput = { ...input, visibility: 'mixed' };
+  const capability = issue({ input: mixedInput, allowedVisibilities: ['mixed'] });
   assert.deepEqual(
     context.projectContextProjection(capability, mixedInput, {
       now: '2026-08-05T12:30:00.000Z', project: () => ({ status: 'projected' }),
     }),
     { status: 'projected', contextKey: context.deriveContextKey(mixedInput) },
   );
+});
+
+test('projection denies a different activity under the same capability', () => {
+  const capability = issue();
+  const unrelatedInput = { ...input, findingId: 'finding-99' };
+  let projected = false;
+  assert.deepEqual(
+    context.projectContextProjection(capability, unrelatedInput, {
+      now: '2026-08-05T12:30:00.000Z',
+      project: () => { projected = true; return { status: 'projected' }; },
+    }),
+    { status: 'denied' },
+  );
+  assert.equal(projected, false);
 });
 
 test('projection fails closed for invalid or out-of-scope capability state', () => {
