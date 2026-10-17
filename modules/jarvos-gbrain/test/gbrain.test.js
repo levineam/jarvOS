@@ -882,6 +882,48 @@ test('renderRecallMarkdown preserves recalled code fences', () => {
   assert.match(markdown, /`````text\nwide\n````\nvalue\n````\n`````/);
 });
 
+test('recall failure Markdown preserves bounded diagnostics without provider output', (t) => {
+  const root = tempDir();
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const failed = path.join(root, 'failed-provider');
+  fs.writeFileSync(failed, '#!/bin/sh\nprintf PRIVATE_STDOUT\nprintf PRIVATE_STDERR >&2\nexit 23\n', { mode: 0o700 });
+  const stalled = path.join(root, 'stalled-provider');
+  fs.writeFileSync(stalled, `#!${process.execPath}\nsetInterval(() => {}, 1000);\n`, { mode: 0o700 });
+  const empty = path.join(root, 'empty-provider');
+  fs.writeFileSync(empty, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+
+  for (const [binary, timeout, expected] of [
+    [failed, 1000, { status: 23, signal: null, timedOut: false, failureClass: 'engine-command-failed' }],
+    [stalled, 100, { status: null, signal: 'SIGKILL', timedOut: true, failureClass: 'timeout' }],
+    [path.join(root, 'missing-provider'), 1000, { status: null, signal: null, timedOut: false, failureClass: 'missing-engine' }],
+    [empty, 1000, { status: 0, signal: null, timedOut: false, failureClass: 'empty-candidate-set' }],
+  ]) {
+    const result = gbrain.recallBundle({ gbrainBin: binary, gbrainDir: root, retrievalTimeoutMs: timeout }, {
+      query: 'operational fixture', includeQmd: false, autoGraph: false,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.markdown, /Status: failed/);
+    const line = result.markdown.split('\n').find((value) => value.startsWith('Failure: '));
+    assert.ok(line, 'failed recall must expose the sanitized failure metadata');
+    assert.deepEqual(JSON.parse(line.slice('Failure: '.length)), expected);
+    assert.doesNotMatch(result.markdown, /PRIVATE_STDOUT|PRIVATE_STDERR|failed-provider|missing-provider/);
+  }
+});
+
+test('recall failure diagnostics reject unrecognized metadata and preserve managed failure class', () => {
+  const render = (engine) => gbrain.renderRecallMarkdown({ query: 'safe', engines: { gbrain: { ok: false, ...engine } } });
+  const hostile = render({
+    failureClass: 'PRIVATE_FAILURE_SECRET',
+    command: { status: 'PRIVATE_STATUS', signal: 'PRIVATE_SIGNAL', timedOut: 'PRIVATE_TIMEOUT', error: 'PRIVATE_ERROR', stderrSample: 'PRIVATE_STDERR' },
+  });
+  const line = hostile.split('\n').find((value) => value.startsWith('Failure: '));
+  assert.ok(line);
+  assert.deepEqual(JSON.parse(line.slice('Failure: '.length)), { status: null, signal: null, timedOut: false, failureClass: 'unknown' });
+  assert.doesNotMatch(hostile, /PRIVATE_/);
+  assert.match(render({ failureClass: 'runtime-invalid-descriptor', command: {} }), /"failureClass":"runtime-invalid-descriptor"/);
+  assert.doesNotMatch(gbrain.renderRecallMarkdown({ query: 'safe', engines: { gbrain: { ok: true, text: 'evidence' } } }), /Failure:/);
+});
+
 test('recallBundle reports missing query without spawning commands', () => {
   const result = gbrain.recallBundle({}, { query: '' });
 

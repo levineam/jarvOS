@@ -20,6 +20,18 @@ const DEFAULT_GBRAIN_BIN_CANDIDATES = [
 const DEFAULT_RETRIEVAL_LIMIT = 5;
 const DEFAULT_EVAL_LIMIT = 10;
 const DEFAULT_RETRIEVAL_TIMEOUT_MS = 15000;
+const RECALL_FAILURE_CLASSES = new Set([
+  'missing-engine', 'timeout', 'engine-command-failed', 'empty-candidate-set',
+  'runtime-config-invalid', 'runtime-timeout', 'runtime-command-failed',
+  'runtime-invalid-descriptor', 'runtime-realpath-failed', 'runtime-not-executable',
+  'runtime-mode-unsafe', 'runtime-owner-mismatch', 'runtime-owner-unverified',
+  'runtime-ancestor-unsafe', 'runtime-digest-mismatch', 'runtime-digest-unavailable',
+  'runtime-store-identity-invalid', 'runtime-interpreter-invalid-descriptor',
+  'runtime-interpreter-realpath-failed', 'runtime-interpreter-not-executable',
+  'runtime-interpreter-mode-unsafe', 'runtime-interpreter-owner-mismatch',
+  'runtime-interpreter-owner-unverified', 'runtime-interpreter-ancestor-unsafe',
+  'runtime-interpreter-digest-mismatch', 'runtime-interpreter-digest-unavailable',
+]);
 const MANAGED_RUNTIME_DESCRIPTOR_SCHEMA = 'jarvos-gbrain-runtime-descriptor/v1';
 const CONTINUITY_PRODUCER_INPUT_SCHEMA = 'jarvos-gbrain-continuity-producer-input/v1';
 const CONTINUITY_PROBE_SCHEMA = 'jarvos-gbrain-native-probe/v1';
@@ -1803,6 +1815,19 @@ function pushFencedText(lines, info, text) {
   lines.push('', `${fence}${info}`, text, fence);
 }
 
+function recallFailureMetadata(engine) {
+  const command = engine.command || {};
+  const failureClass = engine.failureClass || engine.failureReason;
+  return {
+    status: Number.isInteger(command.status) && command.status >= -2147483648 && command.status <= 4294967295
+      ? command.status : null,
+    signal: typeof command.signal === 'string' && Object.hasOwn(os.constants.signals, command.signal)
+      ? command.signal : null,
+    timedOut: command.timedOut === true,
+    failureClass: RECALL_FAILURE_CLASSES.has(failureClass) ? failureClass : 'unknown',
+  };
+}
+
 function renderRecallMarkdown(bundle) {
   const lines = [
     '# jarvOS Recall Bundle',
@@ -1815,6 +1840,9 @@ function renderRecallMarkdown(bundle) {
 
   const gbrain = bundle.engines?.gbrain;
   lines.push(`Status: ${gbrain?.ok ? 'ok' : 'failed'}`);
+  if (gbrain && !gbrain.ok) {
+    lines.push(`Failure: ${JSON.stringify(recallFailureMetadata(gbrain))}`);
+  }
   if (gbrain?.text) {
     pushFencedText(lines, 'text', gbrain.text);
   }
