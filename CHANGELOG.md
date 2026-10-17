@@ -335,6 +335,8 @@ the Steward's release-level approval and verification.
   never rewritten in bulk.
 
 ### Fixed
+- Declare Claude-specific note origin and drafting-model history without
+  labeling transcription or formatting-only maintenance as AI drafting.
 - Managed Claude Code, Claude Desktop, and Codex setup now registers the
   stable selector-aware `jarvos-mcp` shim from the stewardship bundle by
   default and refuses to persist an immutable runtime stage's own MCP script.
