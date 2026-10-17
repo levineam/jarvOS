@@ -66,7 +66,9 @@ function prepareIdentifiedCapture(capture, plan) {
     || new Date(`${capture.date}T00:00:00Z`).toISOString().slice(0, 10) !== capture.date) {
     throw new Error('captureIdentity requires an explicit valid capture date');
   }
-  if (!plan.createNote || plan.ignored) throw new Error('captureIdentity requires an eligible durable note route');
+  const noteRoute = Boolean(plan.createNote) && !plan.ignored;
+  const journalRoute = !plan.createNote && !plan.ignored && Boolean(plan.journalSection && plan.journalLine);
+  if (!noteRoute && !journalRoute) throw new Error('captureIdentity requires an eligible durable note route or journal entry route');
   if (!String(capture.title || '').trim() && !primaryText(capture)) throw new Error('captureIdentity requires a caller-supplied title or text');
   const frontmatter = { ...(capture.frontmatter || {}) };
   // This field has always been assigned by the note writer, not the caller.
@@ -78,6 +80,10 @@ function prepareIdentifiedCapture(capture, plan) {
     'noteFrontmatter', 'journalSection', 'journalLine'].map((key) => [key, plan[key]]));
   const requestHash = digest({ capture: canonicalCapture, plan: storagePlan });
   const identityHash = digest({ namespace: identity.namespace, id: identity.id, revision: identity.revision });
+  const intentId = `capture:${identityHash}`;
+  // A journal-only route writes no note, so no note title or note identity
+  // metadata is projected; the request hash still covers the storage plan.
+  if (journalRoute) return { capture: canonicalCapture, plan, requestHash, intentId };
   // Forty Unicode characters leave room for the digest under common 255-byte
   // filename limits, including four-byte characters, without splitting pairs.
   const noteTitle = `${Array.from(String(plan.noteTitle)).slice(0, 40).join('')} -- ${identityHash}`;
@@ -93,7 +99,7 @@ function prepareIdentifiedCapture(capture, plan) {
   };
   return { capture: canonicalCapture,
     plan: projectNoteTitle(identifiedPlan, noteTitle, { ...frontmatter, ...identifiedPlan.noteFrontmatter }),
-    requestHash, intentId: `capture:${identityHash}` };
+    requestHash, intentId };
 }
 
 module.exports = { canonicalJson, prepareIdentifiedCapture, projectNoteTitle, validateCaptureIdentity };

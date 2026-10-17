@@ -55,6 +55,45 @@ test('legacy capture does not require identity', () => {
   assert.equal(normalizeCaptureEvent(input).captureIdentity, undefined);
 });
 
+test('identified journal-only routing binds identity and request without projecting a note title', () => {
+  const event = { ...capture({ namespace: 'workshop', id: 'journal-only', revision: '1' }), text: 'idea: A short synthetic idea.' };
+  const plan = buildThreePackagePlan(event);
+  assert.equal(plan.createNote, false);
+  assert.ok(plan.journalSection && plan.journalLine);
+  const prepared = prepareIdentifiedCapture(event, plan);
+  assert.match(prepared.intentId, /^capture:[a-f0-9]{64}$/);
+  assert.match(prepared.requestHash, /^[a-f0-9]{64}$/);
+  assert.equal(prepared.plan.noteTitle, plan.noteTitle);
+  assert.equal(prepared.plan.journalLine, plan.journalLine);
+  assert.equal(prepared.plan.noteFrontmatter, plan.noteFrontmatter);
+  const changed = { ...event, text: 'idea: Another short synthetic idea.' };
+  const changedPrepared = prepareIdentifiedCapture(changed, buildThreePackagePlan(changed));
+  assert.equal(changedPrepared.intentId, prepared.intentId);
+  assert.notEqual(changedPrepared.requestHash, prepared.requestHash);
+});
+
+test('three-package identified journal-only storage writes no note and uses the canonical journal intent and hash', () => {
+  // applyStoragePlan is the three-package storage boundary; memory routing lives
+  // only in applyThreePackagePlan, so no memory writer can run here.
+  const { applyStoragePlan } = require('../bridge/routing/src/three-package-router');
+  const event = { ...capture({ namespace: 'workshop', id: 'three-journal-only', revision: '1' }), text: 'idea: A short synthetic idea.' };
+  const plan = buildThreePackagePlan(event);
+  assert.equal(plan.createNote, false);
+  assert.ok(plan.journalSection && plan.journalLine);
+  const prepared = prepareIdentifiedCapture(event, plan);
+  const calls = [];
+  const result = applyStoragePlan(plan, event, { adapter: {
+    writeNote: () => { throw new Error('journal-only must not write a note'); },
+    ensureJournal: () => { throw new Error('journal-only with a journal line must use its section stage'); },
+    appendLineToJournalSection: (input) => { calls.push(input); return { acknowledged: true, artifactReceipt: { artifacts: [] } }; },
+  } });
+  assert.equal(result.note, null);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].intentId, `${prepared.intentId}:journal`);
+  assert.equal(calls[0].requestHash, prepared.requestHash);
+  assert.equal(calls[0].line, plan.journalLine);
+});
+
 test('writer-owned IDs are excluded even in rich routing plans and Unicode titles remain bounded', () => {
   const event = { ...capture({ namespace: 'workshop', id: 'Opening', revision: 'A' }), title: '🎭'.repeat(80) };
   const first = prepareIdentifiedCapture(event, buildThreePackagePlan(event));

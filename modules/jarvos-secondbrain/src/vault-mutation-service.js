@@ -150,6 +150,11 @@ function createConfiguredVaultMutationService({
     }
     let receipt;
     try { receipt = adapter.submit(operation); } catch (error) {
+      // The ledger refused a stage of an identity already bound to another
+      // request; report the same conflict replayExisting returns.
+      if (requestHash && error.code === 'capture_identity_request_conflict') {
+        return { status: 'conflict', obsidian: 'unacknowledged', reason: 'capture_identity_request_conflict' };
+      }
       if (!requestHash || error.message !== 'operationId already belongs to a different mutation') throw error;
       // A concurrent first submission may have won atomic planning.
       const replay = replayExisting();
