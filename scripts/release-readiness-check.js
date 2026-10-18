@@ -53,8 +53,13 @@ function findExistingReleaseTag(tagList, target, packageName) {
   return releaseTagNames(target, packageName).find((name) => existing.has(name)) || null;
 }
 
+// shortcut: simple inline version links only; use a Markdown parser if release prose adds titled or nested-parenthesis URLs.
+function unlinkVersionLabels(text) {
+  return String(text || '').replace(/\[(`?[\w.-]*v\d+\.\d+\.\d+`?)\]\([^()\s]*\)/gi, '$1');
+}
+
 function findReleaseProcessCurrentClaims(releaseProcess) {
-  const text = String(releaseProcess || '');
+  const text = unlinkVersionLabels(releaseProcess);
   const claims = [];
 
   for (const match of text.matchAll(/`?(v\d+\.\d+\.\d+)`?\s+is\s+the\s+current\s+[^.\n]*(?:lane|release|label|version|public preview)[^.\n]*/gi)) {
@@ -69,7 +74,7 @@ function findReleaseProcessCurrentClaims(releaseProcess) {
 }
 
 function findReadmeCurrentReleaseClaims(readme) {
-  return Array.from(String(readme || '').matchAll(/`?(v\d+\.\d+\.\d+)`?\s+is the current public preview release[^.\n]*/gi))
+  return Array.from(unlinkVersionLabels(readme).matchAll(/`?(v\d+\.\d+\.\d+)`?\s+is the current public preview release[^.\n]*/gi))
     .map((match) => ({ version: match[1], text: match[0] }));
 }
 

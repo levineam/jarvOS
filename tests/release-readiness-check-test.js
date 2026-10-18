@@ -159,6 +159,103 @@ test('front-door release prose checks every active release label claim', () => {
   assert.match(releaseProcessResult.detail, /Release-process current claim names v0\.6\.1; target is v0\.6\.2/);
 });
 
+const V011_OPTIONS = { target: '0.11.0', tag: 'v0.11.0' };
+const RELEASE_URL = 'https://example.invalid/release';
+
+function linkedLabel(version, { backtick = false } = {}) {
+  const label = backtick ? `\`${version}\`` : version;
+  return `[${label}](${RELEASE_URL})`;
+}
+
+function currentClaimFiles(readmeClaim, releaseProcessClaim) {
+  return {
+    'README.md': `## Release Status\n\n${readmeClaim}\n`,
+    'docs/release-process.md': `${releaseProcessClaim}\n`,
+  };
+}
+
+function resultFor(results, label) {
+  return results.find((result) => result.label === label);
+}
+
+const README_LABEL = 'README current release prose';
+const RELEASE_PROCESS_LABEL = 'release-process final-version prose';
+
+// Label prefixes: plain, component-tag (as in the public README), and uppercase V (recognizers are case-insensitive).
+const LABEL_PREFIXES = ['v', 'jarvos-bootstrap-v', 'V'];
+
+test('front-door release prose accepts bare, backtick, and linked version labels for the target', () => {
+  const forms = LABEL_PREFIXES.flatMap((prefix) => {
+    const version = `${prefix}0.11.0`;
+    return [version, `\`${version}\``, linkedLabel(version), linkedLabel(version, { backtick: true })];
+  });
+
+  for (const form of forms) {
+    const claim = `${form} is the current public preview release.`;
+    const results = runFrontDoorCheck(currentClaimFiles(claim, claim), V011_OPTIONS);
+    assert.deepEqual(failedLabels(results), [], `form ${form}`);
+  }
+
+  const publicReadmeLine = '> **Release status:** [`jarvos-bootstrap-v0.11.0`](https://github.com/levineam/jarvOS/releases/tag/jarvos-bootstrap-v0.11.0) is the current public preview release.';
+  const results = runFrontDoorCheck(currentClaimFiles(publicReadmeLine, publicReadmeLine), V011_OPTIONS);
+  assert.deepEqual(failedLabels(results), []);
+});
+
+test('front-door release prose rejects a linked stale version label in README and release-process', () => {
+  for (const prefix of LABEL_PREFIXES) {
+    for (const backtick of [false, true]) {
+      const claim = `${linkedLabel(`${prefix}0.10.0`, { backtick })} is the current public preview release.`;
+      const results = runFrontDoorCheck(currentClaimFiles(claim, claim), V011_OPTIONS);
+
+      const readmeResult = resultFor(results, README_LABEL);
+      assert.equal(readmeResult.ok, false, claim);
+      assert.match(readmeResult.detail, /README names v0\.10\.0; target is v0\.11\.0/i);
+
+      const releaseProcessResult = resultFor(results, RELEASE_PROCESS_LABEL);
+      assert.equal(releaseProcessResult.ok, false, claim);
+      assert.match(releaseProcessResult.detail, /Release-process current claim names v0\.10\.0; target is v0\.11\.0/i);
+    }
+  }
+});
+
+test('front-door release prose rejects a linked candidate version label in README and release-process', () => {
+  for (const prefix of LABEL_PREFIXES) {
+    for (const backtick of [false, true]) {
+      const claim = `${linkedLabel(`${prefix}0.11.0`, { backtick })} is the current public preview release candidate.`;
+      const results = runFrontDoorCheck(currentClaimFiles(claim, claim), V011_OPTIONS);
+
+      const readmeResult = resultFor(results, README_LABEL);
+      assert.equal(readmeResult.ok, false, claim);
+      assert.match(readmeResult.detail, /v0\.11\.0 is still described as a current candidate/i);
+
+      const releaseProcessResult = resultFor(results, RELEASE_PROCESS_LABEL);
+      assert.equal(releaseProcessResult.ok, false, claim);
+      assert.match(releaseProcessResult.detail, /v0\.11\.0 is still described as a current candidate/i);
+    }
+  }
+});
+
+test('front-door release prose rejects a linked stale claim next to a valid unlinked current claim', () => {
+  for (const validForm of ['v0.11.0', '`v0.11.0`', 'jarvos-bootstrap-v0.11.0', '`jarvos-bootstrap-v0.11.0`']) {
+    for (const prefix of LABEL_PREFIXES) {
+      for (const backtick of [false, true]) {
+        const valid = `${validForm} is the current public preview release.`;
+        const staleLinked = `Elsewhere, ${linkedLabel(`${prefix}0.10.0`, { backtick })} is the current public preview release.`;
+        const claims = [valid, '', staleLinked].join('\n');
+        const results = runFrontDoorCheck(currentClaimFiles(claims, claims), V011_OPTIONS);
+
+        const readmeResult = resultFor(results, README_LABEL);
+        assert.equal(readmeResult.ok, false, staleLinked);
+        assert.match(readmeResult.detail, /README names v0\.10\.0; target is v0\.11\.0/i);
+
+        const releaseProcessResult = resultFor(results, RELEASE_PROCESS_LABEL);
+        assert.equal(releaseProcessResult.ok, false, staleLinked);
+        assert.match(releaseProcessResult.detail, /Release-process current claim names v0\.10\.0; target is v0\.11\.0/i);
+      }
+    }
+  }
+});
+
 test('front-door release prose allows candidate wording in candidate mode', () => {
   const results = runFrontDoorCheck({
     'README.md': '## Release Status\n\n`v0.6.1` is the current public preview release.\n',
