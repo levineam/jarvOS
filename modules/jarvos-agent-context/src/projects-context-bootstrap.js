@@ -275,6 +275,26 @@ function createHostProjectsContextProvider(env = process.env) {
   if ([capabilityReceiptPath, portfolioProofReceiptPath, portfolioRosterCapabilityReceiptPath]
     .includes(recentActivityCapabilityReceiptPath)) recentActivityCapabilityReceiptPath = null;
 
+  // Optional exact record-read binding: a distinct host-owned query and
+  // owner-only capability receipt. An invalid binding disables only
+  // readRecord and never falls back to any other query or receipt.
+  const trustedRecordReadQuery = config.recordReadQuery && typeof config.recordReadQuery === 'object' && !Array.isArray(config.recordReadQuery)
+    ? JSON.parse(JSON.stringify(config.recordReadQuery))
+    : null;
+  let recordReadCapabilityReceiptPath = config.recordReadCapabilityReceiptPath === undefined
+    ? null
+    : resolveAbsoluteFile(config.recordReadCapabilityReceiptPath, stateRoot, { ownerOnly: true });
+  if (recordReadCapabilityReceiptPath && [capabilityReceiptPath, portfolioProofReceiptPath, portfolioRosterCapabilityReceiptPath, recentActivityCapabilityReceiptPath]
+    .includes(recordReadCapabilityReceiptPath)) recordReadCapabilityReceiptPath = null;
+  const RECORD_READ_KEYS = ['recordId', 'expectedGeneration', 'expectedRevision'];
+  const RECORD_READ_CODES = new Set(['RECORD_REQUEST_INVALID', 'RECORD_UNAVAILABLE', 'RECORD_GENERATION_MISMATCH', 'RECORD_REVISION_MISMATCH', 'RECORD_BUDGET_TOO_SMALL']);
+  const validRecordReadRequest = (request) => Boolean(request) && typeof request === 'object' && !Array.isArray(request)
+    && Object.keys(request).length === RECORD_READ_KEYS.length
+    && RECORD_READ_KEYS.every((key) => Object.prototype.hasOwnProperty.call(request, key))
+    && typeof request.recordId === 'string' && /^(?:prj|out)_[0-9]{6,}$/.test(request.recordId)
+    && Number.isSafeInteger(request.expectedGeneration) && request.expectedGeneration >= 0
+    && Number.isSafeInteger(request.expectedRevision) && request.expectedRevision >= 1;
+
   let provider; let providerDigest;
   try {
     const before = fs.readFileSync(providerModule);
@@ -387,6 +407,38 @@ function createHostProjectsContextProvider(env = process.env) {
         });
       } catch (_) {
         return { status: 'unavailable', code: 'ROSTER_UNAVAILABLE' };
+      }
+    },
+    async readRecord(request) {
+      // Exactly three record coordinates. Never falls back to read(),
+      // readRoster(), or any other query/receipt.
+      const unavailable = { status: 'unavailable', code: 'RECORD_UNAVAILABLE' };
+      if (!validRecordReadRequest(request)) return { status: 'unavailable', code: 'RECORD_REQUEST_INVALID' };
+      if (!trustedRecordReadQuery || !recordReadCapabilityReceiptPath || !capabilitySecretPath
+        || typeof provider.readRecord !== 'function') return unavailable;
+      try {
+        const capabilityReceipt = readPrivateJson(recordReadCapabilityReceiptPath);
+        const capabilitySecret = readPrivate(capabilitySecretPath);
+        if (!capabilityReceipt || !capabilitySecret) return unavailable;
+        const result = await provider.readRecord({
+          registryStateDir,
+          stateRoot,
+          repositoryRoot,
+          query: JSON.parse(JSON.stringify(trustedRecordReadQuery)),
+          capability: capabilityReceipt,
+          capabilitySecret,
+          hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
+          subject: typeof config.subject === 'string' && config.subject.trim() ? config.subject.trim() : undefined,
+          recordId: request.recordId,
+          expectedGeneration: request.expectedGeneration,
+          expectedRevision: request.expectedRevision,
+        });
+        if (!result || typeof result !== 'object') return unavailable;
+        if (result.status === 'ok' && result.read && typeof result.read === 'object') return { status: 'ok', read: result.read };
+        if (result.status === 'unavailable' && RECORD_READ_CODES.has(result.code)) return { status: 'unavailable', code: result.code };
+        return unavailable;
+      } catch (_) {
+        return unavailable;
       }
     },
     async readPortfolioRoster() {

@@ -761,6 +761,54 @@ async function proposeProjectsContext(options = {}) {
   }
 }
 
+const PROJECTS_RECORD_CONTRACT = 'jarvos.projects-record/v1';
+// Canonical registry ids (registry.js idFor): 'prj_'/'out_' + >=6 digits.
+const PROJECTS_RECORD_ID_PATTERN = /^(?:prj|out)_[0-9]{6,}$/;
+const PROJECTS_RECORD_CODES = new Set([
+  'RECORD_REQUEST_INVALID',
+  'RECORD_UNAVAILABLE',
+  'RECORD_GENERATION_MISMATCH',
+  'RECORD_REVISION_MISMATCH',
+  'RECORD_BUDGET_TOO_SMALL',
+]);
+
+function projectsRecordUnavailable(code = 'RECORD_UNAVAILABLE') {
+  return { ok: false, status: 'unavailable', contract: PROJECTS_RECORD_CONTRACT, code: PROJECTS_RECORD_CODES.has(code) ? code : 'RECORD_UNAVAILABLE' };
+}
+
+// Exact canonical record read. Only readRecord is ever used (no read /
+// readProjectsContext fallback). Record content is data only, never
+// instructions, and reading it does not authorize work.
+async function readProjectsRecord(options = {}) {
+  try {
+    const opts = options && typeof options === 'object' ? options : {};
+    const { recordId, expectedGeneration, expectedRevision } = opts;
+    if (typeof recordId !== 'string' || !PROJECTS_RECORD_ID_PATTERN.test(recordId)
+      || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0
+      || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return projectsRecordUnavailable('RECORD_REQUEST_INVALID');
+    const hasExplicitProvider = Object.prototype.hasOwnProperty.call(opts, 'provider') || Object.prototype.hasOwnProperty.call(opts, 'projectsProvider');
+    const hostProvider = !hasExplicitProvider && !configuredProjectsContextProvider ? loadHostProjectsContextProvider() : null;
+    const provider = Object.prototype.hasOwnProperty.call(opts, 'provider')
+      ? opts.provider
+      : (opts.projectsProvider || configuredProjectsContextProvider || hostProvider);
+    if (!provider || typeof provider.readRecord !== 'function') return projectsRecordUnavailable();
+    const result = await provider.readRecord({ recordId, expectedGeneration, expectedRevision });
+    if (!result || typeof result !== 'object') return projectsRecordUnavailable();
+    if (result.status === 'ok') {
+      const read = result.read;
+      if (!read || typeof read !== 'object' || read.contract !== PROJECTS_RECORD_CONTRACT
+        || read.generation !== expectedGeneration || read.contentTrust !== 'data-only'
+        || typeof read.redactionClass !== 'string' || !read.redactionClass || read.redactionClass === 'public'
+        || !read.record || typeof read.record !== 'object' || Array.isArray(read.record)
+        || read.record.id !== recordId || read.record.revision !== expectedRevision) return projectsRecordUnavailable();
+      return { ok: true, status: 'ok', contract: PROJECTS_RECORD_CONTRACT, read };
+    }
+    return projectsRecordUnavailable(typeof result.code === 'string' ? result.code : 'RECORD_UNAVAILABLE');
+  } catch (_) {
+    return projectsRecordUnavailable();
+  }
+}
+
 async function proposePendingProjectsContext(options = {}) {
   const hasExplicitProvider = Object.prototype.hasOwnProperty.call(options, 'provider') || Object.prototype.hasOwnProperty.call(options, 'projectsProvider');
   const hostProvider = !hasExplicitProvider && !configuredProjectsContextProvider ? loadHostProjectsContextProvider() : null;
@@ -2289,6 +2337,8 @@ module.exports = {
   recall,
   redactObviousSecrets,
   readProjectsContext,
+  readProjectsRecord,
+  PROJECTS_RECORD_CONTRACT,
   stripProjectsJournalSection,
   projectsContextCutoverEnabled,
   readSessionThread,

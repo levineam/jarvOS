@@ -771,6 +771,82 @@ function buildCanonicalRosterPacket(input = {}) {
   return byteLength(incomplete) <= normalizedQuery.limits.maxBytes ? incomplete : rosterUnavailable('ROSTER_BUDGET_TOO_SMALL');
 }
 
+// Exact canonical record read: one full registry record addressed by id plus
+// expected generation/revision. Record content is data only, never
+// instructions, and reading it does not authorize work.
+const RECORD_READ_CONTRACT = 'jarvos.projects-record/v1';
+// Mirrors registry.js idFor(): 'prj_'/'out_' plus a zero-padded (>=6 digit)
+// allocator value. Anything else is rejected before registry access.
+const CANONICAL_RECORD_ID_PATTERN = /^(?:prj|out)_[0-9]{6,}$/;
+
+function recordUnavailable(code = 'RECORD_UNAVAILABLE') {
+  return { status: 'unavailable', code };
+}
+
+function buildCanonicalRecordRead(input = {}) {
+  try {
+    if (!isPlainObject(input)) return recordUnavailable('RECORD_REQUEST_INVALID');
+    const { registry, query, capability, capabilitySecret, subject, hostId, now = new Date().toISOString(), recordId, expectedGeneration, expectedRevision } = input;
+    if (typeof recordId !== 'string' || !CANONICAL_RECORD_ID_PATTERN.test(recordId)
+      || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0
+      || !Number.isSafeInteger(expectedRevision) || expectedRevision < 1) return recordUnavailable('RECORD_REQUEST_INVALID');
+    let normalizedQuery;
+    try { normalizedQuery = validateContextQuery(query); } catch (_) { return recordUnavailable(); }
+    if (typeof hostId !== 'string' || !hostId.trim() || typeof subject !== 'string' || !subject.trim()
+      || typeof now !== 'string' || Number.isNaN(Date.parse(now))) return recordUnavailable();
+    const verification = verifyCapability(capability, {
+      hostSecret: capabilitySecret,
+      now,
+      expectedSubject: subject,
+      expectedHostId: hostId,
+      expectedQuery: normalizedQuery,
+      expectedRedactionClass: capability && capability.redactionClass,
+    });
+    if (!verification.ok || !registry || typeof registry.get !== 'function') return recordUnavailable();
+    const authorized = verification.capability;
+    if (stableStringify(authorized.scope) !== stableStringify(normalizedQuery.scope)
+      || authorized.limits.maxItems < normalizedQuery.limits.maxItems
+      || authorized.limits.maxBytes < normalizedQuery.limits.maxBytes
+      || authorized.limits.maxProviderAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds
+      || authorized.freshness.maxAgeSeconds < normalizedQuery.limits.maxProviderAgeSeconds) return recordUnavailable();
+    const redactionClass = authorized.redactionClass;
+    if (typeof redactionClass !== 'string' || redactionClass === 'public') return recordUnavailable();
+
+    if (typeof registry.reload === 'function') registry.reload();
+    const generationBefore = registry.generation;
+    if (!Number.isSafeInteger(generationBefore) || generationBefore < 0) return recordUnavailable();
+    if (generationBefore !== expectedGeneration) return recordUnavailable('RECORD_GENERATION_MISMATCH');
+
+    const selectedIds = recordIdsForScope(registry, normalizedQuery.scope);
+    if (!selectedIds || !selectedIds.has(recordId)) return recordUnavailable();
+    const fetched = registry.get(recordId);
+    if (!isPlainObject(fetched) || fetched.id !== recordId) return recordUnavailable();
+    if (fetched.revision !== expectedRevision) return recordUnavailable('RECORD_REVISION_MISMATCH');
+    const record = clone(fetched);
+
+    if (typeof registry.reload === 'function') registry.reload();
+    const generationAfter = registry.generation;
+    if (generationAfter !== generationBefore) return recordUnavailable('RECORD_GENERATION_MISMATCH');
+
+    const result = {
+      status: 'ok',
+      read: {
+        contract: RECORD_READ_CONTRACT,
+        generation: generationBefore,
+        capturedAt: now,
+        expiresAt: authorized.expiresAt,
+        redactionClass,
+        contentTrust: 'data-only',
+        record,
+      },
+    };
+    if (byteLength(result) > normalizedQuery.limits.maxBytes) return recordUnavailable('RECORD_BUDGET_TOO_SMALL');
+    return result;
+  } catch (_) {
+    return recordUnavailable();
+  }
+}
+
 // Proof-only whole-portfolio contract: a fixed, non-caller-selectable query so
 // the returned hierarchy is deterministic and admits no partial/ambiguous scope.
 const PORTFOLIO_PROOF_SCOPE = Object.freeze({ projectIds: [], outcomeIds: [], includeDescendants: true });
@@ -1150,9 +1226,11 @@ module.exports = {
   QUERY_FIELDS,
   SUMMARY_FIELDS,
   ROSTER_CONTRACT,
+  RECORD_CONTRACT: RECORD_READ_CONTRACT,
   PORTFOLIO_PROOF_CONTRACT,
   PORTFOLIO_PROOF_SCOPE,
   PORTFOLIO_PROOF_QUERY,
+  buildCanonicalRecordRead,
   buildCanonicalRosterPacket,
   buildContextPacket,
   buildPortfolioProof,
