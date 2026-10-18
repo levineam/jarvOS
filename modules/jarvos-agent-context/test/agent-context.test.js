@@ -731,6 +731,7 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_current_work',
     'jarvos_projects_context',
     'jarvos_projects_roster',
+    'jarvos_projects_record',
     'jarvos_projects_propose',
     'jarvos_projects_propose_v1',
     'jarvos_recall',
@@ -784,6 +785,56 @@ test('MCP jarvos_projects_roster is visible and accepts only an empty argument o
     () => callTool('jarvos_projects_roster', { profile: 'orientation' }),
     /empty object/,
   );
+});
+
+test('MCP jarvos_projects_record takes only record coordinates and needs a host readRecord', async () => {
+  const tool = TOOLS.find((entry) => entry.name === 'jarvos_projects_record');
+  assert.ok(tool, 'jarvos_projects_record must be listed');
+  assert.equal(tool.inputSchema.additionalProperties, false);
+  assert.deepEqual(tool.inputSchema.required, ['recordId', 'expectedGeneration', 'expectedRevision']);
+  assert.deepEqual(Object.keys(tool.inputSchema.properties).sort(), ['expectedGeneration', 'expectedRevision', 'recordId']);
+  const { setProjectsContextProvider } = require('../src/index.js');
+  const outcome = async (args) => { try { return JSON.stringify(await callTool('jarvos_projects_record', args)); } catch (error) { return `rejected:${error.message}`; } };
+  const coords = { recordId: 'prj_000002', expectedGeneration: 2, expectedRevision: 1 };
+  let recordReads = 0; let plainReads = 0;
+  try {
+    setProjectsContextProvider({ read: async () => { plainReads += 1; return { status: 'unavailable' }; }, readRecord: async () => { recordReads += 1; return { status: 'unavailable', code: 'RECORD_UNAVAILABLE' }; } });
+    for (const extra of [{ query: {} }, { path: '/tmp/x' }, { capability: {} }]) {
+      assert.match(await outcome({ ...coords, ...extra }), /rejected|isError|unavailable/i);
+    }
+    assert.equal(recordReads, 0, 'extra keys must be rejected before readRecord');
+    setProjectsContextProvider({ read: async () => { plainReads += 1; return { status: 'ok' }; } });
+    assert.match(await outcome(coords), /unavailable/i);
+    assert.equal(plainReads, 0, 'a provider without readRecord must not fall back to read');
+  } finally { setProjectsContextProvider(null); }
+});
+
+test('MCP jarvos_projects_record and readProjectsRecord reject malformed record ids with zero provider calls', async () => {
+  const tool = TOOLS.find((entry) => entry.name === 'jarvos_projects_record');
+  assert.equal(tool.inputSchema.properties.recordId.pattern, '^(?:prj|out)_[0-9]{6,}$');
+  const { setProjectsContextProvider, readProjectsRecord } = require('../src/index.js');
+  let calls = 0;
+  const counting = {
+    read: async () => { calls += 1; return { status: 'unavailable' }; },
+    readRoster: async () => { calls += 1; return { status: 'unavailable' }; },
+    readRecord: async () => { calls += 1; return { status: 'unavailable', code: 'RECORD_UNAVAILABLE' }; },
+  };
+  try {
+    setProjectsContextProvider(counting);
+    for (const recordId of ['../x', 'prj_1', '', ' ', 'PRJ_000001', 'prj_00000a', 'xyz_000001', 'prj_000001 ', '/abs/prj_000001', 42, null]) {
+      await assert.rejects(
+        callTool('jarvos_projects_record', { recordId, expectedGeneration: 1, expectedRevision: 1 }),
+        /accepts exactly recordId/,
+        `MCP must reject ${JSON.stringify(recordId)}`,
+      );
+      assert.deepEqual(
+        await readProjectsRecord({ provider: counting, recordId, expectedGeneration: 1, expectedRevision: 1 }),
+        { ok: false, status: 'unavailable', contract: 'jarvos.projects-record/v1', code: 'RECORD_REQUEST_INVALID' },
+        `facade must reject ${JSON.stringify(recordId)}`,
+      );
+    }
+    assert.equal(calls, 0, 'malformed ids must never reach the provider');
+  } finally { setProjectsContextProvider(null); }
 });
 
 test('named Todo MCP actions fail closed when the host work-action binding is absent', async () => {
