@@ -14,6 +14,15 @@ const RESULT_STORE = '__jarvosVaultMutationResults';
 const DEFAULT_PROBE_TIMEOUT_MS = 10_000;
 const DEFAULT_POLL_TIMEOUT_MS = 30_000;
 const CAPABILITY_STATES = Object.freeze(['available', 'cli_missing', 'app_stopped', 'app_busy', 'app_unreachable', 'cli_disabled', 'cli_unsupported', 'wrong_vault', 'api_incompatible']);
+// Fixed internal reason codes for a probe that answered without a usable
+// capability object. Never echo probe or CLI text in their place.
+const CAPABILITY_REASONS = Object.freeze(['capability_no_result', 'capability_malformed_result']);
+function classifyCapabilityResult(inspected, vaultName, vaultId) {
+  if (inspected === null || inspected === undefined) return { state: 'app_unreachable', reason: 'capability_no_result' };
+  if (typeof inspected !== 'object' || Array.isArray(inspected)) return { state: 'app_unreachable', reason: 'capability_malformed_result' };
+  if (inspected.hasVault !== true) return { state: 'api_incompatible' };
+  return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId };
+}
 
 function sleepSync(milliseconds) {
   if (milliseconds > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
@@ -158,7 +167,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
-  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); if (!inspected?.hasVault) return { state: 'api_incompatible' }; return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId }; } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
+  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); return classifyCapabilityResult(inspected, vaultName, vaultId); } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
   function inspectInvariant(input) {
     const operation = validateOperation(input);
     if (operation.vaultId !== vaultId) return { status: 'unavailable' };
@@ -194,7 +203,13 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     validateVaultRelativeMarkdownPath(operation.vaultRelativePath);
     mutationLedger.ensure(operation);
     const check = capability();
-    if (!check || !CAPABILITY_STATES.includes(check.state) || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: check?.state === 'available' ? 'wrong_vault' : (check?.state || 'api_incompatible') });
+    if (!check || !CAPABILITY_STATES.includes(check.state) || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) {
+      // Only allowlisted state and reason codes leave the probe; an unknown
+      // state is an unreachable transport, never an echoed probe string.
+      const obsidian = check?.state === 'available' ? 'wrong_vault' : (CAPABILITY_STATES.includes(check?.state) ? check.state : 'app_unreachable');
+      const capabilityReason = CAPABILITY_REASONS.includes(check?.reason) ? check.reason : undefined;
+      return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian, adapterEvidence: capabilityReason ? { capabilityReason } : undefined });
+    }
     // A successful connection is a bounded opportunity, never an unbounded
     // startup writer. The host supplies the reconciler to avoid a module cycle.
     // Exclude the just-persisted foreground intent: a drain must not recursively
@@ -266,4 +281,4 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   publicAdapter = Object.freeze({ acknowledgeIfSatisfied, capability, createReconciler, execute, inspectInvariant, ledger: ledgerView, submit });
   return publicAdapter;
 }
-module.exports = { CAPABILITY_STATES, RESULT_STORE, buildObsidianInvariantProgram, buildObsidianMutationProgram, createVaultMutationAdapter, runObsidianEval };
+module.exports = { CAPABILITY_REASONS, CAPABILITY_STATES, RESULT_STORE, buildObsidianInvariantProgram, buildObsidianMutationProgram, createVaultMutationAdapter, runObsidianEval };

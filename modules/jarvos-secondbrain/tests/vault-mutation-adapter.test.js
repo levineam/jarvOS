@@ -101,6 +101,61 @@ test('unavailable capability retains planned intent for reconciliation', () => {
   assert.equal(adapter.ledger.get(operation().operationId).status, 'planned');
 });
 
+// F1: an empty or non-object capability probe result is a transport outcome,
+// not proof that the app API is incompatible. Real objects keep the old class.
+const CAPABILITY_REASON_CODES = ['capability_no_result', 'capability_malformed_result'];
+for (const [label, inspected, state, reason] of [
+  ['null', null, 'app_unreachable', 'capability_no_result'],
+  ['undefined', undefined, 'app_unreachable', 'capability_no_result'],
+  ['string', 'x', 'app_unreachable', 'capability_malformed_result'],
+  ['number', 42, 'app_unreachable', 'capability_malformed_result'],
+  ['boolean', true, 'app_unreachable', 'capability_malformed_result'],
+  ['empty array', [], 'app_unreachable', 'capability_malformed_result'],
+  ['array of capability objects', [{ hasVault: true }], 'app_unreachable', 'capability_malformed_result'],
+  ['object without vault API', { hasVault: false }, 'api_incompatible', null],
+  ['object missing hasVault', {}, 'api_incompatible', null],
+]) {
+  test(`capability probe result classification: ${label}`, () => {
+    const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: () => inspected });
+    const check = adapter.capability();
+    assert.equal(check.state, state);
+    if (reason) assert.equal(check.reason, reason);
+    else assert.equal(CAPABILITY_REASON_CODES.includes(check.reason), false, 'a real object is not a transport-shape failure');
+  });
+}
+
+test('a null capability result keeps intent planned, dispatches nothing, and reports an allowlisted reason', () => {
+  const calls = [];
+  const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), evaluate: (code) => { calls.push(code); return null; } });
+  const receipt = adapter.execute(operation());
+  assert.equal(receipt.status, 'unavailable');
+  assert.equal(receipt.obsidian, 'app_unreachable');
+  assert.equal(receipt.lifecycleState, 'planned');
+  assert.equal(receipt.adapterEvidence?.capabilityReason, 'capability_no_result');
+  assert.equal(adapter.ledger.get(operation().operationId).status, 'planned');
+  assert.equal(calls.length, 1, 'exactly one capability probe and no mutation dispatch');
+  assert.match(calls[0], /hasVault/);
+});
+
+for (const [label, probed, expectedState] of [
+  ['unknown state and reason', { state: 'HOSTILE-STATE-SENTINEL-9c1e', reason: 'HOSTILE-REASON-SENTINEL-9c1e', vaultId: 'HOSTILE-VAULT-SENTINEL-9c1e' }, 'app_unreachable'],
+  ['known state with unknown reason', { state: 'app_stopped', reason: 'HOSTILE-REASON-SENTINEL-9c1e' }, 'app_stopped'],
+]) {
+  test(`hostile capability probe output is never echoed: ${label}`, () => {
+    let dispatched = false;
+    const adapter = createVaultMutationAdapter({ vaultRoot: '/vault', vaultId: 'vault-a', ledgerPath: ledgerPath(), probe: () => probed, evaluate: () => { dispatched = true; } });
+    const receipt = adapter.execute(operation());
+    assert.equal(receipt.status, 'unavailable');
+    assert.equal(receipt.obsidian, expectedState);
+    assert.equal(receipt.lifecycleState, 'planned');
+    const capabilityReason = receipt.adapterEvidence?.capabilityReason;
+    assert.ok(capabilityReason === undefined || CAPABILITY_REASON_CODES.includes(capabilityReason), `reason ${capabilityReason} must be allowlisted`);
+    assert.doesNotMatch(JSON.stringify(receipt), /SENTINEL/);
+    assert.equal(dispatched, false);
+    assert.equal(adapter.ledger.get(operation().operationId).status, 'planned');
+  });
+}
+
 test('a successful connection performs only a bounded opportunistic drain', () => {
   const drained = [];
   const states = [{ queued: true, token: 'op-20260806-adapter-test' }, { status: 'done', invariant: true, readback: 'hello' }];

@@ -12,6 +12,7 @@ const { frontmatterToObject, parseFrontmatter } = require('../../../packages/jar
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
 const { linkNoteToJournal } = require('./link-to-journal');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
+const { CAPABILITY_REASONS, CAPABILITY_STATES } = require('../../../adapters/obsidian/src/vault-mutation-adapter');
 const {
   cleanNoteContent,
   collectDraftingDeclarations,
@@ -255,6 +256,15 @@ function verifyContract(result, personality) {
   };
 }
 
+// Additive transport diagnostic: only fixed state/reason codes, never raw
+// receipt text. It describes the transport, not persistence.
+function projectMutationTransport(receipt) {
+  const state = receipt?.obsidian;
+  if (!CAPABILITY_STATES.includes(state)) return null;
+  const reason = receipt.adapterEvidence?.capabilityReason;
+  return CAPABILITY_REASONS.includes(reason) ? { state, reason } : { state };
+}
+
 function normalizeJournalResult(result) {
   return result?.linked === true
     ? { ...result, status: 'linked', linked: true, deferred: false, disabled: false, failed: false }
@@ -332,6 +342,7 @@ function writeNoteThroughContract(rawInput, { mutationService, link, resolveUser
     journalStatus: result.journal.status,
     qmdStatus: result.knowledge?.qmdStatus || null,
     mutationStatus: result.receipt?.status || 'unknown',
+    mutationTransport: projectMutationTransport(result.receipt),
     artifactReceipt: result.artifactReceipt,
     verification,
   };

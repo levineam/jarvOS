@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
-const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
+const { CAPABILITY_REASONS, CAPABILITY_STATES, createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('./vault-transform-registry');
 
 const WRITER_INVENTORY = Object.freeze([
@@ -86,6 +86,15 @@ function assertPackageImportBoundary({ root, shims = [] } = {}) {
   }
 }
 
+// Copies only fixed transport codes; raw adapter evidence never crosses here.
+function transportContext(receipt) {
+  const context = {};
+  if (CAPABILITY_STATES.includes(receipt?.obsidian)) context.obsidian = receipt.obsidian;
+  const capabilityReason = receipt?.adapterEvidence?.capabilityReason;
+  if (CAPABILITY_REASONS.includes(capabilityReason)) context.adapterEvidence = { capabilityReason };
+  return context;
+}
+
 function configuredVaultId(vaultRoot) {
   return `vault:${hashUtf8(path.resolve(vaultRoot)).slice(0, 24)}`;
 }
@@ -160,7 +169,13 @@ function createConfiguredVaultMutationService({
     if (receipt.status !== 'unavailable') return receipt;
     const planned = receipt.operation || adapter.ledger.get(operation.operationId)?.operation || operation;
     const offlineReceipt = reconciler.safeOfflineSave(planned, offlineWriteCapability);
-    return requestHash ? { ...offlineReceipt, operation: planned } : offlineReceipt;
+    // Nothing was written (unauthorized or deferred): the adapter's classified
+    // receipt is the truthful outcome, not a context-free fallback stub.
+    if (offlineReceipt?.status === 'unavailable') return requestHash ? { ...receipt, operation: planned } : receipt;
+    // A real local outcome keeps its status and gains only allowlisted
+    // transport context from the original receipt.
+    const outcome = { ...offlineReceipt, ...transportContext(receipt) };
+    return requestHash ? { ...outcome, operation: planned } : outcome;
   }
 
   function execute(input) {

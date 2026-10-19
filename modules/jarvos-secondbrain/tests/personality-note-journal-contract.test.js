@@ -738,6 +738,85 @@ test('offline note save and missing backlink remain two explicit pending outcome
     assert.equal(entry.status, 'pending');
     assert.equal(entry.noteId, result.noteId);
     assert.ok(entry.mutationIntentId);
+    assert.equal(result.mutationTransport?.state, 'app_stopped');
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+const { CAPABILITY_STATES } = require('../adapters/obsidian/src/vault-mutation-adapter.js');
+const TRANSPORT_REASON_CODES = ['capability_no_result', 'capability_malformed_result'];
+
+test('a null capability result surfaces an allowlisted root mutationTransport', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-null-capability-contract-'));
+  withEnv({
+    JARVOS_VAULT_DIR: root,
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    XDG_STATE_HOME: path.join(root, '.state'),
+  }, () => {
+    const mutationService = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'null-capability-contract-test',
+      source: 'bridge.note-journal-contract',
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), evaluate: () => null },
+    });
+    const result = writeNoteThroughContract({
+      personality: 'codex',
+      title: 'Null capability note',
+      content: 'Queued while the app gave no answer.',
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-4041', author: 'jarvis' },
+    }, { mutationService });
+    assert.equal(result.mutationStatus, 'unavailable');
+    assert.equal(result.written, false);
+    assert.equal(result.savedLocally, false);
+    assert.equal(fs.existsSync(result.notePath), false);
+    assert.deepEqual(result.mutationTransport, { state: 'app_unreachable', reason: 'capability_no_result' });
+  });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('hostile receipt transport strings never reach the root contract result', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sup-hostile-transport-contract-'));
+  const sentinel = 'HOSTILE-TRANSPORT-SENTINEL-4041';
+  withEnv({
+    VAULT_NOTES_DIR: path.join(root, 'Notes'),
+    JOURNAL_DIR: path.join(root, 'Journal'),
+    JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos', 'knowledge'),
+    JARVOS_ALLOW_UNSAFE_TEST_JOURNAL_WRITE: '1',
+  }, () => {
+    const base = makeTestMutationService(root);
+    const hostile = {
+      ...base,
+      createWriteContext(args) {
+        return {
+          ...base.createWriteContext(args),
+          mutationExecutor: () => ({
+            status: 'unavailable',
+            lifecycleState: 'planned',
+            obsidian: sentinel,
+            state: sentinel,
+            reason: sentinel,
+            adapterEvidence: { capabilityReason: sentinel, reason: sentinel },
+            mutationTransport: { state: sentinel, reason: sentinel },
+          }),
+        };
+      },
+    };
+    const result = writeNoteThroughContract({
+      personality: 'codex',
+      title: 'Hostile transport note',
+      content: 'Must not echo transport text.',
+      frontmatter: { status: 'draft', type: 'reference', project: 'SUP-4041', author: 'jarvis' },
+    }, { mutationService: hostile });
+    assert.equal(result.mutationStatus, 'unavailable');
+    assert.ok(Object.hasOwn(result, 'mutationTransport'), 'root result declares mutationTransport');
+    const transport = result.mutationTransport;
+    if (transport !== null) {
+      assert.ok(CAPABILITY_STATES.includes(transport.state), `state ${transport.state} must be allowlisted`);
+      assert.ok(transport.reason === null || transport.reason === undefined || TRANSPORT_REASON_CODES.includes(transport.reason), `reason ${transport.reason} must be allowlisted or null`);
+    }
+    assert.equal(JSON.stringify(result).includes(sentinel), false);
   });
   fs.rmSync(root, { recursive: true, force: true });
 });
