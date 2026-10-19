@@ -215,3 +215,70 @@ test('partial note/backlink failure is not success and an unsatisfied ambiguous 
   assert.equal(retried.journal, failed.journal);
   assert.deepEqual(retried.writes, []);
 });
+
+const journalOnly = (overrides = {}) => ({ ...baseCapture, title: undefined, text: 'idea: A short synthetic idea.',
+  captureIdentity: { ...identity, id: 'journal-only' }, ...overrides });
+const stagesOf = (state) => captureRecords(state).map((record) => record.operation.operationId.split(':').slice(2).join(':')).sort();
+
+test('identified journal-only capture writes one Journal through create and section stages and no note', (t) => {
+  const run = fixture(t);
+  const first = run({ capture: journalOnly() });
+  assert.equal(first.error, null);
+  assert.equal(first.result.ok, true);
+  assert.equal(first.result.note, null);
+  assert.deepEqual(first.notes, []);
+  assert.ok(first.writes.length > 0 && first.writes.every((name) => name.startsWith('Journal/')));
+  assert.deepEqual(stagesOf(first), ['journal:create', 'journal:section']);
+  const retry = run({ capture: journalOnly() });
+  assert.equal(retry.result.ok, true);
+  assert.deepEqual(retry.writes, []);
+  assert.equal(retry.journal, first.journal);
+  assert.deepEqual(captureRecords(retry).map((record) => record.operation), captureRecords(first).map((record) => record.operation));
+  const changed = run({ capture: journalOnly({ text: 'idea: A changed synthetic idea.' }) });
+  assert.equal(changed.result.ok, false);
+  assert.deepEqual(changed.writes, []);
+  assert.equal(changed.journal, first.journal);
+  assert.deepEqual(changed.notes, []);
+});
+
+test('an unacknowledged identified journal-only section is not success and is never blindly retried', (t) => {
+  const run = fixture(t);
+  const failed = run({ capture: journalOnly(), fault: 'before_backlink' });
+  assert.equal(failed.result.ok, false);
+  assert.deepEqual(failed.notes, []);
+  assert.equal(captureRecords(failed).some((record) => record.status === 'unknown_after_dispatch'), true);
+  const retried = run({ capture: journalOnly() });
+  assert.equal(retried.result.ok, false);
+  assert.deepEqual(retried.writes, []);
+  assert.deepEqual(retried.notes, []);
+});
+
+test('note and journal-only routes of one identity share the first request binding in both directions', (t) => {
+  const noteFirst = fixture(t);
+  const failed = noteFirst({ capture: baseCapture, fault: 'after_note' });
+  assert.equal(captureRecords(failed)[0].status, 'unknown_after_dispatch');
+  const bypass = noteFirst({ capture: journalOnly({ captureIdentity: identity }) });
+  assert.equal(bypass.result.ok, false);
+  assert.deepEqual(bypass.writes, []);
+  assert.equal(bypass.journal, null);
+  assert.deepEqual(captureRecords(bypass).map((record) => record.operation), captureRecords(failed).map((record) => record.operation));
+
+  const journalFirst = fixture(t);
+  const written = journalFirst({ capture: journalOnly({ captureIdentity: identity }) });
+  assert.equal(written.result.ok, true);
+  const reverse = journalFirst({ capture: baseCapture });
+  assert.equal(reverse.result.ok, false);
+  assert.equal(reverse.result.note.receipt.status, 'conflict');
+  assert.deepEqual(reverse.notes, []);
+  assert.deepEqual(reverse.writes, []);
+  assert.equal(reverse.journal, written.journal);
+});
+
+test('concurrent first note and journal-only submissions of one identity bind only the first request', async (t) => {
+  const run = fixture(t);
+  const attempts = await run.concurrent([{ capture: baseCapture }, { capture: journalOnly({ captureIdentity: identity }) }]);
+  for (const attempt of attempts) assert.equal(attempt.error, null);
+  const state = run();
+  assert.equal(new Set(captureRecords(state).map((record) => record.operation.captureRequestHash)).size, 1);
+  assert.ok(attempts.filter((attempt) => attempt.result.ok).length <= 1);
+});
