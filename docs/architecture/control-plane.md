@@ -24,6 +24,26 @@ approval attestations, and projections. It never dispatches a mutation or
 writes `satisfied`, `failed`, or `unverifiable`: those verified terminal
 transitions remain exclusively reconciler-owned.
 
+The one effect path is the fixed `execute-approved` (`executeApproved`)
+transport operation. It carries only the host session credential and an opaque
+`requestId`, strips caller authority, path, service, and command overrides, and
+forwards to an effect implementation that an installed authenticated host must
+supply; the CLI and MCP await it and return only
+`ok`/`requestId`/`outcome`/`code`/`claimId`/`expiresAt` with safe error codes.
+The public package ships no targeted grant issuer or installer, and a bare core
+service rejects `executeApproved` as an unknown operation. Source merge,
+configuration, or a host-reported `installed` outcome does not prove a selected,
+installed, or live effect or a verified terminal lifecycle.
+
+Hosts use the internal `claimExecution` and `recordExecutionOutcome` operations;
+neither is a public CLI/MCP operation. The approver is recorded as
+`approvedBy`. A claim consumes the approval before the effect through the
+existing request, fence, and store compare-and-set, never resurrects after a
+failure or rollback, and fails closed on incomplete disclosure, a non-creator
+claimant, a mismatched approver, or a missing, non-canonical, or past expiry.
+The outcome is once-only host-reported evidence, not reconciler-verified
+success. No separate status database, controller, or verifier is added.
+
 The jarvOS Control Plane is the portable coordination layer for machine-wide AI
 operations. It discovers resources, compares desired and observed state, applies
 policy, arbitrates mutation ownership, dispatches bounded commands to domain
@@ -110,6 +130,17 @@ The reference store is intentionally simple:
 - compare-and-set leases keyed by independent mutation resource
 - monotonic fences per mutation key
 - evidence commits rejected when a writer presents a stale fence
+
+The file store's locking assumes every writer to its whole store root uses the
+current lock protocol on a qualified local POSIX filesystem with atomic
+no-overwrite hard links; older clients that move live locks cannot safely share
+that root. An unsupported publication primitive fails closed with
+`FILE_STORE_LOCK_PUBLICATION_UNSUPPORTED`. A held or crashed recovery gate stops
+stale-lock recovery (`FILE_STORE_RECOVERY_GATE_HELD`, otherwise
+`FILE_STORE_LOCK_TIMEOUT`) and requires reconciliation by the owning operator;
+nothing deletes the gate automatically and there is no cleanup service. Formats
+and exports are unchanged. This is not a defense against hostile same-user
+namespace mutation or unqualified network filesystems.
 
 This is enough for deterministic tests and portable examples. Production hosts
 may replace the store, but they must preserve the same ordering, lease, fence,

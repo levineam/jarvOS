@@ -2762,3 +2762,142 @@ test('createHostProjectsContextProvider fails closed when its selected provider 
     finally { fs.readFileSync = original; }
   });
 });
+
+// ---------------------------------------------------------------------------
+// MCP execute-approved transport. The host session credential and the opaque
+// requestId are the only values forwarded; the manager projects the awaited
+// host result to { ok, requestId, outcome, code, claimId, expiresAt }.
+// ---------------------------------------------------------------------------
+
+function executeApprovedMcpHostSource({ recordFile, loadMarker }) {
+  const source = path.join(__dirname, '..', '..', 'jarvos-control-plane', 'src', 'index.js');
+  return [
+    "const fs = require('fs');",
+    `fs.writeFileSync(${JSON.stringify(loadMarker)}, 'loaded');`,
+    `const { createApplicationService, createMemoryApplicationStore } = require(${JSON.stringify(source)});`,
+    "const inner = createApplicationService({ store: createMemoryApplicationStore(), resolveCredential: (credential) => credential === 'test-credential' ? { id: 'principal:test', capabilities: ['control-plane.read', 'control-plane.mutate'] } : null, canRead: () => true });",
+    'const service = {',
+    '  execute(operation, input) {',
+    "    if (operation !== 'executeApproved') return inner.execute(operation, input);",
+    `    fs.writeFileSync(${JSON.stringify(recordFile)}, JSON.stringify(input));`,
+    "    if (input.requestId === 'request_reject') return new Promise((_, reject) => setTimeout(() => reject(new Error('PMS_EXECUTION_REFUSED')), 10));",
+    "    if (input.requestId === 'request_refused') return Promise.resolve({ ok: false, requestId: input.requestId, outcome: 'refused', code: 'APPROVAL_UNAVAILABLE', claimId: null, expiresAt: null });",
+    "    return new Promise((resolve) => setTimeout(() => resolve({ ok: true, requestId: input.requestId, outcome: 'installed', code: null, claimId: 'claim_fixture_mcp', expiresAt: '2026-10-20T12:00:00.000Z', secret: 'SYNTHETIC-SECRET-MARKER' }), 10));",
+    '  },',
+    '};',
+    'module.exports = () => service;',
+  ].join('\n');
+}
+
+async function withExecuteApprovedMcpHost(fn, { credential = 'test-credential' } = {}) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-execute-approved-'));
+  const keys = ['JARVOS_CONTROL_PLANE_SERVICE_MODULE', CREDENTIAL_ENV, CREDENTIAL_FILE_ENV];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const files = {
+    hostModule: path.join(tmp, 'host-service.js'),
+    recordFile: path.join(tmp, 'forwarded.json'),
+    loadMarker: path.join(tmp, 'loaded.marker'),
+  };
+  fs.writeFileSync(files.hostModule, executeApprovedMcpHostSource(files), { encoding: 'utf8', mode: 0o600 });
+  process.env.JARVOS_CONTROL_PLANE_SERVICE_MODULE = files.hostModule;
+  delete process.env[CREDENTIAL_FILE_ENV];
+  if (credential) process.env[CREDENTIAL_ENV] = credential;
+  else delete process.env[CREDENTIAL_ENV];
+  try { return await fn(files); } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// Unknown control-plane operations may surface as a thrown tool error or an
+// error result; either way they must be refused.
+async function callToolSettled(name, args) {
+  try {
+    const result = await callTool(name, args);
+    return { isError: result.isError, text: result.content?.[0]?.text || '' };
+  } catch (error) {
+    return { isError: true, text: error.message || String(error) };
+  }
+}
+
+test('control-plane MCP schema exposes execute-approved but never internal claim or outcome operations', () => {
+  const schema = TOOLS.find((tool) => tool.name === 'jarvos_control_plane').inputSchema;
+  assert.ok(schema.properties.operation.enum.includes('execute-approved'));
+  for (const internal of ['claimExecution', 'recordExecutionOutcome', 'claim-execution', 'record-execution-outcome']) {
+    assert.equal(schema.properties.operation.enum.includes(internal), false, internal);
+  }
+  for (const authority of ['credential', 'approval', 'authorization', 'expectedApprover', 'claimId', 'pin', 'resolver', 'provider', 'path']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(schema.properties, authority), false, authority);
+  }
+});
+
+test('MCP execute-approved awaits the host once and forwards only the bound credential and requestId', async () => {
+  await withExecuteApprovedMcpHost(async ({ recordFile }) => {
+    const result = await callTool('jarvos_control_plane', {
+      operation: 'execute-approved',
+      requestId: 'request_fixture_mcp',
+      credential: 'attacker-supplied',
+      fence: 9,
+      approval: { allowed: true },
+      authorization: { allowed: true },
+      actor: { kind: 'human', id: 'forged' },
+      commandSpec: { operation: 'pms-read-grant', arguments: { rootProjectId: 'prj_999999' } },
+      expectedApprover: 'principal:forged',
+      claimId: 'claim_forged',
+      pin: 'forged-pin',
+      resolver: 'forged-resolver',
+      provider: '/tmp/forged-provider.js',
+      path: '/tmp/forged-receipt.json',
+      serviceModule: '/tmp/forged-host.js',
+    });
+    assert.equal(result.isError, false, result.content?.[0]?.text);
+    assert.notEqual(result.content[0].text.trim(), '{}');
+    assert.deepEqual(JSON.parse(result.content[0].text), {
+      ok: true, requestId: 'request_fixture_mcp', outcome: 'installed', code: null, claimId: 'claim_fixture_mcp', expiresAt: '2026-10-20T12:00:00.000Z',
+    });
+    assert.doesNotMatch(result.content[0].text, /SYNTHETIC-SECRET-MARKER|test-credential|attacker-supplied/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(recordFile, 'utf8')), { credential: 'test-credential', requestId: 'request_fixture_mcp' });
+  });
+});
+
+test('MCP execute-approved host rejection and refusal are error results, never {}', async () => {
+  await withExecuteApprovedMcpHost(async () => {
+    const rejected = await callTool('jarvos_control_plane', { operation: 'execute-approved', requestId: 'request_reject' });
+    assert.equal(rejected.isError, true);
+    assert.match(rejected.content[0].text, /PMS_EXECUTION_REFUSED/);
+    assert.notEqual(rejected.content[0].text.trim(), '{}');
+
+    const refused = await callTool('jarvos_control_plane', { operation: 'execute-approved', requestId: 'request_refused' });
+    assert.equal(refused.isError, true);
+    assert.deepEqual(JSON.parse(refused.content[0].text), {
+      ok: false, requestId: 'request_refused', outcome: 'refused', code: 'APPROVAL_UNAVAILABLE', claimId: null, expiresAt: null,
+    });
+  });
+});
+
+test('MCP execute-approved fails closed without a host credential before loading the host', async () => {
+  await withExecuteApprovedMcpHost(async ({ loadMarker, recordFile }) => {
+    const result = await callTool('jarvos_control_plane', { operation: 'execute-approved', requestId: 'request_fixture_mcp', credential: 'attacker-supplied' });
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /credential/);
+    assert.equal(fs.existsSync(loadMarker), false);
+    assert.equal(fs.existsSync(recordFile), false);
+  }, { credential: null });
+});
+
+test('MCP refuses internal claim and outcome operations without reaching the host', async () => {
+  await withExecuteApprovedMcpHost(async ({ recordFile }) => {
+    for (const operation of ['claimExecution', 'recordExecutionOutcome']) {
+      const result = await callToolSettled('jarvos_control_plane', { operation, requestId: 'request_fixture_mcp', claimId: 'claim_forged', outcome: 'installed' });
+      assert.equal(result.isError, true, operation);
+      assert.match(result.text, /unsupported public control-plane operation/, operation);
+    }
+    assert.equal(fs.existsSync(recordFile), false);
+    // Legacy reads still settle synchronously through the same host.
+    const listed = await callTool('jarvos_control_plane', { operation: 'list' });
+    assert.equal(listed.isError, false, listed.content?.[0]?.text);
+  });
+});

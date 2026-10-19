@@ -121,8 +121,53 @@ jarvos-manager request --input '{"actor":{"kind":"human"},"resource":{"machineId
 
 Use `request`/`approve` (the CLI aliases) or the core
 `createRequest`/`approve` operations. Terminal command outcomes remain the
-reconciler's responsibility; the adapter can only create requests, read
-filtered projections, and consume command-bound approvals.
+reconciler's responsibility. Besides creating requests, reading filtered
+projections, and consuming command-bound approvals, the adapters expose one
+fixed operation, `execute-approved` (core name `executeApproved`):
+
+```bash
+jarvos-manager execute-approved --request-id <id>
+```
+
+It accepts only the bound host session credential and an opaque `requestId`,
+drops any caller-supplied authority, path, service, or command overrides, and
+forwards to an effect implementation that the installed authenticated host
+must provide. The CLI and MCP await it and close the result to
+`ok`/`requestId`/`outcome`/`code`/`claimId`/`expiresAt`; only an explicit
+host-reported `installed` outcome is `ok`, anything unknown is `indeterminate`,
+and errors collapse to safe upper-snake codes. Credentials still never belong on
+argv or in model arguments. Legacy operations and readiness checks remain
+synchronous.
+
+This package does not ship a targeted grant issuer or installer. A bare core
+application service cannot execute an effect and rejects `executeApproved` as
+an unknown operation. Merging this source or configuring a service module does
+not show that a host effect is selected, installed, or live, and a successful
+host-reported outcome is not a verified terminal lifecycle.
+
+The actual approver is recorded as `approvedBy`. The core
+`claimExecution` and `recordExecutionOutcome` operations are host-only, not
+public CLI/MCP operations. A claim consumes the approval before any effect
+through the existing request, fence, and store compare-and-set, and a consumed
+claim is never resurrected after a failure or rollback. It fails closed unless
+the full binding is disclosed to the claimant, the claimant created the request,
+the expected approver matches, and the stored approval expiry is a finite
+canonical instant that has not passed. The recorded outcome (`installed`,
+`failed`, or `indeterminate`) is once-only host-reported evidence, not
+reconciler-verified success. There is no separate status database, controller,
+or verifier for this path.
+
+The reference file store requires that every writer to a store root use the
+current lock protocol, on a qualified local POSIX filesystem with atomic
+no-overwrite hard links. Older clients that move live locks cannot safely share
+a root with current clients. If the filesystem refuses hard-link publication,
+locking fails closed with `FILE_STORE_LOCK_PUBLICATION_UNSUPPORTED`. A held or
+crashed stale-lock recovery gate stops recovery and surfaces as
+`FILE_STORE_RECOVERY_GATE_HELD` (otherwise `FILE_STORE_LOCK_TIMEOUT`); the gate
+is never removed automatically and needs reconciliation by the operator who
+owns the store. Store formats and exports are unchanged. The store makes no
+claim of safety against hostile same-user mutation of its directory or on
+unqualified network filesystems.
 
 ## Core Concepts
 

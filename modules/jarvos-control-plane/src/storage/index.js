@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { randomUUID } = require('crypto');
 
 const { clone, digest, stableStringify } = require('../contracts');
 
@@ -133,82 +134,223 @@ function createFileStore(rootDir, options = {}) {
       try { return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim() || null; } catch (_) { return null; }
     }
   }
+  let ownProcessStart;
+  function ownProcessStartMarker() {
+    if (ownProcessStart === undefined) ownProcessStart = processStartMarker(process.pid);
+    return ownProcessStart;
+  }
   function lockOwnerIsRunning(lock) {
     if (!Number.isInteger(lock.pid) || lock.pid <= 0) return false;
     try {
       process.kill(lock.pid, 0);
+      if (!lock.processStart) return true;
       const marker = processStartMarker(lock.pid);
-      return !lock.processStart || !marker || marker === lock.processStart;
+      return !marker || marker === lock.processStart;
     } catch (error) { return error.code === 'EPERM'; }
   }
-  function recoverStaleLock() {
-    let stat; let lock = {};
+  function sameFile(a, b) { return a.dev === b.dev && a.ino === b.ino; }
+  // Lock protocol (cooperative parties only):
+  // - acquire: write the COMPLETE owner record into a private per-attempt staging
+  //   file (`${lockPath}.stage-<pid>-<uuid>`, 0600, fsynced), then publish it with
+  //   an atomic no-overwrite hard link at lockPath (EEXIST while any lock exists).
+  //   lockPath therefore never exposes empty/partial owner metadata, so a writer
+  //   preempted while preparing its record cannot look like a stale malformed
+  //   lock. The owner enters only after verifying lockPath is its staging inode,
+  //   then removes only its own staging name. An unsupported link primitive fails
+  //   closed (no check-then-rename fallback). Recovery examines lockPath only;
+  //   staging names are never selected, scanned or removed by anyone else;
+  // - release: the owner unlinks lockPath only while it still names its own
+  //   inode; nobody else can remove a live owner's lock, so the path cannot be
+  //   replaced between that check and the unlink;
+  // - recovery: lockPath is never renamed. A candidate qualified as dead-and-stale
+  //   is removed only by the holder of the exclusive recovery gate, after it
+  //   re-verifies (under the gate) that lockPath is still that exact pinned inode
+  //   and still dead-and-stale. While the dead candidate occupies lockPath no
+  //   acquirer can install a new lock, so unlinking it cannot remove a live owner.
+  // A gate left by a crashed recoverer is never guessed about or removed
+  // automatically; stale recovery then fails closed until an operator reconciles
+  // it (normal acquisition with no stale lock present is unaffected).
+  const recoveryGatePath = `${lockPath}.recover`;
+  function readLockOwner(fd) {
+    let lock = {};
     try {
-      stat = fs.statSync(lockPath);
+      const size = fs.fstatSync(fd).size;
+      const buffer = Buffer.alloc(size);
+      const length = size ? fs.readSync(fd, buffer, 0, size, 0) : 0;
+      const text = buffer.toString('utf8', 0, length);
+      if (text) lock = JSON.parse(text);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
+    return lock && typeof lock === 'object' ? lock : {};
+  }
+  // A matching process-start marker proves a live owner; a recycled PID fails the
+  // comparison and is recoverable once stale. Malformed/empty content is
+  // recoverable only once it is stale.
+  function isDeadAndStale(fd) {
+    const ageMs = Date.now() - fs.fstatSync(fd).mtimeMs;
+    return !lockOwnerIsRunning(readLockOwner(fd)) && ageMs >= staleLockMs;
+  }
+  function releaseRecoveryGate(gateFd) {
+    try {
+      let owned = false;
+      try {
+        owned = sameFile(fs.fstatSync(gateFd), fs.statSync(recoveryGatePath));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (owned) fs.unlinkSync(recoveryGatePath);
+    } finally {
+      fs.closeSync(gateFd);
+    }
+  }
+  function recoverStaleLock() {
+    let observed;
+    try {
+      observed = fs.statSync(lockPath);
     } catch (error) {
       if (error.code === 'ENOENT') return false;
       throw error;
     }
-
-    const takeoverPath = `${lockPath}.takeover-${stat.dev}-${stat.ino}-${process.pid}-${Math.random().toString(16).slice(2)}`;
+    let candidateFd;
     try {
-      fs.renameSync(lockPath, takeoverPath);
+      candidateFd = fs.openSync(lockPath, 'r');
     } catch (error) {
-      if (error.code === 'ENOENT' || error.code === 'EEXIST') return false;
+      if (error.code === 'ENOENT') return false;
       throw error;
     }
-
-    let preserveTakeoverPath = false;
     try {
-      const takeoverStat = fs.statSync(takeoverPath);
-      if (takeoverStat.dev !== stat.dev || takeoverStat.ino !== stat.ino) {
-        try {
-          fs.renameSync(takeoverPath, lockPath);
-        } catch (error) {
-          if (error.code !== 'EEXIST') throw error;
-          preserveTakeoverPath = true;
-        }
-        return false;
+      // Holding candidateFd open pins the inode, so its dev/ino cannot be reused
+      // by a replacement while this function runs.
+      const pinned = fs.fstatSync(candidateFd);
+      if (!sameFile(observed, pinned) || !isDeadAndStale(candidateFd)) return false;
+      let gateFd;
+      try {
+        gateFd = fs.openSync(recoveryGatePath, 'wx', 0o600);
+      } catch (error) {
+        if (error.code === 'EEXIST') return false; // another recoverer (or a crashed one) owns recovery
+        throw error;
       }
       try {
-        const text = fs.readFileSync(takeoverPath, 'utf8');
-        if (text) lock = JSON.parse(text);
-      } catch (error) {
-        if (error.code === 'ENOENT') return false;
-        if (!(error instanceof SyntaxError)) throw error;
+        try { fs.writeSync(gateFd, JSON.stringify({ pid: process.pid, createdAt: nowIso() })); } catch (_) { /* diagnostic only */ }
+        // Re-qualify while holding the gate: a lagging recoverer whose candidate
+        // was already removed (and possibly replaced by a live owner) stops here.
+        let current;
+        try {
+          current = fs.statSync(lockPath);
+        } catch (error) {
+          if (error.code === 'ENOENT') return false;
+          throw error;
+        }
+        if (!sameFile(current, pinned) || !isDeadAndStale(candidateFd)) return false;
+        try {
+          fs.unlinkSync(lockPath);
+        } catch (error) {
+          if (error.code === 'ENOENT') return false;
+          throw error;
+        }
+        return true;
+      } finally {
+        releaseRecoveryGate(gateFd);
       }
-      const ageMs = Date.now() - fs.statSync(takeoverPath).mtimeMs;
-      // A matching process-start marker proves this is a live owner; a recycled
-      // PID fails the comparison and is recoverable once the stale interval passes.
-      if (lockOwnerIsRunning(lock) || ageMs < staleLockMs) {
-        try { fs.renameSync(takeoverPath, lockPath); } catch (error) { if (error.code !== 'EEXIST') throw error; }
-        return false;
-      }
-      fs.unlinkSync(takeoverPath);
-      return true;
-    } catch (error) {
-      if (error.code === 'ENOENT') return true;
-      throw error;
     } finally {
-      if (!preserveTakeoverPath) {
-        try { fs.unlinkSync(takeoverPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      fs.closeSync(candidateFd);
+    }
+  }
+  function lockTimeoutError() {
+    let gatePresent = false;
+    try { fs.lstatSync(recoveryGatePath); gatePresent = true; } catch (_) { /* absent or unreadable */ }
+    // Constant messages: no store path or raw cause is disclosed.
+    return gatePresent
+      ? safeLockError('FILE_STORE_RECOVERY_GATE_HELD', 'Timed out acquiring file store lock: the store\'s stale-lock recovery gate is present; it is never removed automatically and a crashed recoverer requires operator reconciliation')
+      : safeLockError('FILE_STORE_LOCK_TIMEOUT', 'Timed out acquiring file store lock');
+  }
+  function safeLockError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+  // Link failures meaning "this filesystem cannot publish atomically by hard link".
+  const UNSUPPORTED_LINK_CODES = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
+  function publicationUnsupportedError() {
+    return safeLockError('FILE_STORE_LOCK_PUBLICATION_UNSUPPORTED', 'File store lock publication requires an atomic no-overwrite hard link, which this filesystem refused; no lock was taken and the store was not modified');
+  }
+  function publicationFailedError() {
+    return safeLockError('FILE_STORE_LOCK_PUBLICATION_FAILED', 'File store lock publication failed; no lock was taken and the store was not modified');
+  }
+  // Best effort: removes this attempt's own staging name only while it still
+  // names the staging inode. Never throws (no raw path-bearing errors); a name it
+  // cannot remove is a bounded, never-selected leftover.
+  function removeOwnStaging(stagingFd, stagingPath) {
+    try {
+      if (sameFile(fs.fstatSync(stagingFd), fs.lstatSync(stagingPath))) fs.unlinkSync(stagingPath);
+    } catch (_) { /* absent or not ours: leave it */ }
+  }
+  // Unlinks lockPath only if it still names this exact inode; a replacement is
+  // never removed (see protocol above for why no gap exists cooperatively).
+  function releaseOwnedLock(fd) {
+    try {
+      let owned = false;
+      try {
+        owned = sameFile(fs.fstatSync(fd), fs.statSync(lockPath));
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
       }
+      if (owned) {
+        try { fs.unlinkSync(lockPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+    } finally {
+      fs.closeSync(fd);
     }
   }
   function withLock(fn) {
+    // Resolved before the deadline starts (the first lookup may spawn `ps`).
+    const processStart = ownProcessStartMarker();
     let fd; const deadline = Date.now() + (options.lockTimeoutMs || 5000);
-    while (!fd) {
+    while (fd === undefined) {
+      const stagingPath = `${lockPath}.stage-${process.pid}-${randomUUID()}`;
+      const ownerRecord = JSON.stringify({ pid: process.pid, processStart, token: `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: nowIso() });
+      let stagingFd;
       try {
-        fd = fs.openSync(lockPath, 'wx', 0o600);
-        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, processStart: processStartMarker(process.pid), token: `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`, createdAt: nowIso() }), 'utf8');
-        fs.fsyncSync(fd);
-      } catch (error) {
-        if (fd) { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); fd = undefined; throw error; }
-        if (error.code !== 'EEXIST' || Date.now() >= deadline) throw new Error('Timed out acquiring file store lock');
-        if (!recoverStaleLock()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
+        stagingFd = fs.openSync(stagingPath, 'wx', 0o600);
+      } catch (_) {
+        throw publicationFailedError();
       }
+      let owned = false;
+      let linked = false;
+      let linkError = null;
+      try {
+        fs.writeFileSync(stagingFd, ownerRecord, 'utf8');
+        fs.fsyncSync(stagingFd);
+        try {
+          fs.linkSync(stagingPath, lockPath); // atomic, never overwrites
+          linked = true;
+        } catch (error) {
+          linkError = error;
+        }
+        if (linked) {
+          // Enter only while lockPath is this attempt's own complete inode.
+          try { owned = sameFile(fs.fstatSync(stagingFd), fs.statSync(lockPath)); } catch (_) { owned = false; }
+          if (!owned) {
+            // Not verifiable: withdraw only if lockPath is still our inode.
+            try { if (sameFile(fs.fstatSync(stagingFd), fs.statSync(lockPath))) fs.unlinkSync(lockPath); } catch (_) { /* not ours or gone */ }
+          }
+        }
+      } finally {
+        removeOwnStaging(stagingFd, stagingPath);
+        if (!owned) fs.closeSync(stagingFd);
+      }
+      if (owned) { fd = stagingFd; break; }
+      if (linked) throw publicationFailedError();
+      if (linkError.code === 'EEXIST') {
+        if (Date.now() >= deadline) throw lockTimeoutError();
+        if (!recoverStaleLock()) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, retryMs);
+        continue;
+      }
+      throw UNSUPPORTED_LINK_CODES.has(linkError.code) ? publicationUnsupportedError() : publicationFailedError();
     }
-    try { return fn(); } finally { fs.closeSync(fd); fs.rmSync(lockPath, { force: true }); }
+    // fd is the staging fd, i.e. the published inode: release stays keyed to it.
+    try { return fn(); } finally { releaseOwnedLock(fd); }
   }
   function load() {
     const hasCheckpoint = fs.existsSync(statePath);
