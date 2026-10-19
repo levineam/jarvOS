@@ -253,6 +253,25 @@ function deriveEntry(pin, context) {
   let repair = null;
   if (referenceState === 'stale-scope' || briefState === 'revised') repair = 're-pin-with-owner';
   else if (allAccepted && !hasException && !milestoneReady) repair = 'current-brief-required';
+  // The brief repair must reach alert/summary consumers. A per-criterion
+  // stale-scope exception already carries the same re-pin need, so only an
+  // otherwise-silent repair (missing/unverified brief, or a revised digest
+  // with identical criteria) gets one owned reconciliation alert. The
+  // fingerprint binds the pinned and observed brief digests, never
+  // sourceRef/observedAt/registry noise.
+  const scopeAlerted = criteria.some((criterion) => criterion.exception && criterion.exception.type === 'stale-scope');
+  let reconciliation = null;
+  if (repair && !scopeAlerted) {
+    const observedBriefDigest = brief && briefState === 'revised' ? brief.briefDigest : null;
+    reconciliation = {
+      repair,
+      fingerprint: fingerprintFor({
+        referenceId, revision: pin.reference.revision, criterionId: null, disposition: 'brief-reconciliation',
+        checkpoint: { repair, pinnedBriefDigest: pin.briefDigest, observedBriefDigest },
+      }),
+      evidenceRefs: observedBriefDigest ? [brief.sourceRef, `digest:${brief.sourceDigest}`] : [],
+    };
+  }
   let proposal = null;
   let maintenance = null;
   let disposition = hasException ? 'exception' : 'on-track';
@@ -294,10 +313,11 @@ function deriveEntry(pin, context) {
       fingerprint,
     },
     unlinked: unlinked.length,
+    reconciliation,
   };
 }
 
-function alertsFor(entry) {
+function alertsFor(entry, reconciliation = null) {
   const label = entry.title || entry.referenceId;
   if (entry.disposition === 'pending-reconciliation') {
     return [{
@@ -316,6 +336,13 @@ function alertsFor(entry) {
     evidenceRefs: criterion.evidenceRefs,
     title: `Accountability: ${label} / ${criterion.criterionId} (${criterion.exception.type}: ${criterion.exception.reason}); next owner: ${criterion.nextOwner}`,
   }));
+  if (reconciliation) {
+    alerts.push({
+      fingerprint: reconciliation.fingerprint, referenceId: entry.referenceId, criterionId: null, disposition: 'brief-reconciliation',
+      reason: reconciliation.repair, nextOwner: entry.nextOwner, evidenceRefs: [...reconciliation.evidenceRefs],
+      title: `Accountability: ${label} brief reconciliation (${reconciliation.repair}); next owner: ${entry.nextOwner}`,
+    });
+  }
   if (entry.proposal) {
     alerts.push({
       fingerprint: entry.fingerprint, referenceId: entry.referenceId, criterionId: null, disposition: 'outcome-complete-ready', reason: 'all-criteria-accepted',
@@ -379,18 +406,23 @@ function deriveAccountabilityAttention({
   const byReference = new Map();
   for (const pin of trustedPins) byReference.set(pin.reference.id, [...(byReference.get(pin.reference.id) || []), pin]);
   let unlinked = 0;
+  const reconciliations = new Map();
   for (const [referenceId, group] of byReference) {
     const owners = new Set(group.map((pin) => pin.owner));
     const selected = [...group].sort((left, right) => Date.parse(left.pinnedAt) - Date.parse(right.pinnedAt))[group.length - 1];
     const result = deriveEntry(selected, {
       record: recordsById.get(referenceId), registryGeneration, signals: trustedSignals, now: capturedAt, conflictingOwners: owners.size > 1,
     });
-    if (result.entry) { entries.push(result.entry); unlinked += result.unlinked; } else entries.push(result);
+    if (result.entry) {
+      entries.push(result.entry);
+      unlinked += result.unlinked;
+      if (result.reconciliation) reconciliations.set(result.entry, result.reconciliation);
+    } else entries.push(result);
   }
   const pinnedReferences = new Set(trustedPins.map((pin) => pin.reference.id));
   if (unlinked || trustedSignals.some((signal) => !pinnedReferences.has(signal.referenceId) && signal.type === 'progress')) omissions.add('accountability:activity-not-progress');
   entries.sort((left, right) => left.referenceId.localeCompare(right.referenceId) || left.id.localeCompare(right.id));
-  const alerts = entries.flatMap(alertsFor);
+  const alerts = entries.flatMap((entry) => alertsFor(entry, reconciliations.get(entry) || null));
   return { entries: entries.map(clone), alerts: alerts.map(clone), omissions: [...omissions].sort() };
 }
 

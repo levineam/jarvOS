@@ -17,8 +17,10 @@ const {
   deriveIntentGapAttention,
   intentSourceDescriptorDigest,
 } = require('../src/intent-gap-attention');
+const { accountabilitySignalDigest } = require('../src/accountability-attention');
 const {
   PROVIDER_STATES,
+  accountabilityCriterionDigest,
   accountabilityPinDigest,
   accountabilityScopeDigest,
   createAccountabilityPin,
@@ -290,6 +292,66 @@ test('accountability attention is optional, scope-filtered before verification, 
   const untrusted = build({ pins: [{ pin, evidence }], signals: [] }, { nonce: 'untrusted' });
   assert.equal(untrusted.status, 'ok');
   assert.deepEqual(untrusted.packet.attention.map((summary) => summary.status), ['pending-reconciliation']);
+});
+
+test('accountability brief repairs reach the packet as an owned reconciliation summary; a current brief yields none', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const authority = createHostAdmission({ producerId: 'projects-accountability-source', secret: 'accountability-source-secret', allowedSourceClasses: ['execution'] });
+  const stranger = createHostAdmission({ producerId: 'projects-accountability-stranger', secret: 'accountability-stranger-secret', allowedSourceClasses: ['execution'] });
+  let sequence = 0;
+  const admit = (auth, contentDigest) => {
+    sequence += 1;
+    return auth.admitEvidenceUnit({
+      observationId: `obs_packet_brief_${sequence}`, evidenceId: `ev_packet_brief_${sequence}`, sourceClass: 'execution', occurredAt: NOW, observedAt: NOW,
+      sourceRevision: `brief-fixture-${sequence}`, sensitivity: 'public-fixture', coverageState: 'fresh', contentDigest,
+    });
+  };
+  const owner = 'actor_fixture_owner';
+  const criteria = [{ criterionId: 'crit-a', acceptance: 'Release notes reviewed' }];
+  const reference = createCanonicalReference({
+    contract: 'jarvos.canonical-reference/v1', kind: 'outcome', id: outcome.id, revision: outcome.revision, breadcrumb: 'jarvOS › v1.0.0 release',
+  });
+  const pin = createAccountabilityPin({
+    reference, registryGeneration: registry.generation,
+    scopeDigest: accountabilityScopeDigest({ reference, goal: outcome.goal, definitionOfDone: outcome.definitionOfDone, criteria }),
+    briefDigest: 'b'.repeat(64), owner, responsibility: 'finite-outcome',
+    milestone: { criteria, checkpoint: { type: 'event', event: 'release-notes-reviewed' } }, reason: 'assignment', pinnedAt: NOW,
+  });
+  const signal = (auth, descriptor) => ({ ...descriptor, evidence: admit(auth, accountabilitySignalDigest(descriptor)) });
+  const acceptedA = {
+    type: 'progress', referenceId: outcome.id, criterionId: 'crit-a', criterionDigest: accountabilityCriterionDigest(criteria[0]),
+    state: 'accepted', remaining: null, nextCheckpoint: null, actor: owner, sourceRef: 'packet-progress-a', sourceDigest: 'c'.repeat(64),
+  };
+  const brief = (overrides = {}) => ({
+    type: 'brief', referenceId: outcome.id, briefDigest: 'b'.repeat(64), status: 'current', criteria, sourceRef: 'packet-brief', sourceDigest: 'e'.repeat(64), ...overrides,
+  });
+  const build = (signals, nonce) => buildContextPacket({
+    registry, query, capability: issue(query, { nonce: `accountability-brief-${nonce}` }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: {},
+    accountability: { sourceAuthority: authority, pins: [{ pin, evidence: admit(authority, accountabilityPinDigest(pin)) }], signals },
+  });
+
+  const cases = [
+    ['missing', [], 'current-brief-required'],
+    ['unverified', [signal(stranger, brief())], 'current-brief-required'],
+    ['revised', [signal(authority, brief({ briefDigest: 'd'.repeat(64) }))], 're-pin-with-owner'],
+  ];
+  for (const [label, briefSignals, repair] of cases) {
+    const result = build([signal(authority, acceptedA), ...briefSignals], label);
+    assert.equal(result.status, 'ok');
+    assert.equal(validateContextPacket(result.packet).ok, true);
+    const attention = result.packet.attention.filter((summary) => summary.source === 'projects-accountability');
+    assert.deepEqual(attention.map((summary) => [summary.canonicalId, summary.category, summary.status]), [[outcome.id, 'attention', 'brief-reconciliation']], `${label}: reconciliation summary present`);
+    assert.ok(attention[0].title.includes(`(${repair}); next owner: ${owner}`), `${label}: exact repair and next owner`);
+    if (label === 'unverified') assert.ok(result.packet.omissions.some((omission) => omission.startsWith('accountability:signal-')));
+  }
+
+  const current = build([signal(authority, acceptedA), signal(authority, brief())], 'current');
+  assert.equal(current.status, 'ok');
+  const attention = current.packet.attention.filter((summary) => summary.source === 'projects-accountability');
+  assert.equal(attention.some((summary) => summary.status === 'brief-reconciliation'), false, 'current brief yields no reconciliation summary');
+  assert.deepEqual(attention.map((summary) => summary.status), ['outcome-complete-ready']);
 });
 
 test('canonical packet accepts nested projects beneath a project parent', () => {

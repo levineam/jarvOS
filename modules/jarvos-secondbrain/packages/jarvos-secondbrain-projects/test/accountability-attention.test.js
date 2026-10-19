@@ -478,6 +478,118 @@ test('finite readiness and ongoing milestone acceptance require a trusted admitt
   }
 });
 
+function briefReconciliations(result) { return result.alerts.filter((alert) => alert.disposition === 'brief-reconciliation'); }
+
+test('brief repairs reach alerts and attention summaries as one owned reconciliation; a current brief clears it', () => {
+  const auth = authority();
+  const stranger = authority('fixture-other-producer');
+  for (const record of [outcomeRecord(), projectRecord()]) {
+    const finite = record.kind === 'outcome';
+    const pins = [admittedPin(auth, pinFor(record))];
+    const own = (descriptor) => ({ ...descriptor, referenceId: record.id });
+    const acceptedBoth = [signal(auth, own(accepted(CRIT_A))), signal(auth, own(accepted(CRIT_B)))];
+    const cases = [
+      ['missing brief', [], 'current-brief-required', []],
+      ['unverified brief', [signal(stranger, own(brief([CRIT_A, CRIT_B])))], 'current-brief-required', []],
+      ['revised digest, identical criteria', [signal(auth, own(brief([CRIT_A, CRIT_B], { briefDigest: 'd'.repeat(64) })))], 're-pin-with-owner', ['fixture-brief', `digest:${'e'.repeat(64)}`]],
+    ];
+    for (const [label, briefSignals, repair, evidenceRefs] of cases) {
+      const result = derive({ records: [record], pins, signals: [...acceptedBoth, ...briefSignals], sourceAuthority: auth });
+      const entry = result.entries[0];
+      assert.equal(entry.repair, repair, `${record.kind} ${label}: entry repair unchanged`);
+      assert.equal(entry.proposal, null, `${record.kind} ${label}: readiness still withheld`);
+      for (const id of ['crit-a', 'crit-b']) assert.equal(criterion(result, id).state, 'accepted', `${record.kind} ${label}: criterion history preserved`);
+      if (!finite) assert.deepEqual(entry.maintenance, { state: 'retained', owner: KEEPER, revisitTrigger: MAINTENANCE.revisitTrigger, due: false, milestoneAccepted: false });
+
+      const recon = briefReconciliations(result);
+      assert.equal(recon.length, 1, `${record.kind} ${label}: exactly one reconciliation alert`);
+      assert.equal(recon[0].reason, repair);
+      assert.equal(recon[0].nextOwner, OWNER, `${record.kind} ${label}: pin owner, not the maintenance owner`);
+      assert.equal(recon[0].criterionId, null);
+      assert.equal(recon[0].referenceId, record.id);
+      assert.deepEqual(recon[0].evidenceRefs, evidenceRefs);
+      assert.equal(result.alerts.some((alert) => alert.disposition === 'stale-scope'), false, `${record.kind} ${label}: no blanket stale-scope`);
+
+      const summaries = accountabilityAttentionSummaries(result, { observedAt: NOW });
+      const summary = summaries.find((item) => item.status === 'brief-reconciliation');
+      assert.ok(summary, `${record.kind} ${label}: reconciliation reaches summaries`);
+      assert.equal(summary.id, `acct_${recon[0].fingerprint.slice(0, 32)}`);
+      assert.equal(summary.canonicalId, record.id);
+      assert.equal(summary.source, 'projects-accountability');
+      assert.equal(summary.category, 'attention');
+      assert.ok(summary.title.includes(`(${repair}); next owner: ${OWNER}`), `${record.kind} ${label}: exact repair and next owner`);
+      if (!finite) assert.ok(summaries.some((item) => item.status === 'maintenance-retained'), 'maintenance summary still present');
+
+      if (repair === 're-pin-with-owner') {
+        const partial = derive({ records: [record], pins, signals: [signal(auth, own(accepted(CRIT_A))), ...briefSignals], sourceAuthority: auth });
+        assert.equal(briefReconciliations(partial).length, 1);
+        assert.equal(criterion(partial, 'crit-b').available, true, 'independent ready criterion is not blocked');
+        assert.equal(criterion(partial, 'crit-b').exception, null);
+      }
+    }
+
+    const valid = derive({ records: [record], pins, signals: [...acceptedBoth, signal(auth, own(brief([CRIT_A, CRIT_B])))], sourceAuthority: auth });
+    assert.equal(valid.entries[0].repair, null);
+    assert.deepEqual(briefReconciliations(valid), [], `${record.kind}: current brief clears reconciliation`);
+    assert.equal(accountabilityAttentionSummaries(valid, { observedAt: NOW }).some((item) => item.status === 'brief-reconciliation'), false);
+    if (finite) assert.equal(valid.entries[0].disposition, 'outcome-complete-ready');
+    else assert.equal(valid.entries[0].maintenance.milestoneAccepted, true);
+  }
+});
+
+test('brief reconciliation dedupes across noise via existing alert state; a changed brief digest re-alerts', () => {
+  const auth = authority();
+  const stranger = authority('fixture-other-producer');
+  const record = outcomeRecord();
+  const pins = [admittedPin(auth, pinFor(record))];
+  const acceptedBoth = [signal(auth, accepted(CRIT_A)), signal(auth, accepted(CRIT_B))];
+  const alertState = createMemoryIntentGapAlertState();
+  const ack = (result) => acknowledgeIntentGapAlerts(result.alerts, { alertState, consumerKey: 'overseer' });
+  const earlier = '2026-10-18T11:59:00.000Z';
+
+  const missing = derive({ records: [record], pins, signals: acceptedBoth, sourceAuthority: auth });
+  assert.deepEqual(ack(missing).map((alert) => [alert.disposition, alert.reason]), [['brief-reconciliation', 'current-brief-required']]);
+  const missingChurn = derive({ records: [outcomeRecord({ revision: 8, title: 'Lantern outcome (renamed)' })], registryGeneration: 31, pins, signals: acceptedBoth, sourceAuthority: auth });
+  assert.equal(briefReconciliations(missingChurn)[0].fingerprint, briefReconciliations(missing)[0].fingerprint);
+  assert.equal(ack(missingChurn).length, 0, 'revision/generation/title churn does not re-alert');
+  const unverified = derive({ records: [record], pins, signals: [...acceptedBoth, signal(stranger, brief([CRIT_A, CRIT_B]))], sourceAuthority: auth });
+  assert.equal(ack(unverified).length, 0, 'same needed repair, same fingerprint');
+
+  const revisedD = derive({ records: [record], pins, signals: [...acceptedBoth, signal(auth, brief([CRIT_A, CRIT_B], { briefDigest: 'd'.repeat(64) }))], sourceAuthority: auth });
+  const fingerprintD = briefReconciliations(revisedD)[0].fingerprint;
+  assert.notEqual(fingerprintD, briefReconciliations(missing)[0].fingerprint);
+  assert.equal(ack(revisedD).length, 1);
+  const revisedDNoise = derive({
+    records: [outcomeRecord({ revision: 9 })], registryGeneration: 40, pins, sourceAuthority: auth,
+    signals: [...acceptedBoth, signal(auth, brief([CRIT_A, CRIT_B], { briefDigest: 'd'.repeat(64), sourceRef: 'fixture-brief-rerun', sourceDigest: '9'.repeat(64) }), earlier)],
+  });
+  assert.equal(briefReconciliations(revisedDNoise)[0].fingerprint, fingerprintD, 'brief sourceRef/sourceDigest/observedAt noise is not material');
+  assert.equal(ack(revisedDNoise).length, 0);
+
+  const revisedE = derive({ records: [record], pins, signals: [...acceptedBoth, signal(auth, brief([CRIT_A, CRIT_B], { briefDigest: 'a'.repeat(64) }))], sourceAuthority: auth });
+  assert.notEqual(briefReconciliations(revisedE)[0].fingerprint, fingerprintD, 'a different material brief binding is distinguishable');
+  assert.deepEqual(ack(revisedE).map((alert) => [alert.disposition, alert.reason]), [['brief-reconciliation', 're-pin-with-owner']]);
+
+  const current = derive({ records: [record], pins, signals: [...acceptedBoth, signal(auth, brief([CRIT_A, CRIT_B]))], sourceAuthority: auth });
+  assert.deepEqual(briefReconciliations(current), []);
+  assert.deepEqual(ack(current).map((alert) => alert.disposition), ['outcome-complete-ready']);
+});
+
+test('stale-scope exceptions already carry re-pin-with-owner, so no duplicate brief reconciliation is added', () => {
+  const auth = authority();
+  const record = outcomeRecord();
+  const pins = [admittedPin(auth, pinFor(record))];
+  const acceptedBoth = [signal(auth, accepted(CRIT_A)), signal(auth, accepted(CRIT_B))];
+  const changedB = { criterionId: 'crit-b', acceptance: 'Lantern map exported and printed' };
+  const material = derive({ records: [record], pins, sourceAuthority: auth, signals: [...acceptedBoth, signal(auth, brief([CRIT_A, changedB], { briefDigest: 'd'.repeat(64) }))] });
+  assert.equal(material.entries[0].repair, 're-pin-with-owner');
+  assert.deepEqual(material.alerts.map((alert) => [alert.disposition, alert.criterionId]), [['stale-scope', 'crit-b']]);
+  const superseded = derive({ records: [record], pins, sourceAuthority: auth, signals: [...acceptedBoth, signal(auth, brief([CRIT_A, CRIT_B], { status: 'superseded' }))] });
+  assert.equal(superseded.entries[0].repair, 're-pin-with-owner');
+  assert.deepEqual(briefReconciliations(superseded), []);
+  assert.equal(superseded.alerts.every((alert) => alert.disposition === 'stale-scope'), true);
+});
+
 // ---- owner-port scope reconciliation ---------------------------------------
 
 function fakeOwnerPort(initial, { amendResult = null, readbackOverride = null } = {}) {
