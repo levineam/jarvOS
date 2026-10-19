@@ -256,6 +256,54 @@ receipts. Raw synthesis packets, prompts, diagnostics and filesystem paths are n
 part of that contract. Host installation and real-session qualification are separate
 from synthetic source tests.
 
+### Projection versions: v1 context, v2 assessment
+
+`jarvos_ripeness_context` accepts only `jarvos-meaning-projection/v1`; a v2
+response on that path is rejected as `projection_invalid`, and its `maxChars`
+range stays 2,000–8,000. Assessment results may be legacy v1 or
+`jarvos-meaning-projection/v2` (`CONTRACT_V2`, checked by
+`validateProjectionV2`). The assessment tool still takes no model arguments and
+gains no authority from v2.
+
+v2 adds a closed `sources` list (at most 8). Each source has an opaque
+`source:<digest>` ref, a short readable label, a source class, an `asOf`
+timestamp or null, an optional excerpt (at most 400 characters) and an `origin`:
+`andrew_verified`, `external_verified`, `unverified` or `ai_generated`. Every
+listed source must be cited, and every cited ref must resolve to exactly one
+listed source. Findings (at most 6) are one of:
+
+- `andrew_words` — a verbatim substring of one `andrew_verified` excerpt.
+- `observation` — cites only verified sources.
+- `inference` — a claim the producer accepted from its proposal step.
+- `contribution` — at most one; the closing question the trusted producer
+  accepted.
+
+The validator checks structure, citations and disclosure. It cannot confirm what
+a source's author believes, and the producer remains responsible for which claims
+it accepts. If an inference or contribution cites no verified source,
+`attribution_unverified` must be listed in omissions. v2 text may contain
+ordinary slashes such as "and/or", but filesystem locators, credential or key
+shapes, control characters (C0/C1, zero-width, bidi override/isolate, byte-order
+mark and line/paragraph separator code points) and internal packets or
+diagnostics fail closed. An
+unsafe excerpt that is not quoted is withheld as null and `excerpt_withheld` is
+added to omissions. If the unsafe excerpt is quoted, the whole projection is
+rejected.
+
+v2 output is limited to 12,000 serialized characters by default, sources
+included. When a trusted caller of `projectMeaning` passes an explicit integer
+`maxChars` of at least 2,000, that value is used, capped at 12,000. Any other
+value falls back to 12,000. The whole envelope is validated
+before any truncation. Truncation removes whole findings: trailing inferences go
+first, then other findings that are not the contribution, and then any sources
+that are no longer cited. The contribution, coverage and omissions are never
+removed. If the projection still does not fit, the result is
+`projection_over_budget`. Quoted text and provenance are never rewritten.
+
+This is a source contract with synthetic tests only. It does not install a
+provider, bind private sources, add a native command, or show that any personal
+assessment is safe or live.
+
 ## Prompts
 
 The MCP server also exposes a `boot_jarvos` prompt with user-facing "Boot
