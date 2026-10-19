@@ -486,6 +486,143 @@ test('a busy or timed-out Obsidian path queues without opening a disk writer', (
   });
 });
 
+// F1: when the offline fallback cannot write, the caller sees the adapter's
+// classified receipt rather than a context-free fallback stub.
+for (const [label, requestHash] of [['plain intent', undefined], ['identified capture replay', 'a'.repeat(64)]]) {
+  test(`a null capability result without absence proof keeps the classified receipt and planned intent (${label})`, () => {
+    withVault(({ root }) => {
+      const calls = [];
+      const service = createConfiguredVaultMutationService({
+        vaultRoot: root,
+        vaultId: 'vault-null-capability',
+        source: 'bridge.null-capability',
+        adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), evaluate: (code) => { calls.push(code); return null; } },
+      });
+      const intentId = 'null-capability-intent';
+      const context = service.createWriteContext({ vaultRelativePath: 'Notes/Null Capability.md', intentId, requestHash });
+      const attempts = requestHash ? 2 : 1;
+      const results = Array.from({ length: attempts }, () => writeNoteFile({ title: 'Null Capability', content: 'Keep this queued.', ...context }));
+      const records = Object.values(service.adapter.ledger.read().operations);
+      assert.equal(records.length, 1, 'one durable intent, no extra FIFO slot');
+      const [record] = records;
+      assert.equal(record.status, 'planned');
+      assert.equal(record.operation.operationId, intentId);
+      if (requestHash) assert.equal(record.operation.captureRequestHash, requestHash);
+      for (const result of results) {
+        assert.equal(result.written, false);
+        assert.equal(result.savedLocally, false);
+        assert.equal(result.receipt.status, 'unavailable');
+        assert.equal(result.receipt.obsidian, 'app_unreachable');
+        assert.equal(result.receipt.lifecycleState, 'planned');
+        assert.equal(result.receipt.adapterEvidence?.capabilityReason, 'capability_no_result');
+        assert.equal(result.receipt.operation?.operationId, intentId);
+        assert.equal(result.receipt.operation?.sequence, record.operation.sequence);
+        assert.equal(result.noteId, record.operation.noteId);
+        assert.equal(fs.existsSync(result.path), false);
+      }
+      // Per submission: one adapter probe plus the default absence-proof probe.
+      assert.equal(calls.length, 2 * attempts);
+      assert.ok(calls.every((code) => /hasVault/.test(code)), 'only capability probes ran; nothing was dispatched');
+    });
+  });
+}
+
+test('a source outside the offline allowlist gets the original classified receipt and no file', () => {
+  withVault(({ root }) => {
+    let probes = 0;
+    let proofs = 0;
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-offline-unauthorized',
+      source: 'bridge.not-allowlisted',
+      offlineSourceAllowlist: ['bridge.some-other-source'],
+      proveObsidianAbsent: () => { proofs += 1; return true; },
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => { probes += 1; return { state: 'app_stopped' }; } },
+    });
+    const result = writeNoteFile({ title: 'Unauthorized Offline', content: 'Not on the allowlist.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Unauthorized Offline.md', intentId: 'offline-unauthorized-intent' }) });
+    assert.equal(result.receipt.status, 'unavailable');
+    assert.equal(result.receipt.obsidian, 'app_stopped');
+    assert.equal(result.receipt.lifecycleState, 'planned');
+    assert.equal(result.receipt.operation?.operationId, 'offline-unauthorized-intent');
+    assert.equal(result.savedLocally, false);
+    assert.equal(fs.existsSync(result.path), false);
+    assert.equal(service.adapter.ledger.get('offline-unauthorized-intent').status, 'planned');
+    assert.equal(probes, 1);
+    assert.equal(proofs, 0);
+  });
+});
+
+test('an authorized source with an explicit app_stopped proof saves locally and retains transport state', () => {
+  withVault(({ root }) => {
+    let probes = 0;
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-offline-authorized',
+      source: 'bridge.offline-authorized',
+      offlineSourceAllowlist: ['bridge.offline-authorized'],
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), probe: () => { probes += 1; return { state: 'app_stopped' }; } },
+    });
+    const result = writeNoteFile({ title: 'Authorized Offline', content: 'Saved while stopped.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Authorized Offline.md', intentId: 'offline-authorized-intent' }) });
+    assert.equal(result.receipt.status, 'saved_locally_sync_pending');
+    assert.equal(result.savedLocally, true);
+    assert.equal(result.receipt.obsidian, 'app_stopped');
+    assert.equal(service.adapter.ledger.get('offline-authorized-intent').status, 'local_applied');
+    assert.match(fs.readFileSync(result.path, 'utf8'), /Saved while stopped\./);
+    // One adapter probe plus the default absence-proof probe.
+    assert.equal(probes, 2);
+  });
+});
+
+test('an authorized offline save after a null capability result keeps the saved outcome and its reason', () => {
+  withVault(({ root }) => {
+    const calls = [];
+    let proofs = 0;
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-null-capability-offline',
+      source: 'bridge.null-capability-offline',
+      proveObsidianAbsent: () => { proofs += 1; return true; },
+      adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), evaluate: (code) => { calls.push(code); return null; } },
+    });
+    const result = writeNoteFile({ title: 'Null Capability Offline', content: 'Saved after no answer.', ...service.createWriteContext({ vaultRelativePath: 'Notes/Null Capability Offline.md', intentId: 'null-capability-offline-intent' }) });
+    assert.equal(result.receipt.status, 'saved_locally_sync_pending');
+    assert.equal(result.savedLocally, true);
+    assert.equal(result.receipt.obsidian, 'app_unreachable');
+    assert.deepEqual(result.receipt.adapterEvidence, { capabilityReason: 'capability_no_result' });
+    assert.equal(service.adapter.ledger.get('null-capability-offline-intent').status, 'local_applied');
+    assert.match(fs.readFileSync(result.path, 'utf8'), /Saved after no answer\./);
+    assert.equal(proofs, 1);
+    assert.equal(calls.length, 1, 'one capability probe; the explicit host proof replaces the default probe');
+  });
+});
+
+for (const [status, extra] of [['blocked', { reason: 'claim_held' }], ['conflict', { errorClass: 'create_collision' }]]) {
+  for (const [label, requestHash] of [['plain intent', undefined], ['identified capture', 'b'.repeat(64)]]) {
+    test(`a supplied reconciler ${status} outcome keeps its status and sanitized transport context (${label})`, () => {
+      withVault(({ root }) => {
+        const saves = [];
+        const service = createConfiguredVaultMutationService({
+          vaultRoot: root,
+          vaultId: `vault-reconciler-${status}`,
+          source: `bridge.reconciler-${status}`,
+          reconciler: { safeOfflineSave: (operation, capability) => { saves.push({ operation, capability }); return { status, ...extra }; } },
+          adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), evaluate: () => null },
+        });
+        const intentId = `reconciler-${status}-intent`;
+        const context = service.createWriteContext({ vaultRelativePath: `Notes/Reconciler ${status}.md`, intentId, requestHash });
+        const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: intentId, vaultId: context.vaultId, vaultRelativePath: `Notes/Reconciler ${status}.md`, sequence: 1, operationKind: 'create', content: 'not written' });
+        assert.equal(saves.length, 1, 'the offline fallback runs exactly once');
+        assert.equal(receipt.status, status);
+        for (const [key, value] of Object.entries(extra)) assert.equal(receipt[key], value);
+        assert.equal(receipt.obsidian, 'app_unreachable');
+        assert.deepEqual(receipt.adapterEvidence, { capabilityReason: 'capability_no_result' });
+        if (requestHash) assert.equal(receipt.operation, saves[0].operation, 'identified captures keep the planned operation');
+        assert.equal(service.adapter.ledger.get(intentId).status, 'planned');
+      });
+    });
+  }
+}
+
 test('write contexts do not reserve empty FIFO slots before full submission', () => {
   withVault(({ root }) => {
     const service = createConfiguredVaultMutationService({
