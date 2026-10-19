@@ -17,7 +17,8 @@ const CODING_PROVIDER_STATUSES = new Set(['verified', 'degraded', 'unsupported',
 const CODING_PROVIDER_FIELDS = new Set(['id', 'version', 'pinDigest', 'harness', 'adapterVersion', 'status', 'observedAt']);
 const CODING_ARTIFACT_FIELDS = new Set(['kind', 'reference', 'digest', 'path']);
 const CODING_ARTIFACT_KINDS = new Set(['plan', 'work', 'compound']);
-const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const EXECUTION_OUTCOMES = new Set(['installed', 'failed', 'indeterminate']);
+const ISO_INSTANT =/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const AUTHORITY_FIELDS = new Set(['branch', 'worktree', 'worktreePath', 'approval', 'submissionReady', 'completion', 'owner', 'authority', 'terminalStatus', 'nextStep', 'pr', 'pullRequest']);
 const id = (prefix) => `${prefix}_${crypto.randomUUID()}`;
 
@@ -41,8 +42,17 @@ function normalizeCodingCode(value, label, { allowNull = true } = {}) {
   return value;
 }
 
+// Finite canonical ISO instant: a string in exact toISOString form that
+// round-trips unchanged. Rejects NaN/Infinity, non-strings, and calendar dates
+// that JS Date would silently normalize (e.g. Feb 30).
+function isIsoInstant(value) {
+  if (typeof value !== 'string' || !ISO_INSTANT.test(value)) return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value;
+}
+
 function normalizeIsoInstant(value, label) {
-  if (typeof value !== 'string' || !ISO_INSTANT.test(value) || new Date(value).toISOString() !== value) throw new Error(`${label} is invalid`);
+  if (!isIsoInstant(value)) throw new Error(`${label} is invalid`);
   return value;
 }
 
@@ -195,6 +205,17 @@ function createApplicationService(options = {}) {
   const maxIdempotencyEntries = Number.isInteger(options.maxIdempotencyEntries) && options.maxIdempotencyEntries > 0
     ? options.maxIdempotencyEntries
     : 1000;
+  // The execution binding is built only from the disclosure-projected record.
+  // If record- or field-level sensitivity removed any binding input (including
+  // the approver identity or execution claim), the binding is withheld whole.
+  const BINDING_FIELDS = ['id', 'principal', 'status', 'actionKey', 'fence', 'approval', 'resource', 'mutationClass', 'desiredGeneration', 'commandSpec', 'execution'];
+  const bindingIntact = (projected, request) => projected.redacted !== true
+    && BINDING_FIELDS.every((field) => JSON.stringify(projected[field]) === JSON.stringify(request[field]));
+  const refuse = (message, code) => {
+    const error = new Error(message);
+    if (code) error.code = code;
+    return error;
+  };
   const pruneIdempotency = (state) => {
     const entries = Object.entries(state.idempotency)
       .map(([key, requestId]) => ({ key, request: state.requests.find((item) => item.id === requestId) }))
@@ -234,12 +255,7 @@ function createApplicationService(options = {}) {
       if (operation === 'inspect') return { ok: true, request: project(request, principal), evidence };
       if (operation === 'evidence') return { ok: true, evidence };
       const projected = project(request, principal);
-      // The execution binding is built only from the disclosure-projected
-      // record. If record- or field-level sensitivity removed any part of the
-      // executable command, no binding is returned rather than an incomplete one.
-      const bindingIntact = projected.redacted !== true
-        && ['id', 'principal', 'status', 'actionKey', 'fence', 'approval', 'resource', 'mutationClass', 'desiredGeneration', 'commandSpec']
-          .every((field) => JSON.stringify(projected[field]) === JSON.stringify(request[field]));
+      const intact = bindingIntact(projected, request);
       return {
         ok: true,
         request: projected,
@@ -252,7 +268,7 @@ function createApplicationService(options = {}) {
         // principal that created the request, so an executing host can recheck
         // the current action fence, approval consumption and pause state from
         // this authenticated read rather than from a caller's copy.
-        binding: request.principal.id === principal.id && bindingIntact ? {
+        binding: request.principal.id === principal.id && intact ? {
           requestId: projected.id,
           principalId: projected.principal.id,
           status: projected.status,
@@ -262,6 +278,18 @@ function createApplicationService(options = {}) {
           currentFence: currentFence(state, projected.actionKey),
           approvalRequired: Boolean(projected.approval),
           approvedAt: projected.approval ? projected.approval.usedAt || null : null,
+          // The principal that actually consumed the owner approval. Policy
+          // allow has no approver and nothing is synthesized for it.
+          approvedBy: projected.approval && typeof projected.approval.approvedBy === 'string' ? projected.approval.approvedBy : null,
+          // Own claim (if any). A claim without a host-reported outcome is
+          // indeterminate (null), never success.
+          execution: projected.execution ? {
+            claimId: projected.execution.claimId,
+            claimFence: projected.execution.claimFence,
+            claimedAt: projected.execution.claimedAt,
+            outcome: projected.execution.outcome || null,
+            outcomeAt: projected.execution.outcomeAt || null,
+          } : null,
           resource: projected.resource,
           mutationClass: projected.mutationClass,
           desiredGeneration: projected.desiredGeneration,
@@ -294,6 +322,75 @@ function createApplicationService(options = {}) {
       return { ok: true, deduped: false, evidence: projectCodingEvidence(evidence) };
     }
 
+    if (operation === 'claimExecution') {
+      // Internal one-use execution admission. Not transport callable. State
+      // lives on the existing request record and is persisted only through the
+      // existing store CAS save(state, expectedRevision); every refusal throws
+      // before any mutation so a refused claim has no effect.
+      if (!has(principal, 'control-plane.mutate')) throw refuse('control-plane mutation is not authorized');
+      const request = requestFor(state, input.requestId);
+      if (!request.principal || request.principal.id !== principal.id) throw refuse('execution claim is not owned by this principal', 'EXECUTION_CLAIM_REFUSED');
+      requireReadable(principal, request);
+      if (!bindingIntact(project(request, principal), request)) throw refuse('execution binding is not disclosed to this principal', 'EXECUTION_CLAIM_REFUSED');
+      if (state.paused) throw refuse('control plane is paused', 'EXECUTION_CLAIM_REFUSED');
+      const approval = request.approval;
+      if (request.execution) throw refuse('approved request was already claimed and consumed', 'EXECUTION_CLAIM_REFUSED');
+      if (request.status !== 'approved' || !approval || !approval.usedAt || typeof approval.approvedBy !== 'string' || !approval.approvedBy) {
+        throw refuse('request does not carry a consumed owner approval', 'EXECUTION_CLAIM_REFUSED');
+      }
+      // A missing or malformed stored expiry never becomes perpetual authority.
+      if (!isIsoInstant(approval.expiresAt)) throw refuse('approval expiry is missing or invalid', 'EXECUTION_CLAIM_REFUSED');
+      if (Date.parse(approval.expiresAt) <= clock()) throw refuse('approval has expired', 'EXECUTION_CLAIM_REFUSED');
+      if (typeof input.expectedApprover !== 'string' || input.expectedApprover !== approval.approvedBy) {
+        throw refuse('approval was not granted by the expected approver', 'EXECUTION_CLAIM_REFUSED');
+      }
+      if (typeof input.actionKey !== 'string' || input.actionKey !== request.actionKey || approval.actionKey !== request.actionKey) {
+        throw refuse('execution claim is not bound to this action', 'EXECUTION_CLAIM_REFUSED');
+      }
+      if (!Number.isInteger(input.fence) || !Number.isInteger(request.fence) || input.fence !== request.fence
+        || approval.fence !== request.fence || currentFence(state, request.actionKey) !== request.fence) {
+        throw refuse('execution claim is stale or not bound to the current action fence', 'EXECUTION_CLAIM_REFUSED');
+      }
+      // Allocate the claim's own fence so a post-claim read distinguishes this
+      // increment from a real supersession. The stored request fence is kept.
+      const claimFence = request.fence + 1;
+      const claimedAt = stamp();
+      const claimId = id('claim');
+      state.keyedFences[request.actionKey] = claimFence;
+      request.execution = { claimId, claimFence, claimedAt, outcome: null, outcomeAt: null };
+      request.updatedAt = claimedAt;
+      audit(state, request, 'execution_claimed', 'one-use execution admission claimed; no host-reported outcome yet');
+      options.store.save(state, state.revision);
+      return {
+        ok: true,
+        claim: { claimId, requestId: request.id, actionKey: request.actionKey, claimFence, claimedAt, approvedBy: approval.approvedBy },
+      };
+    }
+
+    if (operation === 'recordExecutionOutcome') {
+      // Internal, once-only, host-reported outcome for the exact claim. It is
+      // never verified lifecycle success and grants no new effect, so failure
+      // reporting remains possible after the approval window closed.
+      if (!has(principal, 'control-plane.mutate')) throw refuse('control-plane mutation is not authorized');
+      const request = requestFor(state, input.requestId);
+      if (!request.principal || request.principal.id !== principal.id) throw refuse('execution outcome is not owned by this principal', 'EXECUTION_OUTCOME_REFUSED');
+      requireReadable(principal, request);
+      const execution = request.execution;
+      if (!execution || typeof input.claimId !== 'string' || input.claimId !== execution.claimId) {
+        throw refuse('execution outcome does not match a current claim', 'EXECUTION_OUTCOME_REFUSED');
+      }
+      if (!EXECUTION_OUTCOMES.has(input.outcome)) throw refuse('execution outcome must be installed, failed, or indeterminate', 'EXECUTION_OUTCOME_REFUSED');
+      if (execution.outcome) throw refuse('execution outcome was already recorded', 'EXECUTION_OUTCOME_REFUSED');
+      const outcomeAt = stamp();
+      execution.outcome = input.outcome;
+      execution.outcomeAt = outcomeAt;
+      request.updatedAt = outcomeAt;
+      audit(state, request, `execution_${input.outcome}`, `host-reported execution outcome: ${input.outcome}; not verified lifecycle success`);
+      options.store.save(state, state.revision);
+      // Return only values the caller already holds plus the new timestamp.
+      return { ok: true, execution: { requestId: request.id, claimId: input.claimId, outcome: input.outcome, outcomeAt, hostReported: true } };
+    }
+
     if (!['createRequest', 'approve'].includes(operation)) throw new Error(`unknown operation: ${operation}`);
     if (operation === 'createRequest') {
       if (!has(principal, 'control-plane.mutate')) throw new Error('control-plane mutation is not authorized');
@@ -307,6 +404,12 @@ function createApplicationService(options = {}) {
       const decision = decidePolicy(request, principal) || {};
       const outcome = decision.outcome || 'require_approval';
       if (!['allow', 'deny', 'defer', 'require_approval'].includes(outcome)) throw new Error('policy returned an invalid outcome');
+      // An explicitly supplied approval expiry must be a finite canonical ISO
+      // instant; an absent one keeps the five-minute default below.
+      const explicitExpiry = decision.expiresAt !== undefined && decision.expiresAt !== null;
+      if (outcome === 'require_approval' && explicitExpiry && !isIsoInstant(decision.expiresAt)) {
+        throw new Error('policy returned an invalid approval expiry');
+      }
       const dedupeKey = idempotencyKey(principal, request, input);
       const existingId = state.idempotency[dedupeKey];
       if (existingId && !['deny', 'defer'].includes(outcome)) {
@@ -323,7 +426,7 @@ function createApplicationService(options = {}) {
         actionKey: request.actionKey,
         requiredCapability: decision.requiredCapability || 'control-plane.approve',
         allowCreatorApproval: decision.allowCreatorApproval === true,
-        expiresAt: decision.expiresAt || new Date(clock() + 300000).toISOString(),
+        expiresAt: explicitExpiry ? decision.expiresAt : new Date(clock() + 300000).toISOString(),
         fence,
         usedAt: null,
       } : null;
@@ -341,10 +444,15 @@ function createApplicationService(options = {}) {
     if (!approval || request.status !== 'approval_required') throw new Error('request is not awaiting approval');
     if (!has(principal, approval.requiredCapability)) throw new Error('approval capability is not authorized');
     if (principal.id === request.principal.id && approval.allowCreatorApproval !== true) throw new Error('request creator cannot approve without explicit policy delegation');
-    if (approval.actionKey !== request.actionKey || approval.fence !== input.fence || approval.fence !== currentFence(state, request.actionKey) || approval.usedAt || new Date(approval.expiresAt).getTime() <= clock()) {
+    // A missing or malformed stored expiry never becomes perpetual authority.
+    if (!isIsoInstant(approval.expiresAt)) throw new Error('approval expiry is missing or invalid');
+    if (approval.actionKey !== request.actionKey || approval.fence !== input.fence || approval.fence !== currentFence(state, request.actionKey) || approval.usedAt || Date.parse(approval.expiresAt) <= clock()) {
       throw new Error('approval is stale, replayed, expired, or not bound to the current action fence');
     }
     approval.usedAt = stamp();
+    // Record the principal that actually approved (including an explicitly
+    // delegated creator approval), never a caller-asserted identity.
+    approval.approvedBy = principal.id;
     request.status = 'approved';
     request.updatedAt = approval.usedAt;
     const item = audit(state, request, 'approved', 'command-bound approval consumed');

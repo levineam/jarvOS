@@ -8,8 +8,16 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
-const OPERATION_ALIASES = Object.freeze({ request: 'createRequest' });
-const PUBLIC_OPERATIONS = new Set(['list', 'inspect', 'evidence', 'approval-state', 'createRequest', 'approve']);
+const OPERATION_ALIASES = Object.freeze({ request: 'createRequest', 'execute-approved': 'executeApproved' });
+// Internal claimExecution/recordExecutionOutcome are deliberately absent: only
+// the installed trusted host may call them on its own application service.
+const PUBLIC_OPERATIONS = new Set(['list', 'inspect', 'evidence', 'approval-state', 'createRequest', 'approve', 'executeApproved']);
+const EXECUTE_APPROVED = 'executeApproved';
+const EXECUTE_APPROVED_OUTCOMES = new Set(['installed', 'failed', 'indeterminate', 'refused']);
+const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const PUBLIC_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const EXECUTE_APPROVED_FAILED = 'EXECUTE_APPROVED_FAILED';
 // CLI flags whose values are compared strictly (===) against numbers by the
 // application service. Argv always yields strings, so they must be coerced.
 const NUMERIC_CLI_FLAGS = new Set(['fence']);
@@ -218,10 +226,65 @@ function createControlPlaneService(options = {}) {
 
   return {
     execute(operation, input = {}) {
+      const normalized = normalizeOperation(operation);
+      if (normalized === EXECUTE_APPROVED) return executeApprovedThroughHost(applicationService, input);
       const { service: _service, applicationService: _applicationService, serviceModule: _serviceModule, ...request } = input;
-      return applicationService.execute(normalizeOperation(operation), request);
+      return applicationService.execute(normalized, request);
     },
   };
+}
+
+function safeError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
+// Thrown/rejected execute-approved errors carry only a safe UPPER_SNAKE code;
+// raw diagnostics (paths, secrets, signatures) collapse to a generic code.
+function sanitizeExecuteApprovedError(error) {
+  if (error && typeof error.code === 'string' && PUBLIC_CODE.test(error.code)) return safeError(error.code);
+  if (error && typeof error.message === 'string' && PUBLIC_CODE.test(error.message)) return safeError(error.message);
+  return safeError(EXECUTE_APPROVED_FAILED);
+}
+
+function isIsoInstant(value) {
+  if (typeof value !== 'string' || !ISO_INSTANT.test(value)) return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+// Closed projection of the awaited host result. Only an explicit
+// { ok: true, outcome: 'installed' } is success; anything unknown or malformed
+// is indeterminate and never ok. All other host fields are dropped.
+function projectExecuteApprovedResult(requestId, result) {
+  const source = result !== null && typeof result === 'object' && !Array.isArray(result) ? result : {};
+  let outcome = EXECUTE_APPROVED_OUTCOMES.has(source.outcome) ? source.outcome : 'indeterminate';
+  if (outcome === 'installed' && source.ok !== true) outcome = 'indeterminate';
+  return {
+    ok: source.ok === true && outcome === 'installed',
+    requestId,
+    outcome,
+    code: typeof source.code === 'string' && PUBLIC_CODE.test(source.code) ? source.code : null,
+    claimId: typeof source.claimId === 'string' && OPAQUE_ID.test(source.claimId) ? source.claimId : null,
+    expiresAt: isIsoInstant(source.expiresAt) ? source.expiresAt : null,
+  };
+}
+
+// Forward only { credential, opaque requestId } to the installed trusted host.
+// Validation happens before the host is called; the result is always a Promise.
+async function executeApprovedThroughHost(applicationService, input) {
+  const source = input !== null && typeof input === 'object' ? input : {};
+  const { credential, requestId } = source;
+  if (typeof credential !== 'string' || !credential) throw safeError('AUTH_REQUIRED');
+  if (typeof requestId !== 'string' || !OPAQUE_ID.test(requestId)) throw safeError('INVALID_REQUEST_ID');
+  let result;
+  try {
+    result = await applicationService.execute(EXECUTE_APPROVED, { credential, requestId });
+  } catch (error) {
+    throw sanitizeExecuteApprovedError(error);
+  }
+  return projectExecuteApprovedResult(requestId, result);
 }
 
 // Coerce strict integer fields (CLI argv strings and MCP JSON numbers/strings)
@@ -267,6 +330,7 @@ function parseCli(argv) {
 
 function usage() {
   return 'Usage: jarvos-manager <list|inspect|evidence|approval-state|request|approve> [--request-id <id>] [--fence <n>] [--input <json>]\n'
+    + '       jarvos-manager execute-approved --request-id <id>   (installed host executes its own approved request; awaited)\n'
     + `       Credential (never on argv): set ${CREDENTIAL_ENV}, or pass --credential-file <path> or --credential-stdin.\n`
     + '       jarvos-manager verify-host-service --service-module <absolute-path>';
 }
@@ -294,11 +358,26 @@ function main() {
   delete request.credentialStdin;
   delete request.allowInsecureCredential;
   const result = createControlPlaneService().execute(operation, request);
+  // Only execute-approved is asynchronous; legacy operations print
+  // synchronously exactly as before. A pending Promise is never printed.
+  if ((OPERATION_ALIASES[operation] || operation) === EXECUTE_APPROVED) {
+    return Promise.resolve(result).then((settled) => {
+      process.stdout.write(`${JSON.stringify(settled, null, 2)}\n`);
+      if (!settled || settled.ok !== true) process.exitCode = 1;
+    });
+  }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  return undefined;
 }
 
 if (require.main === module) {
-  try { main(); } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
+  const fail = (error) => { process.stderr.write(`${(error && error.message) || 'control-plane operation failed'}\n`); process.exitCode = 1; };
+  try {
+    const pending = main();
+    if (pending && typeof pending.then === 'function') pending.catch(fail);
+  } catch (error) {
+    fail(error);
+  }
 }
 
 module.exports = {

@@ -225,7 +225,7 @@ const TOOLS = [
       type: 'object',
       required: ['operation'],
       properties: {
-        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'activation-status', 'request', 'approve'] },
+        operation: { type: 'string', enum: ['list', 'inspect', 'evidence', 'approval-state', 'activation-status', 'request', 'approve', 'execute-approved'] },
         runtime: { type: 'string', enum: ['all', 'claude', 'codex', 'hermes', 'openclaw'] },
         requestId: { type: 'string' },
         actor: { type: 'object' }, resource: { type: 'object' }, mutationClass: { type: 'string' },
@@ -850,6 +850,24 @@ async function callTool(name, args = {}, lifecycle = {}) {
         return textResult(JSON.stringify(result, null, 2), !result.ok);
       } catch (error) {
         return textResult(error.message || 'activation status is unavailable', true);
+      }
+    }
+    if (input.operation === 'execute-approved') {
+      // Forward only the host session credential and the opaque request id;
+      // the manager validates, awaits the installed host and closes the result.
+      // A non-Promise here means the async contract was not honored, so it is
+      // refused rather than serialized as {}.
+      try {
+        const pending = controlPlane('execute-approved', { credential: hostCredential, requestId: input.requestId });
+        if (!pending || typeof pending.then !== 'function') return textResult('EXECUTE_APPROVED_FAILED', true);
+        const result = await pending;
+        return textResult(JSON.stringify(result, null, 2), !result || result.ok !== true);
+      } catch (error) {
+        const safeCode = /^[A-Z][A-Z0-9_]{1,63}$/;
+        const code = error && typeof error.code === 'string' && safeCode.test(error.code) ? error.code
+          : error && typeof error.message === 'string' && safeCode.test(error.message) ? error.message
+            : 'EXECUTE_APPROVED_FAILED';
+        return textResult(code, true);
       }
     }
     // Match CLI numeric semantics for approve fence comparisons (strict ===).
