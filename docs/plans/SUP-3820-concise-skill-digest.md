@@ -1,6 +1,6 @@
 # SUP-3820: concise skill decision digest
 
-Status: implementation and independent acceptance complete; submission gates pending. Owner: current Codex task, reporting to permanent Overseer.
+Status: historical implementation evidence; the automatic-manager submission/activation follow-up is superseded by the [October 19 explicit-sharing plan](2026-10-19-fix-explicit-skill-sync-retirement-plan.md). Preserve unrelated operator-notification responsibilities and the evidence below.
 Mode: hardening. Existing Skill Sync outcome; source-only follow-up to the merged owner-decision implementation.
 
 ## Outcome and boundary
@@ -27,7 +27,9 @@ Emit one batch preview of at most four decisions, with an additive `pendingCount
 
 The existing issue was read successfully. A progress-comment attempt was rejected by the tracker authorization boundary; no credential or ownership workaround was attempted. The permanent Overseer owns tracker reconciliation. Preserve source, test and review evidence here until that write boundary is resolved by an authorized owner.
 
-Next: satisfy exact-head submission gates or report the precise blocked gate to the permanent Overseer. Live activation remains excluded.
+Do not resume submission or live activation from this historical brief. The
+current explicit-sharing plan owns the scoped guard and retirement; broader
+notification responsibilities remain with their existing owners.
 
 ## Verification and acceptance
 

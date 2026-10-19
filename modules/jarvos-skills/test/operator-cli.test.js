@@ -21,7 +21,9 @@ const {
   schedulerOperator,
 } = require('../src/operator');
 const { planSchedulerUnits } = require('../src/scheduler');
-const { loadConfig, saveConfig } = require('../src/config');
+const { loadConfig, saveConfig, atomicWriteJson } = require('../src/config');
+const { computeBundleTree } = require('../src/catalog');
+const { readReceipt } = require('../src/receipts');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'catalog', 'public-fixture');
 const CLI = path.join(__dirname, '..', 'scripts', 'install-skills.js');
@@ -98,6 +100,64 @@ test('operator share/plan/apply/status/refresh/repair path is idempotent and red
 
     const second = applyOperator({ configPath: env.configPath });
     assert.ok(second.applied.every((item) => item.applied === false));
+  } finally {
+    fs.rmSync(env.home, { recursive: true, force: true });
+    fs.rmSync(env.sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test('explicit complete bundle and dependency preserve neighbours and reverse narrowly with inventory off', () => {
+  const env = seedEnv();
+  try {
+    const loaded = loadConfig(env.configPath);
+    assert.equal(loaded.config.inventory.enabled, false);
+    const references = path.join(env.bundle, 'references');
+    fs.mkdirSync(references, { mode: 0o700 });
+    fs.writeFileSync(path.join(references, 'guide.md'), '# Approved reference\n', { mode: 0o600 });
+    refreshOperator({ configPath: env.configPath });
+    const dependency = path.join(env.sourceRoot, 'dependency-fixture');
+    fs.mkdirSync(dependency, { mode: 0o700 });
+    fs.writeFileSync(path.join(dependency, 'SKILL.md'), '---\nname: dependency-fixture\ndescription: harmless dependency\n---\n\nReturn dependency-fixture-ready.\n', { mode: 0o600 });
+    shareOperator({ configPath: env.configPath, id: 'dependency-fixture', bundlePath: dependency, scope: 'public', harnesses: ['codex'] });
+    const catalog = JSON.parse(fs.readFileSync(loaded.resolved.publicCatalogPath, 'utf8'));
+    const entry = catalog.entries.find((item) => item.id === 'public-fixture');
+    entry.allowedHarnesses = ['codex'];
+    entry.verification = { codex: entry.verification.codex };
+    entry.skillDependencies = ['dependency-fixture'];
+    atomicWriteJson(loaded.resolved.publicCatalogPath, catalog);
+
+    const divergent = path.join(env.harnessRoots.codex, 'public-fixture');
+    fs.mkdirSync(divergent, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(divergent, 'SKILL.md'), '# Keep this divergent local copy\n', { mode: 0o600 });
+    const privateFile = path.join(env.harnessRoots.codex, 'unknown-private.txt');
+    fs.writeFileSync(privateFile, 'PRIVATE-FIXTURE-NEIGHBOUR\n', { mode: 0o600 });
+    const neighbours = [path.join(divergent, 'SKILL.md'), privateFile];
+    const before = neighbours.map((file) => fs.readFileSync(file, 'utf8'));
+    const plan = planOperator({ configPath: env.configPath });
+    assert.deepEqual(plan.pairs.map((pair) => `${pair.harness}:${pair.id}`).sort(), ['codex:dependency-fixture', 'codex:public-fixture']);
+    assert.equal(plan.aliases['public-fixture'], 'jarvos-public-fixture');
+    assert.equal(plan.pairs.every((pair) => pair.action === 'install'), true);
+    const applied = applyOperator({ configPath: env.configPath });
+    assert.equal(applied.ok, true);
+    const target = path.join(env.harnessRoots.codex, 'jarvos-public-fixture');
+    for (const relative of ['SKILL.md', 'scripts/hello.js', 'assets/note.txt', 'references/guide.md']) {
+      assert.deepEqual(fs.readFileSync(path.join(target, relative)), fs.readFileSync(path.join(env.bundle, relative)));
+    }
+    assert.equal(readReceipt(env.harnessRoots.codex, 'jarvos-public-fixture').version, 2);
+    assert.equal(readReceipt(env.harnessRoots.codex, 'dependency-fixture').version, 2);
+    const tree = computeBundleTree(target, { allowlist: entry.bundle.allowlist });
+    assert.equal(tree.treeDigest, readReceipt(env.harnessRoots.codex, 'jarvos-public-fixture').treeDigest);
+    const script = spawnSync(process.execPath, [path.join(target, 'scripts/hello.js')], { env: {}, encoding: 'utf8' });
+    assert.equal(script.status, 0, script.stderr);
+
+    atomicWriteJson(loaded.resolved.publicCatalogPath, { ...catalog, entries: [] });
+    const reversal = planOperator({ configPath: env.configPath });
+    assert.deepEqual(reversal.pairs.map((pair) => `${pair.id}:${pair.action}`).sort(), ['dependency-fixture:retire', 'public-fixture:retire']);
+    applyOperator({ configPath: env.configPath });
+    assert.equal(fs.existsSync(target), false);
+    assert.equal(fs.existsSync(path.join(env.harnessRoots.codex, 'dependency-fixture')), false);
+    neighbours.forEach((file, index) => assert.equal(fs.readFileSync(file, 'utf8'), before[index]));
+    assert.equal(loadConfig(env.configPath).config.inventory.enabled, false);
   } finally {
     fs.rmSync(env.home, { recursive: true, force: true });
     fs.rmSync(env.sourceRoot, { recursive: true, force: true });

@@ -936,6 +936,46 @@ test('inventoryAssessOperator returns redacted status', () => {
   assert.equal(result.document, undefined);
 });
 
+test('operator assessment requires explicit admission', () => {
+  const root = temp('jarvos-assess-explicit-');
+  writeSkill(path.join(root, 'approved-skill'), { name: 'approved-skill' });
+  const { configPath, control } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const beforeConfig = fs.readFileSync(configPath, 'utf8');
+  const classified = inventoryAssessOperator({ configPath });
+  assert.equal(classified.admissions.length, 0, 'classification must not implicitly admit a bundle');
+  assert.equal(fs.readFileSync(configPath, 'utf8'), beforeConfig);
+  assert.equal(fs.existsSync(path.join(control, 'local-overlay.json')), false);
+});
+
+test('disabled inventory stays read-only even when assessment requests admission', () => {
+  const root = temp('jarvos-assess-disabled-');
+  writeSkill(path.join(root, 'approved-skill'), { name: 'approved-skill' });
+  const { configPath, control } = seedConfig({ roots: { codex: root }, trustClass: 'markdown-only' });
+  const admitted = inventoryAssessOperator({ configPath, autoAdmit: true });
+  assert.equal(admitted.admissions.length, 1, 'enabled explicit admission remains supported');
+  const loaded = loadConfig(configPath);
+  loaded.config.inventory.enabled = false;
+  saveConfig(loaded.config, configPath);
+  writeSkill(path.join(root, 'another-skill'), { name: 'another-skill' });
+  const snapshot = () => {
+    const files = {};
+    const walk = (dir) => {
+      for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+        const file = path.join(dir, item.name);
+        if (item.isDirectory()) walk(file);
+        else files[path.relative(control, file)] = fs.readFileSync(file).toString('base64');
+      }
+    };
+    walk(control);
+    return files;
+  };
+  const beforeDisabled = snapshot();
+  const disabled = inventoryAssessOperator({ configPath, autoAdmit: true });
+  assert.equal(disabled.mutate, false);
+  assert.equal(disabled.admissions.length, 0);
+  assert.deepEqual(snapshot(), beforeDisabled, 'disabled assessment must not persist any inventory or admission state');
+});
+
 test('stable replay keeps second healthy admit idempotent', () => {
   const root = temp('jarvos-replay-');
   writeSkill(path.join(root, 'stable-skill'), { name: 'stable-skill' });
@@ -1005,7 +1045,7 @@ test('legacy manual overlay migrates with a new admission and replays zero-write
   });
   fs.unlinkSync(layout.acceptedGenerationPath);
 
-  const migrated = inventoryAssessOperator({ configPath, observedAt });
+  const migrated = inventoryAssessOperator({ configPath, observedAt, autoAdmit: true });
   assert.equal(migrated.admissions.some((item) => item.logicalId === 'new-generated-skill'), true);
   loaded = loadConfig(configPath);
   assert.equal(loaded.resolved.localSourceRoot, layout.sourceStorePath);
@@ -1028,7 +1068,7 @@ test('legacy manual overlay migrates with a new admission and replays zero-write
 
   const durablePaths = [configPath, loaded.resolved.localOverlayPath, layout.acceptedGenerationPath];
   const before = durablePaths.map((file) => ({ body: fs.readFileSync(file, 'utf8'), mtimeMs: fs.statSync(file).mtimeMs }));
-  const replay = inventoryAssessOperator({ configPath, observedAt });
+  const replay = inventoryAssessOperator({ configPath, observedAt, autoAdmit: true });
   assert.equal(replay.mutate, false);
   durablePaths.forEach((file, index) => {
     assert.equal(fs.readFileSync(file, 'utf8'), before[index].body);
@@ -1053,7 +1093,14 @@ test('legacy manual overlay migrates without a new generated admission', () => {
     entries: [manualOverlayEntry('transcribe', manualTree, ['codex', 'hermes'])],
   });
 
-  const migrated = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:05:00.000Z' });
+  const beforeClassification = [configPath, loaded.resolved.localOverlayPath].map((file) => fs.readFileSync(file, 'utf8'));
+  inventoryAssessOperator({ configPath });
+  [configPath, loaded.resolved.localOverlayPath].forEach((file, index) => {
+    assert.equal(fs.readFileSync(file, 'utf8'), beforeClassification[index], 'classification must not migrate a manual selection');
+  });
+  assert.equal(fs.existsSync(loaded.resolved.inventory.acceptedGenerationPath), false);
+
+  const migrated = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:05:00.000Z', autoAdmit: true });
   assert.deepEqual(migrated.admissions, []);
   loaded = loadConfig(configPath);
   assert.equal(
@@ -1077,7 +1124,7 @@ test('manual-only capture preserves a same-digest generated bundle root while ex
     body: 'Portable generated skill.\n',
   });
   const { configPath } = seedConfig({ roots: { codex: observedRoot }, trustClass: 'markdown-only' });
-  inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:06:00.000Z' });
+  inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:06:00.000Z', autoAdmit: true });
   let loaded = loadConfig(configPath);
   const prior = readAcceptedGeneration(loaded.resolved.inventory.acceptedGenerationPath);
   const priorGenerated = prior.generatedOverlay.entries.find((entry) => entry.id === 'generated-skill');
@@ -1117,7 +1164,7 @@ test('manual-only capture preserves a same-digest generated bundle root while ex
   atomicWriteJson(loaded.resolved.localOverlayPath, mixedOverlay);
   saveConfig({ ...loaded.config, localSourceRoot: legacyRoot }, configPath);
 
-  const migrated = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:07:00.000Z' });
+  const migrated = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:07:00.000Z', autoAdmit: true });
   assert.equal(migrated.admissions.some((item) => item.logicalId === 'generated-skill'), true);
   loaded = loadConfig(configPath);
   const accepted = readAcceptedGeneration(loaded.resolved.inventory.acceptedGenerationPath);
@@ -1144,7 +1191,7 @@ test('manual-only capture preserves a same-digest generated bundle root while ex
   applyOperator({ configPath });
   const durablePaths = [configPath, loaded.resolved.localOverlayPath, loaded.resolved.inventory.acceptedGenerationPath];
   const before = durablePaths.map((file) => ({ body: fs.readFileSync(file, 'utf8'), mtimeMs: fs.statSync(file).mtimeMs }));
-  const replay = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:07:00.000Z' });
+  const replay = inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:07:00.000Z', autoAdmit: true });
   assert.equal(replay.mutate, false);
   durablePaths.forEach((file, index) => {
     assert.equal(fs.readFileSync(file, 'utf8'), before[index].body);
@@ -1156,7 +1203,7 @@ test('malformed same-digest generated root blocks manual capture with zero durab
   const observedRoot = temp('jarvos-missing-prior-bundle-');
   writeSkill(path.join(observedRoot, 'generated-skill'), { name: 'generated-skill' });
   const { configPath } = seedConfig({ roots: { codex: observedRoot }, trustClass: 'markdown-only' });
-  inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:08:00.000Z' });
+  inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:08:00.000Z', autoAdmit: true });
   let loaded = loadConfig(configPath);
   const accepted = readAcceptedGeneration(loaded.resolved.inventory.acceptedGenerationPath);
   const generated = accepted.generatedOverlay.entries.find((entry) => entry.id === 'generated-skill');
@@ -1187,7 +1234,7 @@ test('malformed same-digest generated root blocks manual capture with zero durab
   const generationsBefore = fs.readdirSync(loaded.resolved.inventory.sourceStorePath).sort();
 
   assert.throws(
-    () => inventoryAssessOperator({ configPath, observedAt }),
+    () => inventoryAssessOperator({ configPath, observedAt, autoAdmit: true }),
     /prior generated bundle is missing/,
   );
   assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore);
@@ -1222,7 +1269,7 @@ test('missing or drifted legacy manual bundles fail before config or overlay mut
     const overlayBefore = fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8');
 
     assert.throws(
-      () => inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:10:00.000Z' }),
+      () => inventoryAssessOperator({ configPath, observedAt: '2026-08-15T18:10:00.000Z', autoAdmit: true }),
       scenario === 'missing' ? /missing/ : /digest/i,
     );
     assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore);
@@ -1299,7 +1346,7 @@ test('legacy manual migration replays every durable write boundary', () => {
     // Recovery must depend only on the attested immutable capture, not on the
     // legacy tree surviving the interrupted transaction.
     fs.rmSync(legacyRoot, { recursive: true, force: true });
-    const replay = inventoryAssessOperator({ configPath, observedAt });
+    const replay = inventoryAssessOperator({ configPath, observedAt, autoAdmit: true });
     assert.equal(replay.ok, true, failurePoint);
     loaded = loadConfig(configPath);
     const overlay = validateLocalOverlay(JSON.parse(fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8'))).overlay;
@@ -1317,7 +1364,7 @@ test('legacy manual migration replays every durable write boundary', () => {
       body: fs.readFileSync(file, 'utf8'),
       mtimeMs: fs.statSync(file).mtimeMs,
     }));
-    const secondReplay = inventoryAssessOperator({ configPath, observedAt });
+    const secondReplay = inventoryAssessOperator({ configPath, observedAt, autoAdmit: true });
     assert.equal(secondReplay.mutate, false, failurePoint);
     durablePaths.forEach((file, index) => {
       assert.equal(fs.readFileSync(file, 'utf8'), before[index].body, failurePoint);
@@ -1377,7 +1424,7 @@ test('orphan recovery ignores unrelated generations and rejects mismatched or no
     const overlayBefore = fs.readFileSync(loaded.resolved.localOverlayPath, 'utf8');
 
     assert.throws(
-      () => inventoryAssessOperator({ configPath, observedAt }),
+      () => inventoryAssessOperator({ configPath, observedAt, autoAdmit: true }),
       scenario === 'unrelated-generation'
         ? /legacy manual localSourceRoot does not exist/
         : /digest|allowlist|unexpected path|owner-only/i,
@@ -1824,7 +1871,7 @@ test('editing one unmanaged canonical source advances the accepted generation ac
 
   // 1-2) Establish v1 and converge projections through the real operator
   // workflow: observe/assess/capture, then plan/apply.
-  const admitted = inventoryAssessOperator({ configPath, observedAt: '2026-09-01T10:00:00.000Z' });
+  const admitted = inventoryAssessOperator({ configPath, observedAt: '2026-09-01T10:00:00.000Z', autoAdmit: true });
   assert.equal(admitted.complete, true);
   assert.ok(admitted.admissions.some((item) => item.logicalId === 'newsletter-generator' && item.mode === 'admit'));
 
@@ -1889,7 +1936,7 @@ test('editing one unmanaged canonical source advances the accepted generation ac
   assert.notEqual(hermesLocalTree.treeDigest, treeV2.treeDigest);
 
   // 6) The real inventory assess/capture path admits exactly one update.
-  const updated = inventoryAssessOperator({ configPath, observedAt: '2026-09-02T09:00:00.000Z' });
+  const updated = inventoryAssessOperator({ configPath, observedAt: '2026-09-02T09:00:00.000Z', autoAdmit: true });
   assert.equal(updated.complete, true);
   assert.notEqual(updated.generationId, admitted.generationId);
   assert.equal(updated.admissions.length, 1);
@@ -1963,7 +2010,7 @@ test('editing one unmanaged canonical source advances the accepted generation ac
     resolved.inventory.acceptedGenerationPath,
   ];
   const before = durablePaths.map((file) => ({ body: fs.readFileSync(file, 'utf8'), mtimeMs: fs.statSync(file).mtimeMs }));
-  const replay = inventoryAssessOperator({ configPath, observedAt: '2026-09-02T10:00:00.000Z' });
+  const replay = inventoryAssessOperator({ configPath, observedAt: '2026-09-02T10:00:00.000Z', autoAdmit: true });
   assert.equal(replay.mutate, false);
   durablePaths.forEach((file, index) => {
     assert.equal(fs.readFileSync(file, 'utf8'), before[index].body);

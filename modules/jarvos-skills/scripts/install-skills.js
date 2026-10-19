@@ -202,8 +202,9 @@ Shared skill distribution (catalog/overlay):
 Installs the default jarvOS operating-system skill bundle and operates the
 public shared-skill catalog. Private overlay bodies never enter the package.
 Inventory observes registered absolute roots only; discovery is not admission.
-inventory-assess classifies and may auto-admit rule-proven portable skills into
-the owner-only source store/local overlay. autonomous-repair is the scheduler
+inventory-assess classifies without automatic admission. With inventory disabled,
+assessment is read-only; use share for an explicitly approved bundle.
+autonomous-repair is the optional scheduler
 backstop and refuses incomplete-generation mutations. shared-status/explain/
 exclude/include are redacted agent-parity surfaces. claude-proof is human-only
 and never publishes private bodies. Live harness/scheduler enable remains an

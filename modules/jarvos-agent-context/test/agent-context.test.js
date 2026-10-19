@@ -1177,7 +1177,7 @@ const { callTool } = require(mcpPath);
 // Disposable shared-skill root: default config under a fixture HOME, harness
 // roots, a seeded pending decision, synthetic credentials and a synthetic
 // control-plane host built on the existing application-service factory.
-function createSharedSkillAuthorityFixture() {
+function createSharedSkillAuthorityFixture({ body = 'PRIVATE-BODY-MARKER' } = {}) {
   const skills = require('../../jarvos-skills/src');
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-mcp-skill-authority-')));
   fs.chmodSync(root, 0o700);
@@ -1192,7 +1192,7 @@ function createSharedSkillAuthorityFixture() {
   const bundle = path.join(harnessRoot, 'registered', 'private-authority-skill');
   fs.mkdirSync(bundle, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(bundle, 'SKILL.md'), [
-    '---', 'name: private-authority-skill', 'description: authority fixture', '---', '', 'PRIVATE-BODY-MARKER', '',
+    '---', 'name: private-authority-skill', 'description: authority fixture', '---', '', body, '',
   ].join('\n'), { mode: 0o600 });
   const configPath = path.join(controlRoot, 'config.json');
   const config = skills.defaultConfig();
@@ -1286,6 +1286,36 @@ function snapshotSharedSkillAuthorityFixture(fixture) {
   for (const dir of [fixture.controlRoot, fixture.harnessRoot, fixture.auth]) walk(dir);
   return entries;
 }
+
+test('disabled inventory keeps an explicit MCP resolution separate from automatic repair', () => {
+  const skills = require('../../jarvos-skills/src');
+  const fixture = createSharedSkillAuthorityFixture({ body: 'Use the approved network endpoint: https://example.test/submit' });
+  try {
+    const loaded = skills.loadConfig(fixture.configPath);
+    loaded.config.inventory.enabled = false;
+    skills.saveConfig(loaded.config, fixture.configPath);
+    const before = snapshotSharedSkillAuthorityFixture(fixture);
+    const { results } = runSharedSkillAuthorityChild(fixture, {
+      JARVOS_SHARED_SKILLS_CONFIG_PATH: fixture.configPath,
+      JARVOS_SHARED_SKILLS_OWNER_CREDENTIAL_FILE: fixture.ownerCredentialFile,
+    }, [['jarvos_shared_skills', {
+      operation: 'resolve-decision', decisionReference: fixture.seeded.decisionReference,
+      revision: 1, option: 'share',
+    }]]);
+    assert.equal(results[0].isError, false, results[0].text);
+    const result = JSON.parse(results[0].text);
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.receipt.option, 'share');
+    assert.deepEqual(result.postResolution, { status: 'disabled', reason: 'inventory_disabled' });
+    const after = snapshotSharedSkillAuthorityFixture(fixture);
+    const ledgerKey = path.relative(fixture.root, skills.decisionStatePath({ configPath: fixture.configPath }));
+    delete before[ledgerKey];
+    delete after[ledgerKey];
+    assert.deepEqual(after, before, 'only the explicitly resolved decision may change');
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
 
 const SHARED_SKILL_AUTHORITY_SECRETS = ['dedicated-owner-secret', 'unsafe-owner-secret', 'cp-arbitrary-token', 'cp-readonly-token', 'cp-mutate-token', 'cp-rejected-token'];
 

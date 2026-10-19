@@ -83,6 +83,27 @@ test('healthy scheduled replays stay silent', () => {
   assert.equal(scheduledRepairMessage(healthy()), 'NO_REPLY');
 });
 
+test('disabled inventory is a quiet scheduled no-op without consuming decisions', () => {
+  const { root, configPath } = seededConfig('jarvos-scheduled-disabled-');
+  try {
+    const statePath = decisionStatePath({ configPath });
+    reconcileDecisions({ statePath, skills: [heldSkill()] });
+    const before = fs.readFileSync(statePath, 'utf8');
+    const configBefore = fs.readFileSync(configPath, 'utf8');
+    const run = runScheduledRepair({ configPath, now: '2026-10-19T16:00:00.000Z' });
+    assert.equal(run.result.ran, false);
+    assert.equal(run.result.reason, 'inventory_disabled');
+    assert.equal(run.message, 'NO_REPLY');
+    assert.equal(scheduledRepairCliEnvelope(run.notifications), 'NO_REPLY');
+    assert.equal(fs.readFileSync(statePath, 'utf8'), before);
+    assert.equal(fs.readFileSync(configPath, 'utf8'), configBefore);
+    assert.match(scheduledRepairMessage({ ok: false, ran: false }), /Action required/);
+    assert.match(scheduledRepairMessage({ ok: true, ran: false, reason: 'unknown_failure' }), /Action required/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('first convergence summary is concise and count-only', () => {
   const message = scheduledRepairMessage(healthy({
     status: { counts: { skills: 103, actionable: 28 } },
