@@ -55,7 +55,7 @@ and never require them for a public/minimal install.
 The copied example is a live-only composition. Its trusted config must supply
 three distinct owner-only durable roots—`trackerOperationStoreRoot`,
 `workActionOperationStoreRoot`, and `executionLinkStoreRoot`—as well as the
-pinned opaque `beadsWorkspaceId`, `workActionAuthorizationModule`,
+pinned opaque `beadsWorkspaceId`, `beadsExecutable`, `workActionAuthorizationModule`,
 `workActionCompletionModule`, and non-empty
 `registeredCompletionProducers`. The tracker operation ledger, work-action
 operation ledger, and Projects execution-link store cannot be aliases. The
@@ -63,6 +63,10 @@ host refuses absent, memory-only, or shared roots before Beads I/O; memory
 stores remain available only for explicitly test-mode services.
 The three state roots must be provisioned before the service starts; loading or
 listing the service never creates or changes their permissions.
+
+`beadsExecutable` must name the host-owned Beads executable by canonical absolute
+path. The adapter rejects missing, basename, relative, symlink, unsafe-owner or
+group/world-writable paths and unsafe ancestry; it never falls back to `PATH`.
 
 Todo authorization and completion receipts are host-resolved. MCP callers may
 send ordinary operation and canonical-reference fields only; they cannot supply
