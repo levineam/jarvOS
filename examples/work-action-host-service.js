@@ -97,6 +97,7 @@ function readHostOptions() {
   return {
     workspaceRoot,
     beadsWorkspace,
+    beadsExecutable: config.beadsExecutable,
     workspaceId,
     approvedWorkspaceIds,
     trackerOperationStoreRoot,
@@ -234,6 +235,7 @@ function createHostWorkActionService() {
     throw new Error('the Projects execution-link module is invalid');
   }
   const tracker = coding.createLiveBeadsTracker({
+    executable: host.beadsExecutable,
     workspaceRoot: host.beadsWorkspace,
     approvedRoots: [host.workspaceRoot, host.beadsWorkspace],
     operationStoreRoot: host.trackerOperationStoreRoot,
