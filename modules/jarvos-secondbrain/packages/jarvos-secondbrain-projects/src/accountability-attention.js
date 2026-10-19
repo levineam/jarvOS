@@ -245,10 +245,18 @@ function deriveEntry(pin, context) {
   });
   const hasException = criteria.some((criterion) => criterion.exception);
   const allAccepted = criteria.every((criterion) => criterion.state === 'accepted');
+  // Readiness (finite proposal or ongoing milestone acceptance) additionally
+  // requires the latest trusted admitted brief to be current and to carry the
+  // exact pinned briefDigest. Missing/unverified (unknown), revised or
+  // superseded briefs withhold readiness without touching criterion history.
+  const milestoneReady = allAccepted && !hasException && briefState === 'current';
+  let repair = null;
+  if (referenceState === 'stale-scope' || briefState === 'revised') repair = 're-pin-with-owner';
+  else if (allAccepted && !hasException && !milestoneReady) repair = 'current-brief-required';
   let proposal = null;
   let maintenance = null;
   let disposition = hasException ? 'exception' : 'on-track';
-  if (pin.responsibility === 'finite-outcome' && allAccepted && !hasException) {
+  if (pin.responsibility === 'finite-outcome' && milestoneReady) {
     // Readiness proposal only: the owner decides; lifecycle is never changed here.
     proposal = { type: 'outcome-complete-ready', referenceId, decisionOwner: pin.owner, lifecycleChange: 'none' };
     disposition = 'outcome-complete-ready';
@@ -260,7 +268,7 @@ function deriveEntry(pin, context) {
       : events.some((event) => event.event === trigger.event && Date.parse(event.occurredAt) <= Date.parse(now));
     // Ongoing Project responsibility never completes: the milestone may be
     // accepted, but the maintenance owner + revisit trigger stay open.
-    maintenance = { state: 'retained', owner: pin.maintenance.owner, revisitTrigger: trigger, due, milestoneAccepted: allAccepted && !hasException };
+    maintenance = { state: 'retained', owner: pin.maintenance.owner, revisitTrigger: trigger, due, milestoneAccepted: milestoneReady };
     if (!hasException) disposition = 'maintenance-retained';
   }
   const fingerprint = fingerprintFor({ referenceId, revision: pin.reference.revision, criterionId: null, disposition, checkpoint: pin.milestone.checkpoint });
@@ -278,7 +286,7 @@ function deriveEntry(pin, context) {
       referenceState,
       briefState,
       disposition,
-      repair: referenceState === 'stale-scope' ? 're-pin-with-owner' : null,
+      repair,
       nextOwner: pin.owner,
       criteria,
       proposal,
@@ -478,6 +486,10 @@ async function reconcileAccountabilityScope({ pin, current, proposedScope, owner
   if (!record || read.generation !== coordinates.generation || record.id !== recordId || record.revision !== coordinates.revision
     || record.kind !== normalizedPin.reference.kind) {
     return pendingReconciliation(normalizedPin, 'readback-unavailable', { patch, expected: coordinates });
+  }
+  // A compacted/projection readback omits canonical text: never hash it as null.
+  if (record.compacted === true) {
+    return pendingReconciliation(normalizedPin, 'exact-record-detail-required', { patch, expected: coordinates });
   }
   const norm = (value) => (typeof value === 'string' ? value.trim() : (value === undefined ? null : value));
   if (Object.keys(patch).some((field) => norm(record[field]) !== norm(patch[field]))) {

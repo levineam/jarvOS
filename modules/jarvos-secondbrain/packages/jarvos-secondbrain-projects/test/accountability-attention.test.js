@@ -364,9 +364,12 @@ test('finite all-accepted is a readiness proposal only and alerts once across un
   const record = outcomeRecord();
   const snapshot = structuredClone(record);
   const pins = [admittedPin(auth, pinFor(record))];
-  const signals = [signal(auth, accepted(CRIT_A)), signal(auth, accepted(CRIT_B))];
+  // Positive readiness requires an explicit trusted, admitted, current brief matching the pin digest.
+  const signals = [signal(auth, accepted(CRIT_A)), signal(auth, accepted(CRIT_B)), signal(auth, brief([CRIT_A, CRIT_B]))];
   const result = derive({ records: [record], pins, signals, sourceAuthority: auth });
   assert.deepEqual(record, snapshot, 'derivation never mutates the canonical record');
+  assert.equal(result.entries[0].briefState, 'current');
+  assert.equal(result.entries[0].repair, null);
   assert.equal(result.entries[0].disposition, 'outcome-complete-ready');
   assert.deepEqual(result.entries[0].proposal, { type: 'outcome-complete-ready', referenceId: record.id, decisionOwner: OWNER, lifecycleChange: 'none' });
   assert.equal(Object.hasOwn(result.entries[0], 'lifecycle'), false);
@@ -388,9 +391,13 @@ test('ongoing project milestone acceptance never completes; maintenance owner an
   const auth = authority();
   const record = projectRecord();
   const pins = [admittedPin(auth, pinFor(record))];
-  const signals = [CRIT_A, CRIT_B].map((entry) => signal(auth, accepted(entry, { referenceId: record.id })));
+  const signals = [
+    ...[CRIT_A, CRIT_B].map((entry) => signal(auth, accepted(entry, { referenceId: record.id }))),
+    signal(auth, brief([CRIT_A, CRIT_B], { referenceId: record.id })),
+  ];
   const result = derive({ records: [record], pins, signals, sourceAuthority: auth });
   const entry = result.entries[0];
+  assert.equal(entry.briefState, 'current');
   assert.equal(entry.responsibility, 'ongoing');
   assert.equal(entry.disposition, 'maintenance-retained');
   assert.equal(entry.proposal, null);
@@ -404,6 +411,71 @@ test('ongoing project milestone acceptance never completes; maintenance owner an
   const due = derive({ records: [record], pins, signals, sourceAuthority: auth, now: later });
   assert.equal(due.entries[0].maintenance.due, true);
   assert.deepEqual(due.alerts.map((alert) => [alert.disposition, alert.nextOwner]), [['maintenance-due', KEEPER]]);
+});
+
+test('finite readiness and ongoing milestone acceptance require a trusted admitted current brief matching the pinned digest', () => {
+  const auth = authority();
+  const stranger = authority('fixture-other-producer');
+  for (const record of [outcomeRecord(), projectRecord()]) {
+    const finite = record.kind === 'outcome';
+    const pins = [admittedPin(auth, pinFor(record))];
+    const own = (descriptor) => ({ ...descriptor, referenceId: record.id });
+    const acceptedBoth = [signal(auth, own(accepted(CRIT_A))), signal(auth, own(accepted(CRIT_B)))];
+    const acceptedOnlyA = [signal(auth, own(accepted(CRIT_A)))];
+    const negatives = [
+      ['missing brief', [], 'unknown', 'current-brief-required'],
+      ['unverified brief', [signal(stranger, own(brief([CRIT_A, CRIT_B])))], 'unknown', 'current-brief-required'],
+      ['changed digest, identical criteria', [signal(auth, own(brief([CRIT_A, CRIT_B], { briefDigest: 'd'.repeat(64) })))], 'revised', 're-pin-with-owner'],
+    ];
+    for (const [label, briefSignals, briefState, repair] of negatives) {
+      const all = derive({ records: [record], pins, signals: [...acceptedBoth, ...briefSignals], sourceAuthority: auth });
+      const entry = all.entries[0];
+      assert.equal(entry.briefState, briefState, `${record.kind} ${label}: brief state stays truthful`);
+      assert.equal(entry.referenceState, 'pinned', `${record.kind} ${label}: identical criteria are not stale scope`);
+      assert.equal(entry.repair, repair, `${record.kind} ${label}: owned repair`);
+      assert.equal(entry.nextOwner, OWNER);
+      assert.equal(entry.proposal, null, `${record.kind} ${label}: no outcome-complete-ready proposal`);
+      assert.notEqual(entry.disposition, 'outcome-complete-ready');
+      assert.equal(all.alerts.some((alert) => alert.disposition === 'outcome-complete-ready'), false);
+      for (const id of ['crit-a', 'crit-b']) {
+        assert.equal(criterion(all, id).state, 'accepted', `${record.kind} ${label}: criterion history preserved`);
+        assert.equal(criterion(all, id).exception, null, `${record.kind} ${label}: unchanged acceptance is not reopened`);
+        assert.equal(criterion(all, id).reopened, false);
+      }
+      if (finite) {
+        assert.equal(entry.maintenance, null);
+        assert.equal(entry.disposition, 'on-track');
+      } else {
+        assert.deepEqual(entry.maintenance, { state: 'retained', owner: KEEPER, revisitTrigger: MAINTENANCE.revisitTrigger, due: false, milestoneAccepted: false },
+          `${record.kind} ${label}: milestone not accepted; maintenance owner and trigger kept`);
+        assert.equal(entry.disposition, 'maintenance-retained');
+      }
+      if (label === 'unverified brief') assert.ok(all.omissions.some((omission) => omission.startsWith('accountability:signal-')));
+
+      const partial = derive({ records: [record], pins, signals: [...acceptedOnlyA, ...briefSignals], sourceAuthority: auth });
+      assert.equal(criterion(partial, 'crit-a').state, 'accepted', `${record.kind} ${label}: accepted history kept with open work`);
+      assert.equal(criterion(partial, 'crit-a').exception, null);
+      assert.equal(criterion(partial, 'crit-b').state, 'ready');
+      assert.equal(criterion(partial, 'crit-b').available, true, `${record.kind} ${label}: independent ready criterion stays available`);
+      assert.equal(criterion(partial, 'crit-b').exception, null);
+      assert.equal(partial.entries[0].proposal, null);
+      if (!finite) assert.equal(partial.entries[0].maintenance.milestoneAccepted, false);
+    }
+
+    const valid = derive({ records: [record], pins, signals: [...acceptedBoth, signal(auth, own(brief([CRIT_A, CRIT_B])))], sourceAuthority: auth });
+    const entry = valid.entries[0];
+    assert.equal(entry.briefState, 'current');
+    assert.equal(entry.repair, null);
+    if (finite) {
+      assert.equal(entry.disposition, 'outcome-complete-ready');
+      assert.deepEqual(entry.proposal, { type: 'outcome-complete-ready', referenceId: record.id, decisionOwner: OWNER, lifecycleChange: 'none' });
+    } else {
+      assert.equal(entry.proposal, null);
+      assert.equal(entry.disposition, 'maintenance-retained');
+      assert.equal(entry.maintenance.milestoneAccepted, true);
+      assert.equal(entry.maintenance.owner, KEEPER);
+    }
+  }
 });
 
 // ---- owner-port scope reconciliation ---------------------------------------
@@ -469,4 +541,33 @@ test('scope reconciliation goes only through an injected owner port with CAS and
 
   const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'accountability-attention.js'), 'utf8');
   assert.equal(/\.update\s*\(|verifyApproval/.test(source), false, 'no direct registry writer or fake approval helper');
+});
+
+test('compacted readback is owned pending-reconciliation before any digest or re-pin, with or without an amendment', async () => {
+  const record = outcomeRecord();
+  const pin = pinFor(record);
+  const current = { registryGeneration: 11, revision: 3 };
+
+  const metadataOnly = fakeOwnerPort(record, { readbackOverride: (value) => ({ id: value.id, kind: value.kind, revision: value.revision, compacted: true }) });
+  const criteriaOnly = await reconcileAccountabilityScope({
+    pin, current, proposedScope: { criteria: [CRIT_A, CRIT_B], briefDigest: 'd'.repeat(64) }, ownerPort: metadataOnly, now: NOW,
+  });
+  assert.equal(criteriaOnly.status, 'pending-reconciliation');
+  assert.equal(criteriaOnly.repair, 'exact-record-detail-required');
+  assert.equal(criteriaOnly.owner, OWNER);
+  assert.equal(criteriaOnly.pin, null);
+  assert.equal(Object.hasOwn(criteriaOnly, 'scopeDigest'), false);
+  assert.deepEqual(metadataOnly.calls.map(([name, request]) => [name, request.expectedGeneration, request.expectedRevision]), [['readRecord', 11, 3]]);
+
+  const proposedScope = { goal: 'Lantern route is documented and walked', criteria: [CRIT_A, CRIT_B], briefDigest: 'd'.repeat(64) };
+  const projected = fakeOwnerPort(record, {
+    readbackOverride: (value) => ({ id: value.id, kind: value.kind, revision: value.revision, goal: value.goal, compacted: true }),
+  });
+  const amended = await reconcileAccountabilityScope({ pin, current, proposedScope, ownerPort: projected, now: NOW });
+  assert.equal(amended.status, 'pending-reconciliation', 'matching patch fields on a compacted projection never prove the full scope');
+  assert.equal(amended.repair, 'exact-record-detail-required');
+  assert.equal(amended.pin, null);
+  assert.equal(Object.hasOwn(amended, 'scopeDigest'), false);
+  assert.deepEqual(amended.expected, { generation: 12, revision: 4 });
+  assert.deepEqual(projected.calls.map(([name, request]) => [name, request.expectedGeneration, request.expectedRevision]), [['amend', 11, 3], ['readRecord', 12, 4]]);
 });
