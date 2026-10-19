@@ -14,6 +14,17 @@ const RELEASE_EVIDENCE_CONTRACT = 'jarvos.release-evidence/v1';
 const UNKNOWN_LINK_PROPOSAL_CONTRACT = 'jarvos.project-link-proposal/v1';
 const ADMITTED_INFERENCE_EVIDENCE_CONTRACT = 'jarvos.project-inference-admitted-evidence/v1';
 const INFERENCE_EVIDENCE_ADMISSION_CONTRACT = ADMITTED_INFERENCE_EVIDENCE_CONTRACT;
+// Optional, transient execution metadata: a pin is not a canonical record type
+// and never carries lifecycle/status. It binds one owner to the exact
+// canonical reference + material scope at an assignment/resume/scope boundary.
+const ACCOUNTABILITY_PIN_CONTRACT = 'jarvos.accountability-pin/v1';
+const ACCOUNTABILITY_RESPONSIBILITIES = Object.freeze(['finite-outcome', 'ongoing']);
+const ACCOUNTABILITY_PIN_REASONS = Object.freeze(['assignment', 'resume', 'scope-change']);
+const ACCOUNTABILITY_PIN_FIELDS = Object.freeze([
+  'contract', 'reference', 'registryGeneration', 'scopeDigest', 'briefDigest', 'owner', 'responsibility', 'milestone', 'reason', 'pinnedAt',
+]);
+const ACCOUNTABILITY_ONGOING_PIN_FIELDS = Object.freeze([...ACCOUNTABILITY_PIN_FIELDS, 'maintenance']);
+const ACCOUNTABILITY_MAX_CRITERIA = 16;
 const PROVIDER_STATES = Object.freeze(['fresh', 'stale', 'partial', 'unknown', 'unavailable', 'healthy-empty']);
 const TRUST_LEVELS = Object.freeze(['verified', 'unverified']);
 const SUMMARY_CATEGORIES = Object.freeze(['activity', 'intent', 'execution', 'attention', 'work']);
@@ -301,11 +312,127 @@ function createExecutionReference(input) {
   return validateExecutionReference(input).reference;
 }
 
+function accountabilityOpaque(value, field, max = 256) {
+  const normalized = requiredString(value, field);
+  if (normalized.length > max || /[\u0000\r\n]/.test(normalized)) throw new TypeError(`${field} must be a bounded single-line reference`);
+  return normalized;
+}
+
+function normalizeAccountabilityCheckpoint(value, field) {
+  if (isPlainObject(value) && value.type === 'event' && exactKeys(value, ['type', 'event'])) {
+    return { type: 'event', event: accountabilityOpaque(value.event, `${field}.event`, 128) };
+  }
+  if (isPlainObject(value) && value.type === 'time' && exactKeys(value, ['type', 'at'])) {
+    return { type: 'time', at: timestamp(value.at, `${field}.at`) };
+  }
+  throw new TypeError(`${field} must be an event or time checkpoint`);
+}
+
+function normalizeAccountabilityCriterion(value, field = 'accountability criterion') {
+  if (!exactKeys(value, ['criterionId', 'acceptance'])) throw new TypeError(`${field} has unsupported fields`);
+  const criterionId = requiredString(value.criterionId, `${field}.criterionId`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(criterionId)) throw new TypeError(`${field}.criterionId is invalid`);
+  const acceptance = requiredString(value.acceptance, `${field}.acceptance`);
+  if (acceptance.length > 2000) throw new TypeError(`${field}.acceptance is too long`);
+  return { criterionId, acceptance };
+}
+
+function normalizeAccountabilityCriteria(value, field = 'accountability criteria') {
+  if (!Array.isArray(value) || value.length < 1 || value.length > ACCOUNTABILITY_MAX_CRITERIA) {
+    throw new TypeError(`${field} must contain 1-${ACCOUNTABILITY_MAX_CRITERIA} criteria`);
+  }
+  const criteria = value.map((criterion) => normalizeAccountabilityCriterion(criterion, `${field}[]`));
+  if (new Set(criteria.map((criterion) => criterion.criterionId)).size !== criteria.length) throw new TypeError(`${field} must not repeat a criterionId`);
+  return criteria;
+}
+
+function accountabilityIntentText(value, field) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw new TypeError(`${field} must be a string or null`);
+  const trimmed = value.trim();
+  return trimmed === '' || trimmed === '-' ? null : trimmed;
+}
+
+// Material scope only: reference identity, goal, definition of done and the
+// stable criterion acceptance text. Revision, generation, priority and time
+// are deliberately excluded (the pin keeps the exact revision separately).
+function accountabilityScopeDigest(scope) {
+  if (!isPlainObject(scope) || !isPlainObject(scope.reference)) throw new TypeError('accountability scope requires a reference');
+  const id = validateId(scope.reference.id, 'accountability scope reference id');
+  const { kind } = scope.reference;
+  if (kind !== 'project' && kind !== 'outcome') throw new TypeError('accountability scope reference kind is unsupported');
+  if ((kind === 'project') !== id.startsWith('prj_')) throw new TypeError('accountability scope reference kind and id do not agree');
+  const criteria = normalizeAccountabilityCriteria(scope.criteria, 'accountability scope criteria')
+    .sort((left, right) => left.criterionId.localeCompare(right.criterionId));
+  return digest({
+    contract: ACCOUNTABILITY_PIN_CONTRACT,
+    kind,
+    id,
+    goal: accountabilityIntentText(scope.goal, 'accountability scope goal'),
+    definitionOfDone: accountabilityIntentText(scope.definitionOfDone, 'accountability scope definitionOfDone'),
+    criteria,
+  });
+}
+
+function accountabilityCriterionDigest(criterion) {
+  return digest({ contract: ACCOUNTABILITY_PIN_CONTRACT, ...normalizeAccountabilityCriterion(criterion) });
+}
+
+function validateAccountabilityPin(pin) {
+  const ongoing = isPlainObject(pin) && pin.responsibility === 'ongoing';
+  if (ongoing && !Object.prototype.hasOwnProperty.call(pin, 'maintenance')) {
+    throw new TypeError('ongoing accountability requires a maintenance owner and revisit trigger');
+  }
+  if (!exactKeys(pin, ongoing ? ACCOUNTABILITY_ONGOING_PIN_FIELDS : ACCOUNTABILITY_PIN_FIELDS)) throw new TypeError('accountability pin has unsupported fields');
+  if (pin.contract !== ACCOUNTABILITY_PIN_CONTRACT) throw new TypeError('accountability pin has an unsupported contract');
+  if (!ACCOUNTABILITY_RESPONSIBILITIES.includes(pin.responsibility)) throw new TypeError('accountability responsibility is unsupported');
+  const reference = validateCanonicalReference(pin.reference).reference;
+  if (pin.responsibility === 'finite-outcome' && reference.kind !== 'outcome') throw new TypeError('finite-outcome accountability must reference an outcome');
+  if (ongoing && reference.kind !== 'project') throw new TypeError('ongoing accountability must reference a project');
+  if (!Number.isInteger(pin.registryGeneration) || pin.registryGeneration < 0) throw new TypeError('accountability registryGeneration is invalid');
+  if (!exactKeys(pin.milestone, ['criteria', 'checkpoint'])) throw new TypeError('accountability milestone has unsupported fields');
+  if (!ACCOUNTABILITY_PIN_REASONS.includes(pin.reason)) throw new TypeError('accountability pin reason is unsupported');
+  const normalized = {
+    contract: ACCOUNTABILITY_PIN_CONTRACT,
+    reference,
+    registryGeneration: pin.registryGeneration,
+    scopeDigest: validateDigest(pin.scopeDigest, 'accountability scopeDigest'),
+    briefDigest: validateDigest(pin.briefDigest, 'accountability briefDigest'),
+    owner: accountabilityOpaque(pin.owner, 'accountability owner'),
+    responsibility: pin.responsibility,
+    milestone: {
+      criteria: normalizeAccountabilityCriteria(pin.milestone.criteria, 'accountability milestone criteria'),
+      checkpoint: normalizeAccountabilityCheckpoint(pin.milestone.checkpoint, 'accountability milestone checkpoint'),
+    },
+    reason: pin.reason,
+    pinnedAt: timestamp(pin.pinnedAt, 'accountability pinnedAt'),
+  };
+  if (ongoing) {
+    if (!exactKeys(pin.maintenance, ['owner', 'revisitTrigger'])) throw new TypeError('ongoing accountability requires a maintenance owner and revisit trigger');
+    normalized.maintenance = {
+      owner: accountabilityOpaque(pin.maintenance.owner, 'accountability maintenance owner'),
+      revisitTrigger: normalizeAccountabilityCheckpoint(pin.maintenance.revisitTrigger, 'accountability maintenance revisitTrigger'),
+    };
+  }
+  return { ok: true, pin: normalized };
+}
+
+function createAccountabilityPin(input) {
+  if (!isPlainObject(input)) throw new TypeError('accountability pin input is required');
+  return validateAccountabilityPin({ ...input, contract: input.contract === undefined ? ACCOUNTABILITY_PIN_CONTRACT : input.contract }).pin;
+}
+
+function accountabilityPinDigest(pin) {
+  return digest(validateAccountabilityPin(pin).pin);
+}
+
 function validateExplicitHandoff(handoff) {
-  if (!exactKeys(handoff, [
+  const hasAccountability = isPlainObject(handoff) && Object.prototype.hasOwnProperty.call(handoff, 'accountability');
+  const handoffFields = [
     'contract', 'operationId', 'fromAuthority', 'toAuthority', 'state', 'canonical', 'executionReference', 'externalReference',
     'requestedAt', 'confirmedAt', 'evidenceRefs',
-  ])) throw new TypeError('explicit handoff has unsupported fields');
+  ];
+  if (!exactKeys(handoff, hasAccountability ? [...handoffFields, 'accountability'] : handoffFields)) throw new TypeError('explicit handoff has unsupported fields');
   if (handoff.contract !== HANDOFF_CONTRACT) throw new TypeError('explicit handoff has an unsupported contract');
   const fromAuthority = requiredString(handoff.fromAuthority, 'handoff fromAuthority');
   const toAuthority = requiredString(handoff.toAuthority, 'handoff toAuthority');
@@ -322,22 +449,29 @@ function validateExplicitHandoff(handoff) {
   if ((state === 'external-created' || state === 'external-owned') && !externalReference) throw new TypeError('external handoff states require externalReference');
   const confirmedAt = optionalTimestamp(handoff.confirmedAt, 'handoff confirmedAt');
   if (state === 'external-owned' && !confirmedAt) throw new TypeError('external-owned handoffs require confirmedAt');
-  return {
-    ok: true,
-    handoff: {
-      contract: HANDOFF_CONTRACT,
-      operationId: requiredString(handoff.operationId, 'handoff operationId'),
-      fromAuthority,
-      toAuthority,
-      state,
-      canonical,
-      executionReference,
-      externalReference,
-      requestedAt: timestamp(handoff.requestedAt, 'handoff requestedAt'),
-      confirmedAt,
-      evidenceRefs: evidenceRefs(handoff.evidenceRefs, 'handoff evidenceRefs'),
-    },
+  const normalized = {
+    contract: HANDOFF_CONTRACT,
+    operationId: requiredString(handoff.operationId, 'handoff operationId'),
+    fromAuthority,
+    toAuthority,
+    state,
+    canonical,
+    executionReference,
+    externalReference,
+    requestedAt: timestamp(handoff.requestedAt, 'handoff requestedAt'),
+    confirmedAt,
+    evidenceRefs: evidenceRefs(handoff.evidenceRefs, 'handoff evidenceRefs'),
   };
+  if (hasAccountability) {
+    // Optional pin: legacy handoffs stay exact-key valid without it. When
+    // present it must bind the same canonical record at the same revision.
+    const accountability = validateAccountabilityPin(handoff.accountability).pin;
+    if (accountability.reference.id !== canonical.id || accountability.reference.revision !== canonical.revision) {
+      throw new TypeError('handoff accountability pin targets a different canonical record or revision');
+    }
+    normalized.accountability = accountability;
+  }
+  return { ok: true, handoff: normalized };
 }
 
 function createExplicitHandoff(input) {
@@ -819,6 +953,17 @@ function createHostAdmission({ producerId, secret, allowedKinds = [], allowedPro
 }
 
 module.exports = {
+  ACCOUNTABILITY_MAX_CRITERIA,
+  ACCOUNTABILITY_PIN_CONTRACT,
+  ACCOUNTABILITY_PIN_REASONS,
+  ACCOUNTABILITY_RESPONSIBILITIES,
+  accountabilityCriterionDigest,
+  accountabilityPinDigest,
+  accountabilityScopeDigest,
+  createAccountabilityPin,
+  normalizeAccountabilityCheckpoint,
+  normalizeAccountabilityCriteria,
+  validateAccountabilityPin,
   ACTIVITY_FIELDS,
   ADMISSION_FIELDS,
   ADMITTED_INFERENCE_EVIDENCE_CONTRACT,

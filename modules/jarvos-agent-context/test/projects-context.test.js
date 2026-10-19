@@ -1115,3 +1115,302 @@ test('fixture host: extra request keys and malformed ids are rejected before the
     assert.deepEqual(counters, { read: 0, readRoster: 0, readRecord: 0 });
   });
 });
+
+// ---- accountability resume consumer (fictional fixtures; source-only, not live host) ----
+const {
+  HYDRATION_ACCOUNTABILITY_PIN,
+  HYDRATION_ACCOUNTABILITY_BRIEF,
+  checkProjectsAccountabilityResume,
+} = require('../src/index.js');
+const {
+  accountabilityScopeDigest: fixtureScopeDigest,
+  createAccountabilityPin: fixtureCreatePin,
+  createCanonicalReference: fixtureCanonicalReference,
+} = require(path.join(PROJECTS_SOURCE, 'provider-contracts.js'));
+
+const ACCEPTED_BRIEF = 'c'.repeat(64);
+const REVISED_BRIEF = 'd'.repeat(64);
+const FIXTURE_CRITERIA = Object.freeze([
+  Object.freeze({ criterionId: 'crit-a', acceptance: 'Lantern route guide reviewed by fixture owner' }),
+  Object.freeze({ criterionId: 'crit-b', acceptance: 'Lantern map exported' }),
+]);
+
+// Builds a real registry + packet; `amend` (if any) bumps the outcome revision
+// after the pin baseline is captured.
+function accountabilityWorld({ amend = null } = {}) {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-agent-context-accountability-'));
+  try {
+    const registry = new ProjectRegistry({ stateDir, now: () => '2026-08-08T12:00:00.000Z' });
+    const root = registry.create({ title: 'Fixture Garden', declaredPriority: 'high' }).record;
+    const outcome = registry.create({
+      kind: 'outcome', title: 'Lantern route', parentId: root.id,
+      goal: 'Lantern route is documented', definitionOfDone: 'Route guide reviewed and map exported',
+    }).record;
+    const pinnedRecord = registry.get(outcome.id);
+    if (amend) registry.update(outcome.id, amend, { expectedRevision: pinnedRecord.revision });
+    const query = { ...QUERY, scope: { projectIds: [root.id], outcomeIds: [outcome.id], includeDescendants: false } };
+    const capability = issueCapability({
+      authorization: { allowed: true }, hostId: 'projects-host', hostSecret: 'test-only-host-secret', subject: 'agent:test-session',
+      query, redactionClass: 'private', providerCoverage: [], capabilityRevision: 'projects-context-cap-1',
+      issuedAt: '2026-08-08T12:00:00.000Z', expiresAt: '2026-08-08T13:00:00.000Z', nonce: 'agent-context-accountability-nonce',
+    });
+    const result = buildContextPacket({
+      registry, query, capability, capabilitySecret: 'test-only-host-secret', subject: 'agent:test-session', hostId: 'projects-host',
+      providers: {}, now: '2026-08-08T12:00:00.000Z',
+    });
+    assert.equal(result.status, 'ok');
+    return { packet: result.packet, pinnedRecord, records: registry.snapshot().records, outcomeId: outcome.id };
+  } finally {
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
+function accountabilityProvider(world, { recordMode = 'ok', counters = { readRecord: 0 } } = {}) {
+  return {
+    defaultQuery: QUERY,
+    read: async ({ query }) => ({ status: 'ok', packet: { ...world.packet, query } }),
+    readRecord: async ({ recordId, expectedGeneration, expectedRevision }) => {
+      counters.readRecord += 1;
+      if (recordMode === 'unavailable') return { status: 'unavailable', code: 'RECORD_UNAVAILABLE' };
+      const record = world.records[recordId];
+      if (!record || expectedGeneration !== world.packet.canonical.generation || record.revision !== expectedRevision) {
+        return { status: 'unavailable', code: 'RECORD_STALE' };
+      }
+      const shaped = recordMode === 'compacted'
+        ? { id: record.id, kind: record.kind, revision: record.revision, title: record.title, compacted: true }
+        : record;
+      return { status: 'ok', read: { contract: 'jarvos.projects-record/v1', generation: expectedGeneration, contentTrust: 'data-only', redactionClass: 'private', record: shaped } };
+    },
+  };
+}
+
+function fixturePin(record, overrides = {}) {
+  const reference = fixtureCanonicalReference({
+    contract: 'jarvos.canonical-reference/v1', kind: record.kind, id: record.id, revision: record.revision, breadcrumb: 'Fixture Garden › Lantern route',
+  });
+  return fixtureCreatePin({
+    reference, registryGeneration: 1,
+    scopeDigest: fixtureScopeDigest({ reference, goal: record.goal, definitionOfDone: record.definitionOfDone, criteria: FIXTURE_CRITERIA }),
+    briefDigest: ACCEPTED_BRIEF, owner: 'actor_fixture_owner', responsibility: 'finite-outcome',
+    milestone: { criteria: FIXTURE_CRITERIA.map((criterion) => ({ ...criterion })), checkpoint: { type: 'event', event: 'route-guide-reviewed' } },
+    reason: 'resume', pinnedAt: '2026-08-08T12:00:00.000Z',
+    ...overrides,
+  });
+}
+
+// Host-supplied in-process resolver; records each call so tests can assert
+// whether the accepted brief was consulted.
+function hostBrief(briefDigest, status = 'accepted', calls = []) {
+  const resolver = async (request) => { calls.push(request); return { briefDigest, status }; };
+  resolver.calls = calls;
+  return resolver;
+}
+
+test('accountability resume: current pin with host-bound current brief is pinned/current', async () => {
+  const world = accountabilityWorld();
+  const pin = fixturePin(world.pinnedRecord);
+  const currentBrief = hostBrief(ACCEPTED_BRIEF);
+  const check = await checkProjectsAccountabilityResume({ pin, provider: accountabilityProvider(world), currentBrief });
+  assert.equal(check.status, 'pinned');
+  assert.equal(check.ok, true);
+  assert.equal(check.code, null);
+  assert.equal(check.briefState, 'current');
+  assert.equal(check.repair, null);
+  assert.equal(check.revisionRefreshed, false);
+  assert.equal(check.currentRevision, check.pinnedRevision);
+  assert.deepEqual(currentBrief.calls, [{ referenceId: world.outcomeId, currentRevision: 1, registryGeneration: world.packet.canonical.generation }]);
+  assert.match(check.markdown, /accepted brief: current/);
+  assert.match(check.markdown, /does not accept criteria, change lifecycle, or authorize work/);
+});
+
+test('accountability resume: nonmaterial revision/generation refresh stays current without erasing accepted criteria', async () => {
+  const baseline = accountabilityWorld();
+  const pin = fixturePin(baseline.pinnedRecord);
+  const world = accountabilityWorld({ amend: { title: 'Lantern route (renamed)' } });
+  assert.notEqual(world.packet.canonical.generation, baseline.packet.canonical.generation);
+  const currentBrief = hostBrief(ACCEPTED_BRIEF);
+  const check = await checkProjectsAccountabilityResume({ pin, provider: accountabilityProvider(world), currentBrief });
+  assert.equal(check.status, 'pinned');
+  assert.equal(check.briefState, 'current');
+  assert.equal(check.revisionRefreshed, true);
+  assert.equal(check.pinnedRevision, 1);
+  assert.equal(check.currentRevision, 2);
+  assert.equal(currentBrief.calls[0].currentRevision, 2);
+  assert.match(check.markdown, /revision refreshed; material scope unchanged/);
+  assert.deepEqual(pin.milestone.criteria, FIXTURE_CRITERIA.map((criterion) => ({ ...criterion })), 'accepted criteria are retained on the pin');
+});
+
+test('accountability resume: changed goal or definition of done is stale-scope and never consults the brief', async () => {
+  const baseline = accountabilityWorld();
+  const pin = fixturePin(baseline.pinnedRecord);
+  for (const amend of [{ goal: 'Lantern route is retired' }, { definitionOfDone: 'Only the map is exported' }]) {
+    const world = accountabilityWorld({ amend });
+    const currentBrief = hostBrief(ACCEPTED_BRIEF);
+    const check = await checkProjectsAccountabilityResume({ pin, provider: accountabilityProvider(world), currentBrief });
+    const label = Object.keys(amend)[0];
+    assert.equal(check.status, 'stale-scope', label);
+    assert.equal(check.ok, false, label);
+    assert.equal(check.code, 'ACCOUNTABILITY_SCOPE_CHANGED', label);
+    assert.equal(check.repair, 're-pin-with-owner', label);
+    assert.equal(check.nextOwner, 'actor_fixture_owner', label);
+    assert.equal(currentBrief.calls.length, 0, label);
+  }
+});
+
+test('accountability resume: changed or superseded accepted brief is stale even when canonical text is unchanged', async () => {
+  const world = accountabilityWorld();
+  const pin = fixturePin(world.pinnedRecord);
+  const revised = await checkProjectsAccountabilityResume({ pin, provider: accountabilityProvider(world), currentBrief: hostBrief(REVISED_BRIEF) });
+  assert.equal(revised.status, 'stale-brief');
+  assert.equal(revised.ok, false);
+  assert.equal(revised.code, 'ACCOUNTABILITY_BRIEF_CHANGED');
+  assert.equal(revised.briefState, 'revised');
+  assert.equal(revised.repair, 're-pin-with-owner');
+  const superseded = await checkProjectsAccountabilityResume({ pin, provider: accountabilityProvider(world), currentBrief: hostBrief(ACCEPTED_BRIEF, 'superseded') });
+  assert.equal(superseded.status, 'stale-brief');
+  assert.equal(superseded.code, 'ACCOUNTABILITY_BRIEF_SUPERSEDED');
+  assert.equal(superseded.briefState, 'superseded');
+});
+
+test('accountability resume: absent, JSON-shaped or malformed brief binding is pending, never current', async () => {
+  const world = accountabilityWorld();
+  const pin = fixturePin(world.pinnedRecord);
+  const provider = accountabilityProvider(world);
+  const unbound = await checkProjectsAccountabilityResume({ pin, provider });
+  assert.equal(unbound.status, 'pending-reconciliation');
+  assert.equal(unbound.code, 'ACCOUNTABILITY_BRIEF_UNBOUND');
+  assert.equal(unbound.repair, 'host-brief-binding-required');
+  assert.equal(unbound.briefState, 'unverified');
+  // A model/MCP-shaped JSON object claiming the accepted digest is not a host binding.
+  const jsonShaped = await checkProjectsAccountabilityResume({ pin, provider, currentBrief: { briefDigest: ACCEPTED_BRIEF, status: 'accepted' } });
+  assert.equal(jsonShaped.status, 'pending-reconciliation');
+  assert.equal(jsonShaped.code, 'ACCOUNTABILITY_BRIEF_BINDING_INVALID');
+  for (const [label, currentBrief] of [
+    ['extra keys', async () => ({ briefDigest: ACCEPTED_BRIEF, status: 'accepted', approvedBy: 'model' })],
+    ['bad digest', async () => ({ briefDigest: 'not-a-digest', status: 'accepted' })],
+    ['bad status', async () => ({ briefDigest: ACCEPTED_BRIEF, status: 'approved' })],
+    ['throws', async () => { throw new Error('private resolver path /tmp/secret'); }],
+  ]) {
+    const check = await checkProjectsAccountabilityResume({ pin, provider, currentBrief });
+    assert.equal(check.status, 'pending-reconciliation', label);
+    assert.equal(check.code, 'ACCOUNTABILITY_BRIEF_UNAVAILABLE', label);
+    assert.doesNotMatch(check.markdown, /secret|approvedBy/, label);
+  }
+});
+
+test('accountability resume: unavailable, compacted or out-of-scope exact reads are pending and owned', async () => {
+  const world = accountabilityWorld();
+  const pin = fixturePin(world.pinnedRecord);
+  for (const recordMode of ['unavailable', 'compacted']) {
+    const currentBrief = hostBrief(ACCEPTED_BRIEF);
+    const check = await checkProjectsAccountabilityResume({ pin, provider: accountabilityProvider(world, { recordMode }), currentBrief });
+    assert.equal(check.status, 'pending-reconciliation', recordMode);
+    assert.equal(check.code, 'ACCOUNTABILITY_DETAIL_UNAVAILABLE', recordMode);
+    assert.equal(check.repair, 'host-accountability-binding-required', recordMode);
+    assert.equal(check.nextOwner, 'actor_fixture_owner', recordMode);
+    assert.equal(currentBrief.calls.length, 0, recordMode);
+  }
+  const counters = { readRecord: 0 };
+  const outOfScopePin = fixturePin({ ...world.pinnedRecord, id: 'out_000099' });
+  const outOfScope = await checkProjectsAccountabilityResume({ pin: outOfScopePin, provider: accountabilityProvider(world, { counters }), currentBrief: hostBrief(ACCEPTED_BRIEF) });
+  assert.equal(outOfScope.status, 'pending-reconciliation');
+  assert.equal(outOfScope.code, 'ACCOUNTABILITY_REFERENCE_OUT_OF_SCOPE');
+  assert.equal(counters.readRecord, 0, 'out-of-scope references are never read');
+  const invalid = await checkProjectsAccountabilityResume({ pin: { ...pin, owner: undefined }, provider: accountabilityProvider(world) });
+  assert.equal(invalid.code, 'ACCOUNTABILITY_PIN_INVALID');
+});
+
+test('hydrate: host-bound pin and brief symbols drive the resume check; string keys are ignored and legacy hydration is unchanged', async () => {
+  const world = accountabilityWorld();
+  const pin = fixturePin(world.pinnedRecord);
+  const provider = accountabilityProvider(world);
+  await withTempContextEnv(async () => {
+    const legacy = await hydrate({ sessionThread: false, maxChars: 12000, [HYDRATION_PROJECTS_PROVIDER]: provider });
+    assert.equal(legacy.report.projectsContext.status, 'ok');
+    assert.equal(legacy.report.accountability, undefined);
+    assert.doesNotMatch(legacy.markdown, /Accountability resume check/);
+
+    const modelShaped = await hydrate({
+      sessionThread: false, maxChars: 12000, [HYDRATION_PROJECTS_PROVIDER]: provider,
+      accountabilityPin: pin, currentBrief: { briefDigest: ACCEPTED_BRIEF, status: 'accepted' },
+    });
+    assert.equal(modelShaped.report.accountability, undefined);
+    assert.doesNotMatch(modelShaped.markdown, /Accountability resume check/);
+
+    const current = await hydrate({
+      sessionThread: false, maxChars: 12000, [HYDRATION_PROJECTS_PROVIDER]: provider,
+      [HYDRATION_ACCOUNTABILITY_PIN]: pin, [HYDRATION_ACCOUNTABILITY_BRIEF]: hostBrief(ACCEPTED_BRIEF),
+    });
+    assert.deepEqual(current.report.accountability, { status: 'pinned', code: null, briefState: 'current' });
+    assert.match(current.markdown, /Accountability resume check/);
+    assert.ok(current.report.handles.includes('Accountability resume: pinned'));
+
+    const changed = await hydrate({
+      sessionThread: false, maxChars: 12000, [HYDRATION_PROJECTS_PROVIDER]: provider,
+      [HYDRATION_ACCOUNTABILITY_PIN]: pin, [HYDRATION_ACCOUNTABILITY_BRIEF]: hostBrief(REVISED_BRIEF),
+    });
+    assert.deepEqual(changed.report.accountability, { status: 'stale-brief', code: 'ACCOUNTABILITY_BRIEF_CHANGED', briefState: 'revised' });
+
+    const pending = await hydrate({
+      sessionThread: false, maxChars: 12000, [HYDRATION_PROJECTS_PROVIDER]: accountabilityProvider(world, { recordMode: 'unavailable' }),
+      [HYDRATION_ACCOUNTABILITY_PIN]: pin, [HYDRATION_ACCOUNTABILITY_BRIEF]: hostBrief(ACCEPTED_BRIEF),
+    });
+    assert.equal(pending.report.accountability.status, 'pending-reconciliation');
+    assert.equal(pending.report.projectsContext.status, 'ok', 'unrelated Projects context is not suppressed');
+    assert.match(pending.markdown, /Lantern route/);
+  });
+});
+
+test('Codex and Claude session-start hooks forward host-bound accountability symbols through the options spread; no pin keeps legacy output', async () => {
+  const world = accountabilityWorld();
+  const pin = fixturePin(world.pinnedRecord);
+  const provider = accountabilityProvider(world);
+  // Same trusted fixture stack as the hydrate test; maxChars is passed so the
+  // hook budget does not depend on ambient env. Timestamps are normalized.
+  const base = { sessionThread: false, maxChars: 12000, [HYDRATION_PROJECTS_PROVIDER]: provider };
+  const normalize = (text) => text.replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, '<ts>');
+  await withTempContextEnv(async () => {
+    const hooks = [
+      ['codex', (options) => codexStartupHydration(options)],
+      ['claude', (options) => claudeStartupHydration({}, options)],
+    ];
+    for (const [label, run] of hooks) {
+      const current = await run({ ...base, [HYDRATION_ACCOUNTABILITY_PIN]: pin, [HYDRATION_ACCOUNTABILITY_BRIEF]: hostBrief(ACCEPTED_BRIEF) });
+      assert.equal(typeof current, 'string', label);
+      assert.match(current, /### Accountability resume check/, label);
+      assert.match(current, new RegExp(`${world.outcomeId} r1→r1: pinned; owner: actor_fixture_owner; accepted brief: current`), label);
+      assert.doesNotMatch(current, /Repair:/, label);
+
+      const changed = await run({ ...base, [HYDRATION_ACCOUNTABILITY_PIN]: pin, [HYDRATION_ACCOUNTABILITY_BRIEF]: hostBrief(REVISED_BRIEF) });
+      assert.match(changed, /: stale-brief \[ACCOUNTABILITY_BRIEF_CHANGED\]; owner: actor_fixture_owner; accepted brief: revised/, label);
+      assert.match(changed, /Repair: re-pin-with-owner; next owner: actor_fixture_owner/, label);
+
+      const legacy = await run({ ...base });
+      assert.doesNotMatch(legacy, /Accountability resume check/, label);
+      assert.match(legacy, /Lantern route/, label);
+      const direct = await hydrate({ ...base });
+      assert.equal(direct.report.accountability, undefined, label);
+      assert.equal(normalize(legacy), normalize(direct.markdown), `${label}: no host pin leaves hook output identical to legacy hydrate`);
+    }
+  });
+});
+
+test('startup brief: host-bound pin and brief symbols render current vs stale accepted brief', async () => {
+  const world = accountabilityWorld();
+  const pin = fixturePin(world.pinnedRecord);
+  setProjectsContextProvider(accountabilityProvider(world));
+  try {
+    const legacy = await startupBrief({ maxChars: 8000 });
+    assert.doesNotMatch(legacy.markdown, /Accountability resume check/);
+    const current = await startupBrief({ maxChars: 8000, [HYDRATION_ACCOUNTABILITY_PIN]: pin, [HYDRATION_ACCOUNTABILITY_BRIEF]: hostBrief(ACCEPTED_BRIEF) });
+    assert.match(current.markdown, /: pinned; owner: actor_fixture_owner; accepted brief: current/);
+    const superseded = await startupBrief({ maxChars: 8000, [HYDRATION_ACCOUNTABILITY_PIN]: pin, [HYDRATION_ACCOUNTABILITY_BRIEF]: hostBrief(ACCEPTED_BRIEF, 'superseded') });
+    assert.match(superseded.markdown, /stale-brief \[ACCOUNTABILITY_BRIEF_SUPERSEDED\]/);
+    assert.match(superseded.markdown, /Repair: re-pin-with-owner/);
+    const unbound = await startupBrief({ maxChars: 8000, [HYDRATION_ACCOUNTABILITY_PIN]: pin });
+    assert.match(unbound.markdown, /pending-reconciliation \[ACCOUNTABILITY_BRIEF_UNBOUND\]/);
+    assert.match(unbound.markdown, /Lantern route/, 'Projects orientation still renders');
+  } finally {
+    setProjectsContextProvider(null);
+  }
+});

@@ -8,6 +8,7 @@ const { STATUS_BY_KIND, validateInferenceMetadata } = require('./records');
 const inferenceContracts = require('./project-inference-contracts');
 const { ENGINE_REVISION, POLICY_REVISION } = require('./project-inference-reconciler');
 const { attentionSummaries, deriveIntentGapAttention } = require('./intent-gap-attention');
+const { accountabilityAttentionSummaries, deriveAccountabilityAttention } = require('./accountability-attention');
 const {
   CONTEXT_CONTRACT,
   PROOF_CONTRACT: PORTFOLIO_PROOF_CONTRACT,
@@ -1080,7 +1081,7 @@ function verifyPortfolioProof(proof, { capability, capabilitySecret, subject, ho
   }
 }
 
-function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, intentGaps = null, now = new Date().toISOString() } = {}) {
+function buildContextPacket({ registry, query, providers = {}, providerAuthorities = {}, capability, capabilitySecret, subject, hostId, activityWindow = null, inference = null, intentGaps = null, accountability = null, now = new Date().toISOString() } = {}) {
   let normalizedQuery;
   try { normalizedQuery = validateContextQuery(query); } catch (_) { return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' }; }
   let normalizedActivityWindow;
@@ -1147,6 +1148,32 @@ function buildContextPacket({ registry, query, providers = {}, providerAuthoriti
       allSummaries.push(...attentionSummaries(derived.entries, { observedAt: now }));
     } catch (_) {
       return { status: 'unavailable', code: 'CONTEXT_UNAVAILABLE' };
+    }
+  }
+  // Optional derived accountability attention. Absent input leaves legacy
+  // packets byte-identical. Scope filtering happens before any pin/signal is
+  // normalized or verified, and a bad accountability input degrades to an
+  // omission instead of blanking the packet.
+  if (accountability !== null && accountability !== undefined) {
+    if (redactionClass === 'public') {
+      packetOmissions.push('accountability:redacted');
+    } else if (!Array.isArray(accountability.pins) || (accountability.signals !== undefined && !Array.isArray(accountability.signals))) {
+      packetOmissions.push('accountability:invalid-input');
+    } else {
+      try {
+        const derived = deriveAccountabilityAttention({
+          records: selectedRecords,
+          registryGeneration: registry.generation,
+          pins: accountability.pins.filter((entry) => entry && entry.pin && entry.pin.reference && selectedIds.has(entry.pin.reference.id)),
+          signals: (accountability.signals || []).filter((signal) => signal && selectedIds.has(signal.referenceId)),
+          sourceAuthority: accountability.sourceAuthority || null,
+          now,
+        });
+        allSummaries.push(...accountabilityAttentionSummaries(derived, { observedAt: now }));
+        packetOmissions.push(...derived.omissions);
+      } catch (_) {
+        packetOmissions.push('accountability:unavailable');
+      }
     }
   }
   for (const provider of allProviderNames) {
