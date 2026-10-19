@@ -40,6 +40,12 @@ function writeOwnerFile(filePath, contents) {
   fs.chmodSync(filePath, 0o600);
 }
 
+function writeFixtureBeadsExecutable(workspaceRoot) {
+  const executable = path.join(fs.realpathSync(workspaceRoot), 'br');
+  fs.writeFileSync(executable, '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+  return executable;
+}
+
 test('unset work-action host vars stay unavailable and name what to configure', async () => {
   await withWorkActionEnv({}, async () => {
     const result = await callTool('jarvos_todo_list', {});
@@ -738,8 +744,7 @@ test('the documented host binding actually starts from a workspace copy', async 
     fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
     fs.chmodSync(hostModule, 0o600);
     const configPath = path.join(workspaceRoot, 'projects.json');
-    const beadsExecutable = path.join(fs.realpathSync(workspaceRoot), 'br');
-    fs.writeFileSync(beadsExecutable, '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+    const beadsExecutable = writeFixtureBeadsExecutable(workspaceRoot);
     const authorizationModule = path.join(workspaceRoot, 'authorize.js');
     const completionModule = path.join(workspaceRoot, 'completion.js');
     writeOwnerFile(authorizationModule, 'module.exports.authorizeMutation = async () => ({ authorized: true });\n');
@@ -829,6 +834,7 @@ test('the live host fails closed when terminal-authority configuration is incomp
     const base = {
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: roots[0],
       workActionOperationStoreRoot: roots[1],
@@ -876,6 +882,7 @@ test('loading the live host never provisions or chmods configured state roots', 
     writeOwnerFile(configPath, JSON.stringify({
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: missingRoot,
       workActionOperationStoreRoot: path.join(workspaceRoot, 'also-missing'),
@@ -916,6 +923,7 @@ test('the live host rejects owner-only state below non-sticky writable ancestry'
     writeOwnerFile(configPath, JSON.stringify({
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: roots[0],
       workActionOperationStoreRoot: roots[1],
@@ -958,6 +966,7 @@ test('the live host rejects executable authorization modules below unsafe nested
     writeOwnerFile(configPath, JSON.stringify({
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: roots[0],
       workActionOperationStoreRoot: roots[1],
