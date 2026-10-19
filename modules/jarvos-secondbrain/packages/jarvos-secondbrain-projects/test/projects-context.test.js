@@ -19,6 +19,10 @@ const {
 } = require('../src/intent-gap-attention');
 const {
   PROVIDER_STATES,
+  accountabilityPinDigest,
+  accountabilityScopeDigest,
+  createAccountabilityPin,
+  createCanonicalReference,
   createHostAdmission,
   submitAgentObservation,
   validateProviderSnapshot,
@@ -232,6 +236,60 @@ test('an unresolved intent gap leaves an already-authorized Todo in current work
   assert.equal(result.status, 'ok');
   assert.deepEqual(result.packet.currentWork.map((summary) => summary.id), ['todo-authorized']);
   assert.deepEqual(result.packet.attention.map((summary) => summary.status), ['unresolved-intent']);
+});
+
+test('accountability attention is optional, scope-filtered before verification, public-redacted, and never blanks the packet', () => {
+  const { registry, root, outcome } = makeRegistry();
+  const query = queryFor(root, outcome);
+  const build = (accountability, overrides = {}) => buildContextPacket({
+    registry, query, capability: issue(query, { nonce: `accountability-${overrides.nonce || 'private'}`, ...(overrides.capability || {}) }), capabilitySecret: SECRET,
+    subject: 'agent:test-session', hostId: 'projects-host', now: NOW, providers: {}, ...(accountability === undefined ? {} : { accountability }),
+  });
+
+  const legacy = build(undefined, { nonce: 'legacy' });
+  assert.equal(legacy.status, 'ok');
+  assert.equal(legacy.packet.omissions.some((omission) => omission.startsWith('accountability:')), false, 'absent input leaves legacy packets unchanged');
+
+  const authority = createHostAdmission({ producerId: 'projects-accountability-source', secret: 'accountability-source-secret', allowedSourceClasses: ['execution'] });
+  const criteria = [{ criterionId: 'crit-a', acceptance: 'Release notes reviewed' }];
+  const reference = createCanonicalReference({
+    contract: 'jarvos.canonical-reference/v1', kind: 'outcome', id: outcome.id, revision: outcome.revision, breadcrumb: 'jarvOS › v1.0.0 release',
+  });
+  const pin = createAccountabilityPin({
+    reference, registryGeneration: registry.generation,
+    scopeDigest: accountabilityScopeDigest({ reference, goal: outcome.goal, definitionOfDone: outcome.definitionOfDone, criteria }),
+    briefDigest: 'b'.repeat(64), owner: 'actor_fixture_owner', responsibility: 'finite-outcome',
+    milestone: { criteria, checkpoint: { type: 'time', at: '2026-08-08T11:00:00.000Z' } }, reason: 'assignment', pinnedAt: NOW,
+  });
+  const evidence = authority.admitEvidenceUnit({
+    observationId: 'obs_packet_accountability', evidenceId: 'ev_packet_accountability', sourceClass: 'execution', occurredAt: NOW, observedAt: NOW,
+    sourceRevision: 'pin-v1', sensitivity: 'public-fixture', coverageState: 'fresh', contentDigest: accountabilityPinDigest(pin),
+  });
+  const accountability = {
+    sourceAuthority: authority,
+    pins: [{ pin, evidence }, { pin: { reference: { id: 'out_999999' }, malformed: true } }],
+    signals: [{ referenceId: 'out_999999', type: 'progress', malformed: true }],
+  };
+  const scoped = build(accountability);
+  assert.equal(scoped.status, 'ok');
+  assert.equal(validateContextPacket(scoped.packet).ok, true);
+  const attention = scoped.packet.attention.filter((summary) => summary.source === 'projects-accountability');
+  assert.deepEqual(attention.map((summary) => [summary.canonicalId, summary.status]), [[outcome.id, 'checkpoint-missed']]);
+  assert.match(attention[0].title, /next owner: actor_fixture_owner/);
+  assert.equal(scoped.packet.omissions.some((omission) => omission.startsWith('accountability:')), false, 'out-of-scope inputs are filtered before normalization');
+
+  const publicResult = build(accountability, { nonce: 'public', capability: { redactionClass: 'public' } });
+  assert.equal(publicResult.status, 'ok');
+  assert.deepEqual(publicResult.packet.attention, []);
+  assert.ok(publicResult.packet.omissions.includes('accountability:redacted'));
+
+  const invalid = build({ pins: 'not-an-array' }, { nonce: 'invalid' });
+  assert.equal(invalid.status, 'ok');
+  assert.ok(invalid.packet.omissions.includes('accountability:invalid-input'));
+
+  const untrusted = build({ pins: [{ pin, evidence }], signals: [] }, { nonce: 'untrusted' });
+  assert.equal(untrusted.status, 'ok');
+  assert.deepEqual(untrusted.packet.attention.map((summary) => summary.status), ['pending-reconciliation']);
 });
 
 test('canonical packet accepts nested projects beneath a project parent', () => {

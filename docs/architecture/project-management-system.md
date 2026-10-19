@@ -92,6 +92,56 @@ repair at its owning boundary, a regression check, and—when the claim is
 operational—selected-runtime and visible-outcome proof. Do not generalize one
 incident into a new framework without a second concrete case.
 
+## Accountability safeguards (source-only)
+
+These safeguards exist in source and fixture tests only. They are not
+installed or live proof, and fixtures are not canonical readback.
+
+- **Pin contract** (`provider-contracts.js`): `createAccountabilityPin` /
+  `validateAccountabilityPin` (`jarvos.accountability-pin/v1`) bind one owner
+  to an exact canonical reference, a material `scopeDigest`
+  (`accountabilityScopeDigest`: identity, goal, definition of done, criterion
+  acceptance text; revision/generation/priority excluded) and the accepted
+  `briefDigest`. Ongoing responsibility requires a maintenance owner and
+  revisit trigger. Pins carry no lifecycle, approval or grant.
+- **Packet attention** (`buildContextPacket({ accountability })`): optional;
+  absent input leaves packets unchanged. Pins/signals are filtered to the
+  selected scope before verification; only trusted admitted progress counts,
+  activity is not delivery, and alerts are deduplicated.
+- **Resume check** (`@jarvos/agent-context`):
+  `checkProjectsAccountabilityResume({ pin, provider?, projectsResult?, currentBrief? })`
+  returns `pinned` (`briefState: current`), `stale-scope`
+  (goal/definition-of-done changed), `stale-brief` (accepted brief changed or
+  superseded) or `pending-reconciliation` (unbound/invalid brief binding,
+  out-of-scope, unavailable or compacted exact read). Unchanged canonical text
+  alone never yields `pinned`. `hydrate` and `startupBrief` run it only when
+  the host supplies the in-process symbols `HYDRATION_ACCOUNTABILITY_PIN` and
+  `HYDRATION_ACCOUNTABILITY_BRIEF` (a function returning exactly
+  `{ briefDigest, status: 'accepted'|'superseded' }`). JSON/MCP arguments
+  cannot supply either; without a pin, output is unchanged. The check never
+  writes, widens scope, accepts criteria or blocks unrelated context.
+- **Scope amendment** (`reconcileAccountabilityScope`) only writes through an
+  injected trusted owner port with compare-and-swap and exact readback; any
+  missing port, denial, conflict or mismatch is an owned
+  `pending-reconciliation`. A success returns an unadmitted re-pin that the
+  host must admit. Packet attention reopens only criteria whose accepted text
+  changed.
+
+Caller forwarding already exists in source: the Codex and Claude session-start
+hooks call `hydrate({ maxChars, ...options })`, so trusted in-process options,
+including both `HYDRATION_ACCOUNTABILITY_PIN` and
+`HYDRATION_ACCOUNTABILITY_BRIEF`, reach the check unchanged (fixture-tested
+through both hook functions).
+
+Not yet adopted: a trusted host pin store that supplies the pin, a live
+full-record host binding for exact reads, a live accepted-brief resolver, and a
+general owner scope-amendment port. Those remain under existing owner
+qualification; this is not live System capability acceptance. Until they are
+bound, behavior is conditional: with no host-bound pin the check does not run
+and legacy hydration/startup output is unchanged; with a bound pin but a
+missing or invalid full-record read or brief resolver, the check reports an
+owned `pending-reconciliation`.
+
 ## Next slice
 
 After this contract is accepted, reuse the existing jarvOS ownership and work
