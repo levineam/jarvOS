@@ -18,3 +18,10 @@ scripts pass the two optional host env vars through to the MCP child when set:
 
 Leave both unset on a public/minimal install. Beads workspace location comes
 from the host config (`beadsWorkspace`, else `workspaceRoot`).
+
+The host config must also supply `beadsExecutable`: a canonical absolute path
+to the host-owned Beads executable. The real adapter validates the file and
+every ancestor: no symlinks, untrusted owners, or group/world-writable paths
+(sticky temporary directories are allowed). Basenames, relative paths and
+ambient `PATH` discovery are refused. This field is passed as the adapter's
+existing `executable` option; it is separate from `beadsWorkspace`.

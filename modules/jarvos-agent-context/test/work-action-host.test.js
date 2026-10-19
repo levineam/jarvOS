@@ -40,6 +40,12 @@ function writeOwnerFile(filePath, contents) {
   fs.chmodSync(filePath, 0o600);
 }
 
+function writeFixtureBeadsExecutable(workspaceRoot) {
+  const executable = path.join(fs.realpathSync(workspaceRoot), 'br');
+  fs.writeFileSync(executable, '#!/bin/sh\nexit 99\n', { mode: 0o700 });
+  return executable;
+}
+
 test('unset work-action host vars stay unavailable and name what to configure', async () => {
   await withWorkActionEnv({}, async () => {
     const result = await callTool('jarvos_todo_list', {});
@@ -548,6 +554,7 @@ test('rerunning Codex setup from a different immutable runtime preserves the sam
       'JARVOS_MANAGED_REPOSITORIES', 'JARVOS_STEWARDSHIP_STABLE_ROOT', 'JARVOS_STEWARDSHIP_ONLY',
       'JARVOS_MANAGED_HARNESS_ROLLBACK', 'JARVOS_CODEX_PROVIDER_MODE', 'JARVOS_PROFILE',
       'JARVOS_WORK_ACTION_SERVICE_MODULE', 'JARVOS_PROJECTS_CONTEXT_CONFIG',
+      'JARVOS_STEWARDSHIP_BRIDGE_COMMAND', 'JARVOS_STEWARDSHIP_CODEX_SESSION_MAP_ROOT',
     ]) delete baseEnv[key];
 
     // A second immutable runtime generation: its own install root, with its
@@ -566,6 +573,9 @@ test('rerunning Codex setup from a different immutable runtime preserves the sam
     fs.writeFileSync(path.join(runtime2CodexDir, 'trust-session-start-hook.js'), '// stub\n');
     fs.copyFileSync(path.join(REPO_ROOT, 'runtimes', 'codex', 'setup.sh'), path.join(runtime2CodexDir, 'setup.sh'));
     fs.chmodSync(path.join(runtime2CodexDir, 'setup.sh'), 0o755);
+    const trustedCommand = path.join('modules', 'jarvos-runtime-kit', 'src', 'trusted-native-command.js');
+    fs.mkdirSync(path.dirname(path.join(runtime2Root, trustedCommand)), { recursive: true });
+    fs.copyFileSync(path.join(REPO_ROOT, trustedCommand), path.join(runtime2Root, trustedCommand));
 
     const runFrom = (setupPath) => {
       const codexHome = path.join(tmp, `codex-home-${path.basename(path.dirname(path.dirname(setupPath))) || 'a'}-${Math.random()}`);
@@ -719,7 +729,7 @@ test('an entrypoint file mode of 0700 does not excuse unsafe ancestry, for both 
   }
 });
 
-test('the documented host binding actually starts from a workspace copy', async () => {
+test('the documented host binding actually starts from a workspace copy', async (t) => {
   // The published setup is: copy examples/work-action-host-service.js into the
   // Projects workspaceRoot as an owner-only file and point the env var at it.
   // That flow could not bind while the example vetted its own coding module the
@@ -734,6 +744,7 @@ test('the documented host binding actually starts from a workspace copy', async 
     fs.copyFileSync(path.join(REPO_ROOT, 'examples', 'work-action-host-service.js'), hostModule);
     fs.chmodSync(hostModule, 0o600);
     const configPath = path.join(workspaceRoot, 'projects.json');
+    const beadsExecutable = writeFixtureBeadsExecutable(workspaceRoot);
     const authorizationModule = path.join(workspaceRoot, 'authorize.js');
     const completionModule = path.join(workspaceRoot, 'completion.js');
     writeOwnerFile(authorizationModule, 'module.exports.authorizeMutation = async () => ({ authorized: true });\n');
@@ -744,9 +755,10 @@ test('the documented host binding actually starts from a workspace copy', async 
     for (const root of [trackerOperationStoreRoot, workActionOperationStoreRoot, executionLinkStoreRoot]) {
       fs.mkdirSync(root, { mode: 0o700 });
     }
-    writeOwnerFile(configPath, JSON.stringify({
+    const config = {
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable,
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot,
       workActionOperationStoreRoot,
@@ -754,7 +766,8 @@ test('the documented host binding actually starts from a workspace copy', async 
       workActionAuthorizationModule: authorizationModule,
       workActionCompletionModule: completionModule,
       registeredCompletionProducers: ['andrew-owner-attestation'],
-    }));
+    };
+    writeOwnerFile(configPath, JSON.stringify(config));
 
     await withWorkActionEnv({
       JARVOS_WORK_ACTION_SERVICE_MODULE: hostModule,
@@ -767,6 +780,36 @@ test('the documented host binding actually starts from a workspace copy', async 
       const roots = [trackerOperationStoreRoot, workActionOperationStoreRoot, executionLinkStoreRoot].map((entry) => fs.realpathSync(entry));
       assert.equal(new Set(roots).size, 3);
       assert.ok(roots.every((entry) => (fs.statSync(entry).mode & 0o077) === 0));
+      const alias = path.join(workspaceRoot, 'br-alias');
+      fs.symlinkSync(beadsExecutable, alias);
+      const parentAlias = path.join(workspaceRoot, 'workspace-alias');
+      fs.symlinkSync(fs.realpathSync(workspaceRoot), parentAlias, 'dir');
+      const unsafeDirectory = path.join(workspaceRoot, 'unsafe-bin');
+      fs.mkdirSync(unsafeDirectory);
+      fs.chmodSync(unsafeDirectory, 0o777);
+      const unsafeExecutable = path.join(unsafeDirectory, 'br');
+      fs.copyFileSync(beadsExecutable, unsafeExecutable);
+      for (const [label, executable] of [
+        ['omitted', undefined], ['basename', 'br'], ['relative', './br'],
+        ['noncanonical', path.join(workspaceRoot, 'bin') + '/../br'],
+        ['symlink leaf', alias], ['symlink ancestor', path.join(parentAlias, 'br')],
+        ['unsafe ancestor', unsafeExecutable],
+      ]) {
+        await t.test(`refuses ${label} Beads executable`, () => {
+          writeOwnerFile(configPath, JSON.stringify({ ...config, beadsExecutable: executable }));
+          const { service, error } = loadHostWorkActionService();
+          assert.equal(service, null);
+          assert.match(error, /Beads executable/);
+        });
+      }
+      await t.test('refuses a group-writable Beads executable', () => {
+        writeOwnerFile(configPath, JSON.stringify(config));
+        fs.chmodSync(beadsExecutable, 0o770);
+        const { service, error } = loadHostWorkActionService();
+        assert.equal(service, null);
+        assert.match(error, /Beads executable/);
+        fs.chmodSync(beadsExecutable, 0o700);
+      });
     });
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
@@ -791,6 +834,7 @@ test('the live host fails closed when terminal-authority configuration is incomp
     const base = {
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: roots[0],
       workActionOperationStoreRoot: roots[1],
@@ -838,6 +882,7 @@ test('loading the live host never provisions or chmods configured state roots', 
     writeOwnerFile(configPath, JSON.stringify({
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: missingRoot,
       workActionOperationStoreRoot: path.join(workspaceRoot, 'also-missing'),
@@ -878,6 +923,7 @@ test('the live host rejects owner-only state below non-sticky writable ancestry'
     writeOwnerFile(configPath, JSON.stringify({
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: roots[0],
       workActionOperationStoreRoot: roots[1],
@@ -920,6 +966,7 @@ test('the live host rejects executable authorization modules below unsafe nested
     writeOwnerFile(configPath, JSON.stringify({
       workspaceRoot,
       beadsWorkspace: workspaceRoot,
+      beadsExecutable: writeFixtureBeadsExecutable(workspaceRoot),
       beadsWorkspaceId: 'test-beads-workspace',
       trackerOperationStoreRoot: roots[0],
       workActionOperationStoreRoot: roots[1],
