@@ -819,15 +819,17 @@ function inventoryDeclaredRootsOperator(options = {}) {
 
 function inventoryAssessOperator(options = {}) {
   return withMutationLease(options.configPath, 'inventory-assess', () => {
+    const enabled = loadConfig(options.configPath).config.inventory.enabled === true;
+    const autoAdmit = enabled && options.autoAdmit === true;
     const result = inventoryOperator({
       configPath: options.configPath,
       controlRoot: options.controlRoot,
-      persist: options.persist !== false,
+      persist: enabled && options.persist !== false,
       assess: true,
-      autoAdmit: options.autoAdmit !== false,
+      autoAdmit,
       observedAt: options.observedAt,
       reviewer: options.reviewer || null,
-      saveConfig: true,
+      saveConfig: autoAdmit,
       // Load document in-process for redacted classification summary only.
       includeDocument: true,
     });

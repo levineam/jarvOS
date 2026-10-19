@@ -94,6 +94,8 @@ function eventsFor(result, {
   failureCause = null,
 } = {}) {
   requireNotificationContract();
+  if (result?.ok === true && result.ran === false
+    && result.reason === 'inventory_disabled' && !failureCause) return [];
   const raised = Array.isArray(result?.attention?.raised) ? result.attention.raised : [];
   const resolved = Array.isArray(result?.attention?.resolved) ? result.attention.resolved : [];
   const createdDecisions = Array.isArray(result?.decisions?.items) ? result.decisions.items : [];

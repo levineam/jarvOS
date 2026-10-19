@@ -250,7 +250,7 @@ const TOOLS = [
   },
   {
     name: 'jarvos_shared_skills',
-    description: 'Inspect and manage cross-harness shared-skill parity. Status and explain are redacted reads; all other operations require the host-bound owner session and never reveal private names, paths, or bodies. Pending decisions are reminded hourly; acknowledge-decision and defer-decision pause reminders without resolving, and resume-decision restores them.',
+    description: 'Inspect and explicitly manage cross-harness shared skills. Status and explain are redacted reads; all other operations require the host-bound owner session and never reveal private names, paths, or bodies. Hourly reminders and automatic resolution follow-up require enabled autonomous inventory. With inventory disabled, assessment is read-only and resolution does not start automatic repair. Acknowledge-decision and defer-decision pause reminders without resolving; resume-decision restores eligibility, but disabled automation does not deliver reminders.',
     inputSchema: {
       type: 'object',
       required: ['operation'],
@@ -935,7 +935,7 @@ async function callTool(name, args = {}, lifecycle = {}) {
       // The decision store verifies the source digest immediately before this
       // callback. Details is intentionally a no-op; exclusion is delegated to
       // the established single-skill operator, never a caller-provided path.
-      const inventory = skills.inventoryAssessOperator({ configPath, persist: false, includeDocument: true });
+      const inventory = skills.inventoryAssessOperator({ configPath, persist: false, autoAdmit: false, includeDocument: true });
       const decision = skills.explainDecisionOperator({ configPath, principal, decisionId: args.decisionId, decisionReference: args.decisionReference }).decision;
       const currentSkill = (inventory.document?.skills || []).find((skill) => skill.logicalId === decision?.skill) || null;
       const result = skills.resolveDecisionOperator({
@@ -952,11 +952,15 @@ async function callTool(name, args = {}, lifecycle = {}) {
       }
       let postResolution = { status: 'pending' };
       try {
-        const followup = skills.autonomousRepairOperator({ configPath });
-        postResolution = {
-          status: followup.ok && followup.mutationDenied !== true ? 'completed' : 'pending',
-          reason: followup.reason || null,
-        };
+        if (skills.loadConfig(configPath).config.inventory.enabled !== true) {
+          postResolution = { status: 'disabled', reason: 'inventory_disabled' };
+        } else {
+          const followup = skills.autonomousRepairOperator({ configPath });
+          postResolution = {
+            status: followup.ok && followup.mutationDenied !== true ? 'completed' : 'pending',
+            reason: followup.reason || null,
+          };
+        }
       } catch {
         // The durable resolution receipt is authoritative; a later scheduled
         // repair can safely retry if this immediate follow-up is unavailable.

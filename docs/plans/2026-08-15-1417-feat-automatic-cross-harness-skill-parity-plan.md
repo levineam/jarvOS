@@ -3,7 +3,7 @@ title: Automatic Cross-Harness Skill Parity
 type: feat
 date: 2026-08-15
 artifact_contract: ce-unified-plan/v1
-artifact_readiness: implementation-ready
+status: superseded
 product_contract_source: ce-plan-bootstrap
 strategy_source: STRATEGY.md
 execution: code
@@ -12,6 +12,11 @@ deepened: 2026-08-15
 
 <!-- markdownlint-disable-file MD025 -->
 # Automatic Cross-Harness Skill Parity
+
+> Superseded by the October 19 explicit-sharing retirement decision and
+> [current scoped plan](2026-10-19-fix-explicit-skill-sync-retirement-plan.md).
+> Preserve this as historical design evidence. Do not implement, enable or
+> reactivate automatic management from its former readiness or goal text.
 
 ## Goal Capsule
 
@@ -246,6 +251,7 @@ Root `npm test` remains a required regression gate. If it fails for a pre-existi
 - New actionable conditions are delivered through the configured source/owner channel with the skill, harness, reason, safe default, and exact next decision. Repeats are deduplicated.
 - The public release session receives the merged commit and package evidence. The workspace-manager session receives the live finding that a feature can be merged while its local activation or tail remains incomplete; neither session owns this implementation.
 
-## Draft Goal
+## Historical goal — not an activation command
 
-`/goal Implement this plan to its Definition of Done, including public merge, supported local activation, complete live inventory accounting, automatic eligible-skill convergence, and autonomous attention-only repair.`
+The former goal called for automatic eligible-skill convergence and autonomous
+repair. It is withdrawn; use the current explicit-sharing plan instead.

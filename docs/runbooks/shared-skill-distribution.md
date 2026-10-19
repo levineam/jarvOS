@@ -2,6 +2,23 @@
 
 Use the public catalog for reviewed portable skills. Add private skills through an explicit local overlay outside the checkout; never place private paths, bodies, receipts, or egress consent in the public manifest.
 
+## On-demand sharing
+
+Use explicit source and destination choices. `inventory-assess` classifies but
+does not admit by default; disabled inventory makes assessment read-only.
+Review the full `plan` before an `apply`, and stop on unrelated install/retire
+pairs. Do not force-copy over receipts, divergent copies or unknown files.
+Keep complete bundles and their dependencies, then prove fresh discovery and
+harmless use in the required harness. Ordinary exclusion is not withdrawal of
+a manually selected bundle.
+
+Automatic management is not a prerequisite. To retire it, the scheduler owner
+first stops every effective trigger, including selected manifests, catch-up
+and any separately owned daily projection job. Then disable inventory without
+clearing catalog, overlay, source store, receipts or pending decisions. A
+disabled scheduled no-op is quiet; resolving one decision does not restart
+automatic repair. Keep protected runtime admission and external delivery gates.
+
 Before enabling a harness, run:
 
 ```sh
@@ -27,14 +44,16 @@ jarvos-skills status --json
 jarvos-skills repair --json
 jarvos-skills inventory --json
 jarvos-skills inventory-assess --json
-jarvos-skills autonomous-repair --json
-jarvos-skills-scheduled-repair --config ~/.jarvos/shared-skills/config.json
 jarvos-skills enable --harness codex --json
 jarvos-skills disable --harness hermes --json
 jarvos-skills rename --id NAME --name EFFECTIVE --json
-jarvos-skills scheduler --write --interval-minutes 60 --json
 ```
 
+## Optional automatic management
+
+The following behavior applies only to deliberately enabled automation, not a
+standing instruction to revive a retired manager. Do not write scheduler
+artifacts for on-demand use; a plist left in LaunchAgents can load at login.
 Scheduler artifacts are planned/written only. Enabling launchd or systemd units
 is an owner action after review. The scheduler runs `autonomous-repair`, which
 first completes a multi-root inventory generation and refuses to mutate if any
@@ -48,7 +67,7 @@ The full scan and mutation lease are authoritative. Healthy recurring runs are
 quiet and write no durable state. A recovery gets one redacted recovery notice.
 
 Use `jarvos-skills-scheduled-repair` when a scheduler delivers stdout. Healthy
-replays, safe holds, and completed automatic repairs emit exactly `NO_REPLY`;
+replays, disabled inventory, safe holds, and completed automatic repairs emit exactly `NO_REPLY`;
 safe holds remain available through durable local status. A recovery failure
 gets a reviewed message that says what happened, what jarvOS preserved, what
 action is needed, what happens next, and an opaque reference, without source
