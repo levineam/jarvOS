@@ -65,6 +65,48 @@ function baseCapture(source, overrides = {}) {
   };
 }
 
+test('classifier-only high-confidence capture creates no note file or journal Notes backlink', () => {
+  const vault = makeTempVault();
+  try {
+    withVaultEnv(vault, (options) => {
+      const result = captureWithJarvos(baseCapture('openclaw', {
+        title: 'Patch lifecycle isolation',
+        text: 'The lifecycle test inherited the gateway stamp from its environment.',
+        salienceClass: 'lesson',
+        confidence: 0.99,
+      }), options);
+
+      assert.deepEqual(fs.readdirSync(vault.notesDir), [], 'no standalone note file');
+      const journalPath = path.join(vault.journalDir, `${TEST_DATE}.md`);
+      const journal = fs.existsSync(journalPath) ? fs.readFileSync(journalPath, 'utf8') : '';
+      assert.doesNotMatch(journal, /\[\[Patch lifecycle isolation\]\]/, 'no Notes backlink');
+      assert.equal(result.note, null);
+      assert.equal(result.routing.plan.ignored, true);
+    });
+  } finally {
+    fs.rmSync(vault.root, { recursive: true, force: true });
+  }
+});
+
+test('quoted mid-text trigger phrases do not authorize a titled capture', () => {
+  const vault = makeTempVault();
+  try {
+    withVaultEnv(vault, (options) => {
+      const result = captureWithJarvos(baseCapture('openclaw', {
+        title: 'Bounded patch instructions',
+        text: 'Implement the router fix. Existing commands include "make a note" and "save this". Run the tests.',
+        salienceClass: 'preference',
+        confidence: 0.55,
+      }), options);
+      assert.deepEqual(fs.readdirSync(vault.notesDir), []);
+      assert.deepEqual(fs.readdirSync(vault.journalDir), []);
+      assert.equal(result.routing.plan.ignored, true);
+    });
+  } finally {
+    fs.rmSync(vault.root, { recursive: true, force: true });
+  }
+});
+
 test('compatibility captures carry explicit unknown provenance and enforcement rejects omissions', () => {
   const compatibility = normalizeCaptureEvent(baseCapture('codex', {
     text: 'note: compatibility provenance',
@@ -144,6 +186,7 @@ test('receipt-bound human provenance survives the universal capture-to-note rout
     ...baseCapture('codex', {
       captureEventId,
       title: 'User thought',
+      trigger: 'note',
       text: content,
       content_origin: 'human',
       content_origin_basis: 'verbatim_user',
@@ -316,7 +359,7 @@ test('bare strict commands return needs_input without writing', () => {
   });
 });
 
-test('triggerless title+content capture defaults to note intent for library callers', () => {
+test('triggerless title+content capture requires explicit intent for library callers', () => {
   const vault = makeTempVault();
   withVaultEnv(vault, (options) => {
     const result = captureWithJarvos(baseCapture('claude-code', {
@@ -325,16 +368,17 @@ test('triggerless title+content capture defaults to note intent for library call
       evidence: [{ type: 'message', text: 'Durable body text without router keywords.' }],
     }), options);
 
-    assert.equal(result.ok, true);
-    assert.equal(result.routing.plan.ignored, false);
-    assert.equal(result.routing.plan.route, 'note');
+    assert.equal(result.ok, false);
+    assert.equal(result.routing.plan.ignored, true);
+    assert.equal(result.routing.plan.route, null);
     assert.equal(result.routing.plan.defaultedToNoteBias, false);
-    assert.equal(result.error, null);
-    assert.equal(fs.readdirSync(vault.notesDir).length, 1);
+    assert.match(result.error, /no explicit trigger/);
+    assert.equal(fs.readdirSync(vault.notesDir).length, 0);
+    assert.equal(fs.readdirSync(vault.journalDir).length, 0);
   });
 });
 
-test('triggerless capture CLI does not claim a disk write without Obsidian acknowledgement', () => {
+test('explicit capture CLI does not claim a disk write without Obsidian acknowledgement', () => {
   const vault = makeTempVault();
   const env = {
     ...process.env,
@@ -353,6 +397,7 @@ test('triggerless capture CLI does not claim a disk write without Obsidian ackno
     env,
     input: JSON.stringify(baseCapture('claude-code', {
       title: 'Plain CLI Entry',
+      trigger: 'note',
       content: 'Durable body text without router keywords.',
       evidence: [{ type: 'message', text: 'Durable body text without router keywords.' }],
     })),
