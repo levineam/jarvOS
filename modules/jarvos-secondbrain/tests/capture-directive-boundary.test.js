@@ -191,5 +191,11 @@ test('fourth-round review findings: code-formatted examples are mentions', () =>
     'Review this Markdown example:\n\n    Make a note of the meeting time.',
     'See the example:\n```\nMake a note of the meeting time.\n```',
     'Example:\n\tMake a note of the meeting time.',
+    'Please review the Markdown below:\n~~~text\nMake a note of the meeting time.\n~~~',
   ]) assert.equal(authorizeCapture({ text }).authorized, false, text);
+});
+
+test('a triple backtick inside a code string does not hide a later polite request', () => {
+  const text = 'Here is the formatter code:\n```js\nconst fence = "```";\n```\nPlease make a note that the call moved to Friday.';
+  assert.equal(authorizeCapture({ text }).authorized, true);
 });

@@ -206,14 +206,24 @@ function isClauseInitial(source, index) {
   return false;
 }
 
-// Code-formatted text is an example, never a request: fenced blocks and lines indented by
-// four spaces or a tab.
+// Code-formatted text is an example, never a request: fenced blocks (``` or ~~~ fence lines)
+// and lines indented by four spaces or a tab.
 function inCodeContext(source, index) {
   const lineStart = source.lastIndexOf('\n', index - 1) + 1;
   if (/^(?: {4}|\t)/.test(source.slice(lineStart, lineStart + 4))) return true;
-  let fences = 0;
-  for (let i = source.indexOf('```'); i !== -1 && i < index; i = source.indexOf('```', i + 3)) fences += 1;
-  return fences % 2 === 1;
+  let fence = null;
+  let position = 0;
+  while (position < lineStart) {
+    let lineEnd = source.indexOf('\n', position);
+    if (lineEnd === -1 || lineEnd > lineStart) lineEnd = lineStart;
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(source.slice(position, Math.min(lineEnd, position + 8)));
+    if (marker) {
+      if (fence === null) fence = marker[1][0];
+      else if (marker[1][0] === fence) fence = null;
+    }
+    position = lineEnd + 1;
+  }
+  return fence !== null;
 }
 
 // Catalog check, placement, and the existing mention guards (quotes, negation,
