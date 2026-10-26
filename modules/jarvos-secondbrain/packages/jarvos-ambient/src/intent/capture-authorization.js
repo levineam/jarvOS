@@ -206,6 +206,16 @@ function isClauseInitial(source, index) {
   return false;
 }
 
+// Code-formatted text is an example, never a request: fenced blocks and lines indented by
+// four spaces or a tab.
+function inCodeContext(source, index) {
+  const lineStart = source.lastIndexOf('\n', index - 1) + 1;
+  if (/^(?: {4}|\t)/.test(source.slice(lineStart, lineStart + 4))) return true;
+  let fences = 0;
+  for (let i = source.indexOf('```'); i !== -1 && i < index; i = source.indexOf('```', i + 3)) fences += 1;
+  return fences % 2 === 1;
+}
+
 // Catalog check, placement, and the existing mention guards (quotes, negation,
 // reported speech) on the first occurrence of each pattern.
 function matchesGuarded(source, patterns) {
@@ -213,7 +223,7 @@ function matchesGuarded(source, patterns) {
   if (namesSeveralCapturePhrases(normalized)) return false;
   return patterns.some((pattern) => {
     const match = pattern.exec(normalized);
-    return Boolean(match) && isClauseInitial(source, match.index) && !isSuppressedMention(source, match);
+    return Boolean(match) && isClauseInitial(source, match.index) && !inCodeContext(source, match.index) && !isSuppressedMention(source, match);
   });
 }
 

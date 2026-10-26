@@ -185,3 +185,11 @@ test('third-round review findings: idea-phrase catalogs, apostrophes, spacing, e
     'I have an idea for the app. Here\u2019s another idea for the plan.',
   ]) assert.equal(authorizeCapture({ text }).authorized, true, text);
 });
+
+test('fourth-round review findings: code-formatted examples are mentions', () => {
+  for (const text of [
+    'Review this Markdown example:\n\n    Make a note of the meeting time.',
+    'See the example:\n```\nMake a note of the meeting time.\n```',
+    'Example:\n\tMake a note of the meeting time.',
+  ]) assert.equal(authorizeCapture({ text }).authorized, false, text);
+});
