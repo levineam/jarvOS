@@ -171,3 +171,17 @@ test('review findings: catalogs of phrases are mentions, single polite requests 
   }
   assert.ok(Date.now() - started < 1000, 'whitespace-heavy input must not take quadratic time');
 });
+
+test('third-round review findings: idea-phrase catalogs, apostrophes, spacing, etc.', () => {
+  for (const text of [
+    'Supported capture phrases:\nmake a note\nI have an idea for a feature',
+    'Supported capture phrases:\nI have an idea\nmake a note',
+    'Supported capture phrases:\nI\u2019ll note that\nmake a note',
+  ]) assert.equal(authorizeCapture({ text }).authorized, false, text);
+  for (const text of [
+    'Could  you please make a note of the call time?',
+    'Could\u00a0you please make a note of the call time?',
+    'We need milk, bread, etc. Could you please save this shopping list?',
+    'I have an idea for the app. Here\u2019s another idea for the plan.',
+  ]) assert.equal(authorizeCapture({ text }).authorized, true, text);
+});

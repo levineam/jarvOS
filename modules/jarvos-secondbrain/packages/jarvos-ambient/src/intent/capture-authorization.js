@@ -144,16 +144,20 @@ const DIRECTIVE_LEAD_INS = [
 ];
 const MAX_DIRECTIVE_LEAD_INS = 6;
 const LONGEST_LEAD_IN = Math.max(...DIRECTIVE_LEAD_INS.map((leadIn) => leadIn.length));
-const NOT_A_SENTENCE_END = ['e.g.', 'i.e.', 'etc.', 'vs.', 'cf.'];
+const NOT_A_SENTENCE_END = ['e.g.', 'i.e.', 'cf.'];
 
-const CAPTURE_PHRASE_CATALOG_RE = new RegExp(
-  `${[...GUARDED_NOTE_PATTERNS, ...BOUNDED_NATURAL_LANGUAGE_PATTERNS].map((pattern) => `(?:${pattern.source})`).join('|')}|\\b(?:note|idea|journal):`,
+const NOTE_FAMILY_RE = new RegExp(
+  `${[...GUARDED_NOTE_PATTERNS, ...BOUNDED_NATURAL_LANGUAGE_PATTERNS].map((pattern) => `(?:${pattern.source})`).join('|')}`,
   'gi',
 );
+const IDEA_FAMILY_RE = new RegExp(IDEA_CAPTURE_PATTERNS.map((pattern) => `(?:${pattern.source})`).join('|'), 'i');
 
+// Two note-family phrases, or one note-family phrase plus an idea phrase, make a catalog. The
+// strict `note:` / `idea:` prefixes are deliberately not counted: they are commands, not phrases.
+// Idea phrases collectively count once: "I have an idea ... my idea is ..." is ordinary speech.
 function namesSeveralCapturePhrases(source) {
-  let found = 0;
-  for (const unused of source.matchAll(CAPTURE_PHRASE_CATALOG_RE)) {
+  let found = IDEA_FAMILY_RE.test(source) ? 1 : 0;
+  for (const unused of source.matchAll(NOTE_FAMILY_RE)) {
     found += 1;
     if (found >= 2) return true;
   }
@@ -179,7 +183,7 @@ function endsWithListMarker(text, dotIndex) {
 }
 
 function isClauseInitial(source, index) {
-  const text = source.slice(0, index).replace(/(\p{L})’(?=\p{L})/gu, "$1'");
+  const text = source.slice(0, index).replace(/(\p{L})’(?=\p{L})/gu, "$1'").replace(/[ \t\u00a0\u2000-\u200b]+/g, ' ');
   let end = text.length;
   for (let leadIns = 0; leadIns <= MAX_DIRECTIVE_LEAD_INS; leadIns += 1) {
     end = trimTrailingBlanks(text, end);
@@ -205,8 +209,8 @@ function isClauseInitial(source, index) {
 // Catalog check, placement, and the existing mention guards (quotes, negation,
 // reported speech) on the first occurrence of each pattern.
 function matchesGuarded(source, patterns) {
-  if (namesSeveralCapturePhrases(source)) return false;
   const normalized = source.replace(/(\p{L})’(?=\p{L})/gu, "$1'");
+  if (namesSeveralCapturePhrases(normalized)) return false;
   return patterns.some((pattern) => {
     const match = pattern.exec(normalized);
     return Boolean(match) && isClauseInitial(source, match.index) && !isSuppressedMention(source, match);
