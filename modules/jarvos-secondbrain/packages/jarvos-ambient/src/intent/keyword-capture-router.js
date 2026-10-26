@@ -126,6 +126,8 @@ function matchesAny(text, patterns) {
 }
 
 function detectTrigger(capture = {}) {
+  // Resolve lazily: authorization imports this module's patterns and parsers.
+  const { matchesGuarded } = require('./capture-authorization');
   const explicit = [
     capture.trigger,
     capture.keyword,
@@ -139,8 +141,8 @@ function detectTrigger(capture = {}) {
   for (const source of sources) {
     const match = source.match(KEYWORD_RE);
     if (match) return normalizeTrigger(match[1]);
-    if (matchesAny(source, NOTE_CAPTURE_PATTERNS)) return NOTE;
-    if (!matchesAny(source, IDEA_ANTI_TRIGGER_PATTERNS) && matchesAny(source, IDEA_CAPTURE_PATTERNS)) {
+    if (matchesGuarded(source, NOTE_CAPTURE_PATTERNS)) return NOTE;
+    if (!matchesAny(source, IDEA_ANTI_TRIGGER_PATTERNS) && matchesGuarded(source, IDEA_CAPTURE_PATTERNS)) {
       return IDEA;
     }
   }
@@ -149,6 +151,7 @@ function detectTrigger(capture = {}) {
 }
 
 function hasCaptureIntent(capture = {}) {
+  const { matchesGuarded } = require('./capture-authorization');
   const explicit = [
     capture.trigger,
     capture.keyword,
@@ -161,11 +164,11 @@ function hasCaptureIntent(capture = {}) {
   const sources = captureSources(capture);
   for (const source of sources) {
     if (source.match(KEYWORD_RE)) return true;
-    if (matchesAny(source, NOTE_CAPTURE_PATTERNS)) return true;
-    if (!matchesAny(source, IDEA_ANTI_TRIGGER_PATTERNS) && matchesAny(source, IDEA_CAPTURE_PATTERNS)) {
+    if (matchesGuarded(source, NOTE_CAPTURE_PATTERNS)) return true;
+    if (!matchesAny(source, IDEA_ANTI_TRIGGER_PATTERNS) && matchesGuarded(source, IDEA_CAPTURE_PATTERNS)) {
       return true;
     }
-    if (matchesAny(source, GENERAL_CAPTURE_PATTERNS)) return true;
+    if (matchesGuarded(source, GENERAL_CAPTURE_PATTERNS)) return true;
   }
 
   return false;

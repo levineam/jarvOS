@@ -294,6 +294,11 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+### Bug Fixes
+
+* **secondbrain (SUP-4142):** treat mid-clause capture-phrase catalogs as mentions, not directives — only clause-initial note/idea/save language authorizes durable capture
+
+
 These entries are the post-v0.7.0 forming batch. They are merged on `main` but
 are **not** a published release. Release Please derives the next version from
 this public range and prepares the exact proposal; publication still requires

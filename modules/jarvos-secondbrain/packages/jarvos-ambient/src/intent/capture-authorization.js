@@ -33,8 +33,8 @@ const BOUNDED_NATURAL_LANGUAGE_PATTERNS = [
 
 // Natural-language "note" directives. Unlike the strict `note:` prefix
 // (anchored, so quoting or negating it already breaks the anchor), these
-// phrases can appear anywhere mid-sentence, so every one of them needs the
-// same negation/quote guard as the bounded save/write directives below.
+// phrases need the same clause-boundary and negation/quote guards as the
+// bounded save/write directives below.
 const GUARDED_NOTE_PATTERNS = [
   /\bmake a note\b/i,
   /\btake a note\b/i,
@@ -124,6 +124,10 @@ function isQuotedMention(source, match) {
 const REPORTED_SPEECH_LEADIN_RE = /\b(?:(?:he|she|they|someone|somebody)\s+)?(?:said|says|told me|told us|asked me|asked us)(?:\s+to)?\s*$/i;
 const INCIDENTAL_LEADIN_RE = /\b(?:how to|rejected|rejecting|discussed|discussing)\s+$/i;
 
+// Only clause-initial directives grant permission; punctuation inside a phrase
+// enumeration is not a boundary. Permit at most three conversational lead-ins.
+const DIRECTIVE_CLAUSE_PREFIX_RE = /(?:^|[\r\n]|[.!?]\s+)[ \t]*(?:(?:[-*]|\d+\.)[ \t]+)?(?:(?:please|pls|can you|could you|would you|will you|i want you to|i'd like you to|go ahead and|just|also|and|so|ok|okay|yeah|hey|hi|now|then|jarvis|claude)(?:,[ \t]*|[ \t]+)){0,3}$/i;
+
 function isSuppressedMention(source, match) {
   const before = source.slice(0, match.index);
   return NEGATION_LEADIN_RE.test(before)
@@ -132,13 +136,14 @@ function isSuppressedMention(source, match) {
     || isQuotedMention(source, match);
 }
 
-// True when any pattern in the list matches the source outside a negation
-// lead-in or quoted/reported mention — the shared guard applied to every
-// unanchored natural-language pattern `authorizeCapture` considers.
+// Scan every occurrence so an earlier mention cannot hide a later directive.
+// Keep the existing suppression guards even at valid clause boundaries.
 function matchesGuarded(source, patterns) {
   return patterns.some((pattern) => {
-    const match = pattern.exec(source);
-    return Boolean(match) && !isSuppressedMention(source, match);
+    for (const match of source.matchAll(new RegExp(pattern.source, `${pattern.flags.replace(/g/g, '')}g`))) {
+      if (DIRECTIVE_CLAUSE_PREFIX_RE.test(source.slice(0, match.index)) && !isSuppressedMention(source, match)) return true;
+    }
+    return false;
   });
 }
 
@@ -200,4 +205,5 @@ module.exports = {
   NOTE,
   JOURNAL,
   authorizeCapture,
+  matchesGuarded,
 };
