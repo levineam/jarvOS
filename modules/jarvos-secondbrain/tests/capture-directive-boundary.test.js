@@ -108,10 +108,10 @@ const PHRASES = [
 
 for (const phrase of PHRASES) {
   test(`capture directive clause boundaries: ${phrase}`, () => {
-    for (const prefix of ['', 'Context. ', 'Context! ', 'Context? ', 'Context\n', '- ', '* ', '1. ', 'Context\n  2. ', 'Please ', 'ok so, ', 'Hey Jarvis, ']) {
+    for (const prefix of ['', 'Context. ', 'Context! ', 'Context? ', 'Context\n', 'Please ', 'ok so, ', 'Hey Jarvis, ', 'Hey Jarvis, could you please ', 'please also just now ']) {
       assert.equal(authorizeCapture({ text: `${prefix}${phrase} the plan` }).authorized, true, prefix);
     }
-    for (const prefix of ['Use ', 'Context, ', 'Context: ', 'Context; ', 'Context - ', '(', '[', 'only explicit note:, ', 'please also just now ']) {
+    for (const prefix of ['Use ', 'Context, ', 'Context: ', 'Context; ', 'Context - ', '(', '[', 'only explicit note:, ', '- ', '* ', '1. ', 'Context\n  2. ', 'e.g. ']) {
       const text = `${prefix}${phrase} the plan`;
       assert.equal(authorizeCapture({ text }).authorized, false, text);
       assert.equal(ambient.detectTrigger({ text }), null, text);
@@ -120,14 +120,15 @@ for (const phrase of PHRASES) {
   });
 }
 
-test('capture directive lead-ins are allowlisted and limited to three', () => {
+test('capture directive lead-ins are allowlisted and limited to six', () => {
   for (const lead of ['please', 'pls', 'can you', 'could you', 'would you', 'will you', 'i want you to', "i'd like you to", 'go ahead and', 'just', 'also', 'and', 'so', 'ok', 'okay', 'yeah', 'hey', 'hi', 'now', 'then', 'jarvis', 'claude']) {
     for (const comma of ['', ',']) {
       assert.equal(authorizeCapture({ text: `${lead}${comma} make a note of the plan` }).authorized, true, lead + comma);
     }
   }
   assert.equal(authorizeCapture({ text: 'please, also, just, make a note of the plan' }).authorized, true);
-  assert.equal(authorizeCapture({ text: 'please, also, just, now, make a note of the plan' }).authorized, false);
+  assert.equal(authorizeCapture({ text: 'please, also, just, now, then, so, make a note of the plan' }).authorized, true);
+  assert.equal(authorizeCapture({ text: 'please, also, just, now, then, so, ok, make a note of the plan' }).authorized, false);
 });
 
 test('capture directive guards still suppress quotes, negation, reported and incidental speech', () => {
@@ -138,9 +139,63 @@ test('capture directive guards still suppress quotes, negation, reported and inc
   }
 });
 
-test('a later clause directive survives an earlier mention of the same phrase', () => {
-  for (const phrase of PHRASES) {
+test('text naming the same capture phrase twice is treated as a catalog, not a request', () => {
+  for (const phrase of ['make a note', 'take a note', 'save this', 'write that down']) {
     const text = `The docs mention "${phrase}". Please ${phrase} the plan`;
-    assert.equal(authorizeCapture({ text }).authorized, true, text);
+    assert.equal(authorizeCapture({ text }).authorized, false, text);
   }
+});
+
+test('review findings: catalogs of phrases are mentions, single polite requests still work, linear time', () => {
+  const rejected = [
+    'Capture phrases include:\n- make a note\n- save this\n- take a note',
+    'Capture phrases include:\nmake a note\nsave this',
+    'Capture phrases include:\n\nmake a note\nsave this',
+    'Capture phrases include:\nmake a note.\nsave this.',
+    'The phrase "make a note" is documented below.\nMake a note is an example, not a request.',
+    'The phrase "make a note" is documented below.\nPlease make a note is an example, not a request.',
+    'only explicit note:, make a note, save this, idea: per rules',
+  ];
+  const allowed = [
+    'Hey Jarvis, could you please make a note of the call time?',
+    'Meeting update:\nThe call moved to Friday.\nPlease make a note of the new time.',
+    'Meeting update:\nThe call moved to Friday\nPlease make a note of the new time.',
+    'Here\u2019s an idea for the plan.',
+  ];
+  for (const text of rejected) assert.equal(authorizeCapture({ text }).authorized, false, text);
+  for (const text of allowed) assert.equal(authorizeCapture({ text }).authorized, true, text);
+  assert.equal(ambient.detectTrigger({ text: 'Here\u2019s an idea for the plan.' }), 'idea');
+  const started = Date.now();
+  for (const text of ['.' + ' '.repeat(200000) + 'x make a note', '\n'.repeat(100000) + 'x make a note', 'a'.repeat(200000) + ' make a note']) {
+    assert.equal(authorizeCapture({ text }).authorized, false);
+  }
+  assert.ok(Date.now() - started < 1000, 'whitespace-heavy input must not take quadratic time');
+});
+
+test('third-round review findings: idea-phrase catalogs, apostrophes, spacing, etc.', () => {
+  for (const text of [
+    'Supported capture phrases:\nmake a note\nI have an idea for a feature',
+    'Supported capture phrases:\nI have an idea\nmake a note',
+    'Supported capture phrases:\nI\u2019ll note that\nmake a note',
+  ]) assert.equal(authorizeCapture({ text }).authorized, false, text);
+  for (const text of [
+    'Could  you please make a note of the call time?',
+    'Could\u00a0you please make a note of the call time?',
+    'We need milk, bread, etc. Could you please save this shopping list?',
+    'I have an idea for the app. Here\u2019s another idea for the plan.',
+  ]) assert.equal(authorizeCapture({ text }).authorized, true, text);
+});
+
+test('fourth-round review findings: code-formatted examples are mentions', () => {
+  for (const text of [
+    'Review this Markdown example:\n\n    Make a note of the meeting time.',
+    'See the example:\n```\nMake a note of the meeting time.\n```',
+    'Example:\n\tMake a note of the meeting time.',
+    'Please review the Markdown below:\n~~~text\nMake a note of the meeting time.\n~~~',
+  ]) assert.equal(authorizeCapture({ text }).authorized, false, text);
+});
+
+test('a triple backtick inside a code string does not hide a later polite request', () => {
+  const text = 'Here is the formatter code:\n```js\nconst fence = "```";\n```\nPlease make a note that the call moved to Friday.';
+  assert.equal(authorizeCapture({ text }).authorized, true);
 });

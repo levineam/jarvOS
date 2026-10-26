@@ -124,10 +124,6 @@ function isQuotedMention(source, match) {
 const REPORTED_SPEECH_LEADIN_RE = /\b(?:(?:he|she|they|someone|somebody)\s+)?(?:said|says|told me|told us|asked me|asked us)(?:\s+to)?\s*$/i;
 const INCIDENTAL_LEADIN_RE = /\b(?:how to|rejected|rejecting|discussed|discussing)\s+$/i;
 
-// Only clause-initial directives grant permission; punctuation inside a phrase
-// enumeration is not a boundary. Permit at most three conversational lead-ins.
-const DIRECTIVE_CLAUSE_PREFIX_RE = /(?:^|[\r\n]|[.!?]\s+)[ \t]*(?:(?:[-*]|\d+\.)[ \t]+)?(?:(?:please|pls|can you|could you|would you|will you|i want you to|i'd like you to|go ahead and|just|also|and|so|ok|okay|yeah|hey|hi|now|then|jarvis|claude)(?:,[ \t]*|[ \t]+)){0,3}$/i;
-
 function isSuppressedMention(source, match) {
   const before = source.slice(0, match.index);
   return NEGATION_LEADIN_RE.test(before)
@@ -136,14 +132,108 @@ function isSuppressedMention(source, match) {
     || isQuotedMention(source, match);
 }
 
-// Scan every occurrence so an earlier mention cannot hide a later directive.
-// Keep the existing suppression guards even at valid clause boundaries.
-function matchesGuarded(source, patterns) {
-  return patterns.some((pattern) => {
-    for (const match of source.matchAll(new RegExp(pattern.source, `${pattern.flags.replace(/g/g, '')}g`))) {
-      if (DIRECTIVE_CLAUSE_PREFIX_RE.test(source.slice(0, match.index)) && !isSuppressedMention(source, match)) return true;
+// A natural-language capture phrase is a request only when (1) it begins a clause and
+// (2) the text is not itself a catalog of capture phrases. Text that names two or more
+// capture phrases ("only explicit note:, make a note, save this, idea:") is discussing
+// the capture feature, not issuing a request; the strict anchored `note:` / `idea:`
+// prefixes remain the way to capture from such text. Both checks are linear scans:
+// whitespace-heavy input must not cost quadratic time.
+const DIRECTIVE_LEAD_INS = [
+  'i want you to', "i'd like you to", 'go ahead and', 'could you', 'would you', 'will you', 'can you',
+  'please', 'pls', 'just', 'also', 'and', 'so', 'okay', 'ok', 'yeah', 'hey', 'hi', 'now', 'then', 'jarvis', 'claude',
+];
+const MAX_DIRECTIVE_LEAD_INS = 6;
+const LONGEST_LEAD_IN = Math.max(...DIRECTIVE_LEAD_INS.map((leadIn) => leadIn.length));
+const NOT_A_SENTENCE_END = ['e.g.', 'i.e.', 'cf.'];
+
+const NOTE_FAMILY_RE = new RegExp(
+  `${[...GUARDED_NOTE_PATTERNS, ...BOUNDED_NATURAL_LANGUAGE_PATTERNS].map((pattern) => `(?:${pattern.source})`).join('|')}`,
+  'gi',
+);
+const IDEA_FAMILY_RE = new RegExp(IDEA_CAPTURE_PATTERNS.map((pattern) => `(?:${pattern.source})`).join('|'), 'i');
+
+// Two note-family phrases, or one note-family phrase plus an idea phrase, make a catalog. The
+// strict `note:` / `idea:` prefixes are deliberately not counted: they are commands, not phrases.
+// Idea phrases collectively count once: "I have an idea ... my idea is ..." is ordinary speech.
+function namesSeveralCapturePhrases(source) {
+  let found = IDEA_FAMILY_RE.test(source) ? 1 : 0;
+  for (const unused of source.matchAll(NOTE_FAMILY_RE)) {
+    found += 1;
+    if (found >= 2) return true;
+  }
+  return false;
+}
+
+function isLetterOrDigit(ch) {
+  return ch !== undefined && /[\p{L}\p{N}'’]/u.test(ch);
+}
+
+function trimTrailingBlanks(text, end) {
+  let i = end;
+  while (i > 0 && (text[i - 1] === ' ' || text[i - 1] === '\t')) i -= 1;
+  return i;
+}
+
+function endsWithListMarker(text, dotIndex) {
+  let i = dotIndex;
+  while (i > 0 && /\d/.test(text[i - 1])) i -= 1;
+  if (i === dotIndex) return false;
+  while (i > 0 && (text[i - 1] === ' ' || text[i - 1] === '\t')) i -= 1;
+  return i === 0 || text[i - 1] === '\n' || text[i - 1] === '\r';
+}
+
+function isClauseInitial(source, index) {
+  const text = source.slice(0, index).replace(/(\p{L})’(?=\p{L})/gu, "$1'").replace(/[ \t\u00a0\u2000-\u200b]+/g, ' ');
+  let end = text.length;
+  for (let leadIns = 0; leadIns <= MAX_DIRECTIVE_LEAD_INS; leadIns += 1) {
+    end = trimTrailingBlanks(text, end);
+    if (end === 0) return true;
+    const last = text[end - 1];
+    if (last === '\n' || last === '\r') return true;
+    if (last === '.' || last === '!' || last === '?') {
+      if (last === '.' && endsWithListMarker(text, end - 1)) return false;
+      const tail = text.slice(Math.max(0, end - 5), end).toLowerCase();
+      return !NOT_A_SENTENCE_END.some((abbr) => tail.endsWith(abbr));
     }
-    return false;
+    if (last === ',') end -= 1;
+    const lower = text.slice(Math.max(0, end - LONGEST_LEAD_IN), end).toLowerCase();
+    const leadIn = DIRECTIVE_LEAD_INS.find((candidate) => (
+      lower.endsWith(candidate) && !isLetterOrDigit(text[end - candidate.length - 1])
+    ));
+    if (!leadIn) return false;
+    end -= leadIn.length;
+  }
+  return false;
+}
+
+// Code-formatted text is an example, never a request: fenced blocks (``` or ~~~ fence lines)
+// and lines indented by four spaces or a tab.
+function inCodeContext(source, index) {
+  const lineStart = source.lastIndexOf('\n', index - 1) + 1;
+  if (/^(?: {4}|\t)/.test(source.slice(lineStart, lineStart + 4))) return true;
+  let fence = null;
+  let position = 0;
+  while (position < lineStart) {
+    let lineEnd = source.indexOf('\n', position);
+    if (lineEnd === -1 || lineEnd > lineStart) lineEnd = lineStart;
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(source.slice(position, Math.min(lineEnd, position + 8)));
+    if (marker) {
+      if (fence === null) fence = marker[1][0];
+      else if (marker[1][0] === fence) fence = null;
+    }
+    position = lineEnd + 1;
+  }
+  return fence !== null;
+}
+
+// Catalog check, placement, and the existing mention guards (quotes, negation,
+// reported speech) on the first occurrence of each pattern.
+function matchesGuarded(source, patterns) {
+  const normalized = source.replace(/(\p{L})’(?=\p{L})/gu, "$1'");
+  if (namesSeveralCapturePhrases(normalized)) return false;
+  return patterns.some((pattern) => {
+    const match = pattern.exec(normalized);
+    return Boolean(match) && isClauseInitial(source, match.index) && !inCodeContext(source, match.index) && !isSuppressedMention(source, match);
   });
 }
 
