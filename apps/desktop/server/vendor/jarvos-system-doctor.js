@@ -53,6 +53,7 @@ function optionalComponents(modules = []) {
       observedAt: component.observedAt ?? null,
       validUntil: component.validUntil ?? null,
       message: null,
+      ...(component.rollup ? { rollup: component.rollup } : {}),
     })));
   }
   const memoryProjected = components.some((component) => component.section === 'memory');
@@ -82,6 +83,7 @@ function buildSystemDoctorReceipt(report) {
     ? { id: report.profile, title: report.profile }
     : { id: report.profile.id, title: report.profile.title };
   const components = [...coreComponents(report), ...optionalComponents(report.modules)];
+  const system = (report.modules || []).find((module) => module.id === 'system');
   let status = 'healthy';
   if (report.ok === false) {
     status = components.some((component) => component.state === 'repair needed')
@@ -95,6 +97,9 @@ function buildSystemDoctorReceipt(report) {
     status,
     factsVersion: declaredSystemFactsVersion(report.modules),
     components,
+    // Additive: product rows with sub-checks and the Doctor block (facts/v4 only).
+    products: Array.isArray(system?.products) ? system.products : [],
+    doctor: system?.doctor ?? null,
   };
 }
 
@@ -137,6 +142,23 @@ function componentExplanation(component, now) {
   return `${detail} ${action}`;
 }
 
+function versionNote(version) {
+  if (!version?.installedVersion) return '';
+  const latest = version.latestVersion && version.latestVersion !== version.installedVersion
+    ? `, latest ${version.latestVersion}`
+    : '';
+  return ` (${version.installedVersion}${latest})`;
+}
+
+// A facts/v4 row: one line for the product, then one indented line per check.
+function renderRow(row, marker, now, lines) {
+  lines.push(`${marker[row.state]} ${row.label}${versionNote(row.version)}`);
+  for (const check of row.checks) {
+    const explanation = check.state === 'healthy' ? '' : ` — ${componentExplanation(check, now)}`;
+    lines.push(`   ${marker[check.state]} ${check.label}${explanation}`);
+  }
+}
+
 function renderSystemDoctor(report, { now = new Date() } = {}) {
   const receipt = report.systemDoctor || buildSystemDoctorReceipt(report);
   const lines = [`jarvOS System Doctor — ${receipt.profile.title}`, `Workspace: ${receipt.workspace}`];
@@ -151,16 +173,26 @@ function renderSystemDoctor(report, { now = new Date() } = {}) {
     optional: 'Services',
     memory: 'Memory',
   };
+  // v4 product and Doctor rollups are rendered from receipt.products/doctor below.
+  const listed = receipt.components.filter((component) => !component.rollup);
   const sections = ['core', 'optional', 'memory']
-    .filter((section) => receipt.components.some((component) => component.section === section));
+    .filter((section) => listed.some((component) => component.section === section));
   const showSections = sections.length > 1;
   for (const section of sections) {
     lines.push('');
     if (showSections) lines.push(sectionLabel[section]);
-    for (const component of receipt.components.filter((item) => item.section === section)) {
+    for (const component of listed.filter((item) => item.section === section)) {
       const explanation = component.state === 'healthy' ? '' : ` — ${componentExplanation(component, now)}`;
       lines.push(`${marker[component.state]} ${component.label}${explanation}`);
     }
+  }
+  if (receipt.products?.length) {
+    lines.push('', 'Products');
+    for (const product of receipt.products) renderRow(product, marker, now, lines);
+  }
+  if (receipt.doctor) {
+    lines.push('');
+    renderRow(receipt.doctor, marker, now, lines);
   }
   return lines.join('\n');
 }

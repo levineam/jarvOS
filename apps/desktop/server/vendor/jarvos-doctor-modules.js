@@ -18,10 +18,22 @@ const CONTINUITY_SNAPSHOT_FIELDS = Object.freeze(['schema', 'moduleId', 'generat
 const CONTINUITY_FACTS_VERSION = 'jarvos-gbrain-continuity-facts/v1';
 const SYSTEM_FACTS_VERSION = 'jarvos-system-doctor-facts/v2';
 const SYSTEM_FACTS_VERSION_V3 = 'jarvos-system-doctor-facts/v3';
-const SYSTEM_FACTS_VERSIONS = Object.freeze([SYSTEM_FACTS_VERSION, SYSTEM_FACTS_VERSION_V3]);
+const SYSTEM_FACTS_VERSION_V4 = 'jarvos-system-doctor-facts/v4';
+const SYSTEM_FACTS_VERSIONS = Object.freeze([SYSTEM_FACTS_VERSION, SYSTEM_FACTS_VERSION_V3, SYSTEM_FACTS_VERSION_V4]);
 const SYSTEM_COMPONENT_FIELDS_V2 = Object.freeze(['id', 'state', 'reasonClass', 'evidence']);
 const SYSTEM_COMPONENT_FIELDS_V3 = Object.freeze(['id', 'state', 'reasonClass', 'evidence', 'observedAt', 'validUntil']);
 const SYSTEM_COMPONENT_STATES = Object.freeze(['healthy', 'warning', 'repair needed', 'not configured']);
+// v4 product rows: a row is only as good as its worst check (worst first).
+const STATE_SEVERITY = Object.freeze({ healthy: 0, 'not configured': 1, warning: 2, 'repair needed': 3 });
+const PRODUCT_FIELDS_V4 = Object.freeze(['id', 'label', 'maker', 'order', 'state', 'reasonClass', 'observedAt', 'validUntil', 'checks']);
+const PRODUCT_CHECK_FIELDS_V4 = Object.freeze(['id', 'label', 'state', 'reasonClass', 'observedAt', 'validUntil', 'evidence']);
+const DOCTOR_FIELDS_V4 = Object.freeze(['label', 'state', 'reasonClass', 'observedAt', 'validUntil', 'checks']);
+const DOCTOR_CHECK_FIELDS_V4 = Object.freeze(['id', 'part', 'label', 'state', 'reasonClass', 'observedAt', 'validUntil']);
+const VERSION_FIELDS_V4 = Object.freeze(['installedVersion', 'latestVersion', 'versionSource', 'latestCheckedAt']);
+const DOCTOR_PARTS = Object.freeze(['last-run', 'reviewed-release', 'repairs', 'alerts']);
+const DOCTOR_ROLLUP_ID = 'doctor';
+const MAX_PRODUCTS = 32;
+const MAX_ROW_CHECKS = 8;
 const MEMORY_COMPONENTS = Object.freeze([
   ['memory.gbrain', 'GBrain core'],
   ['memory.gbrain-semantic-coverage', 'GBrain semantic coverage'],
@@ -88,11 +100,16 @@ function isoDate(value) {
   return Number.isNaN(date.getTime()) || date.toISOString() !== value ? null : date;
 }
 
-function exactObject(value, fields) {
+function exactObject(value, fields, optional = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const expected = fields.slice().sort();
-  const keys = Object.keys(value).sort();
-  return keys.length === expected.length && keys.every((key, index) => key === expected[index]);
+  const keys = Object.keys(value);
+  return fields.every((field) => keys.includes(field))
+    && keys.every((key) => fields.includes(key) || optional.includes(key));
+}
+
+function displayText(value, max = 80) {
+  return typeof value === 'string' && value.length >= 1 && value.length <= max
+    && value === value.trim() && !/\p{Cc}/u.test(value);
 }
 
 function publicAttention(reasonClass = 'module-invalid', details = {}, moduleId = PUBLIC_MODULE_ID) {
@@ -158,14 +175,111 @@ function validateSystemComponent(component, factsVersion, now) {
     || !SAFE_PUBLIC_ID.test(component.reasonClass)) return false;
   if (isV3 && !validComponentCheckDates(component, now)) return false;
   if (component.id !== 'provider.searxng') return component.evidence === null;
-  return exactObject(component.evidence, ['httpReachable', 'searchResultCount', 'runtimeToolAvailable'])
-    && typeof component.evidence.httpReachable === 'boolean'
-    && Number.isSafeInteger(component.evidence.searchResultCount)
-    && component.evidence.searchResultCount >= 0
-    && typeof component.evidence.runtimeToolAvailable === 'boolean';
+  return validSearchEvidence(component.evidence);
+}
+
+function validSearchEvidence(evidence) {
+  return exactObject(evidence, ['httpReachable', 'searchResultCount', 'runtimeToolAvailable'])
+    && typeof evidence.httpReachable === 'boolean'
+    && Number.isSafeInteger(evidence.searchResultCount)
+    && evidence.searchResultCount >= 0
+    && typeof evidence.runtimeToolAvailable === 'boolean';
+}
+
+// First failed acceptance layer of a search proof, or null when it holds.
+function searchEvidenceFault(evidence) {
+  if (!evidence.httpReachable) return 'http-unreachable';
+  if (evidence.searchResultCount < 1) return 'search-empty';
+  if (!evidence.runtimeToolAvailable) return 'runtime-tool-missing';
+  return null;
+}
+
+// v4 row aggregate: worst check state (first wins a tie), oldest observedAt,
+// earliest validUntil. Undated checks are skipped; only a row with no dated
+// check at all reports null/null. Timestamps are fixed-width ISO, so string
+// order is time order.
+function aggregateChecks(checks) {
+  let worst = checks[0];
+  for (const check of checks) {
+    if (STATE_SEVERITY[check.state] > STATE_SEVERITY[worst.state]) worst = check;
+  }
+  const observed = checks.map((check) => check.observedAt).filter((value) => value !== null).sort();
+  const valid = checks.map((check) => check.validUntil).filter((value) => value !== null).sort();
+  return {
+    state: worst.state,
+    reasonClass: worst.state === 'healthy' ? 'none' : worst.reasonClass,
+    observedAt: observed.length ? observed[0] : null,
+    validUntil: valid.length ? valid[0] : null,
+  };
+}
+
+function validateRowCheck(check, fields, now) {
+  if (!exactObject(check, fields)
+    || !SAFE_PUBLIC_ID.test(check.id)
+    || !displayText(check.label)
+    || !SYSTEM_COMPONENT_STATES.includes(check.state)
+    || !SAFE_PUBLIC_ID.test(check.reasonClass)
+    || !validComponentCheckDates(check, now)) return false;
+  // Unlike v3, a green check can never have an unknown age.
+  if (check.state === 'healthy' && check.observedAt === null) return false;
+  if (!Object.hasOwn(check, 'evidence')) return true;
+  if (check.id === 'provider.searxng') return validSearchEvidence(check.evidence);
+  return check.evidence === null || validSearchEvidence(check.evidence);
+}
+
+function validateRow(row, checkFields, now) {
+  if (!SYSTEM_COMPONENT_STATES.includes(row.state)
+    || !SAFE_PUBLIC_ID.test(row.reasonClass)
+    || !validComponentCheckDates(row, now)
+    || !Array.isArray(row.checks)
+    || row.checks.length < 1
+    || row.checks.length > MAX_ROW_CHECKS
+    || !row.checks.every((check) => validateRowCheck(check, checkFields, now))) return false;
+  // The row restates its checks and may not say anything kinder than them.
+  const expected = aggregateChecks(row.checks);
+  return row.state === expected.state
+    && row.reasonClass === expected.reasonClass
+    && row.observedAt === expected.observedAt
+    && row.validUntil === expected.validUntil;
+}
+
+function validateProduct(product, now) {
+  return exactObject(product, PRODUCT_FIELDS_V4, ['version'])
+    && SAFE_PUBLIC_ID.test(product.id)
+    && displayText(product.label)
+    && displayText(product.maker)
+    && Number.isSafeInteger(product.order)
+    && product.order >= 0
+    && validateRow(product, PRODUCT_CHECK_FIELDS_V4, now);
+}
+
+function validateDoctor(doctor, now) {
+  return exactObject(doctor, DOCTOR_FIELDS_V4)
+    && displayText(doctor.label)
+    && validateRow(doctor, DOCTOR_CHECK_FIELDS_V4, now)
+    && doctor.checks.length === DOCTOR_PARTS.length
+    && new Set(doctor.checks.map((check) => check.part)).size === DOCTOR_PARTS.length
+    && doctor.checks.every((check) => DOCTOR_PARTS.includes(check.part));
+}
+
+function validateProductFacts(facts, now) {
+  if (!exactObject(facts, ['profile', 'products', 'doctor'])
+    || !SAFE_PUBLIC_ID.test(facts.profile)
+    || !Array.isArray(facts.products)
+    || facts.products.length > MAX_PRODUCTS
+    || !facts.products.every((product) => validateProduct(product, now))
+    || !validateDoctor(facts.doctor, now)) return false;
+  if (!facts.products.every((product, index) => index === 0 || product.order > facts.products[index - 1].order)) return false;
+  const ids = [
+    DOCTOR_ROLLUP_ID,
+    ...facts.products.flatMap((product) => [product.id, ...product.checks.map((check) => check.id)]),
+    ...facts.doctor.checks.map((check) => check.id),
+  ];
+  return new Set(ids).size === ids.length;
 }
 
 function validateSystemFacts(facts, factsVersion, now) {
+  if (factsVersion === SYSTEM_FACTS_VERSION_V4) return validateProductFacts(facts, now);
   if (!exactObject(facts, ['profile', 'components'])
     || !SAFE_PUBLIC_ID.test(facts.profile)
     || !Array.isArray(facts.components)
@@ -252,11 +366,7 @@ function reduceSystemComponent(component, factsVersion, now) {
   if (component.id !== 'provider.searxng' || component.state !== 'healthy') {
     reduced = { ...component, label: systemComponentLabel(component.id) };
   } else {
-    const evidence = component.evidence;
-    let reasonClass = 'none';
-    if (!evidence.httpReachable) reasonClass = 'http-unreachable';
-    else if (evidence.searchResultCount < 1) reasonClass = 'search-empty';
-    else if (!evidence.runtimeToolAvailable) reasonClass = 'runtime-tool-missing';
+    const reasonClass = searchEvidenceFault(component.evidence) || 'none';
     reduced = {
       ...component,
       label: systemComponentLabel(component.id),
@@ -273,13 +383,67 @@ function reduceSystemComponent(component, factsVersion, now) {
   return reduced;
 }
 
+// v4 check: same rules as v3 (search proof first, then own deadline), id-agnostic.
+function reduceRowCheck(check, now) {
+  let { state, reasonClass } = check;
+  const fault = state === 'healthy' && check.evidence ? searchEvidenceFault(check.evidence) : null;
+  if (fault) [state, reasonClass] = ['warning', fault];
+  if (state === 'healthy' && isoDate(check.validUntil) <= now) [state, reasonClass] = ['warning', 'component-stale'];
+  return { ...check, state, reasonClass };
+}
+
+function reduceRow(row, now) {
+  const checks = row.checks.map((check) => reduceRowCheck(check, now));
+  return { ...row, ...aggregateChecks(checks), checks };
+}
+
+// Display-only. Anything malformed is dropped to null rather than rejecting
+// the snapshot: a version note can never change state or validity.
+function displayVersion(version) {
+  if (!exactObject(version, VERSION_FIELDS_V4) || !exactObject(version.versionSource, ['installed', 'latest'])) return null;
+  const text = (value) => value === null || displayText(value, 64);
+  const { installedVersion, latestVersion, versionSource, latestCheckedAt } = version;
+  if (!text(installedVersion) || !text(latestVersion) || !text(versionSource.installed) || !text(versionSource.latest)
+    || !(latestCheckedAt === null || isoDate(latestCheckedAt))) return null;
+  return {
+    installedVersion,
+    latestVersion,
+    versionSource: { installed: versionSource.installed, latest: versionSource.latest },
+    latestCheckedAt,
+  };
+}
+
+function reduceProductFacts(facts, now) {
+  const products = facts.products.map((product) => ({
+    ...reduceRow(product, now),
+    version: displayVersion(product.version),
+  }));
+  const doctor = reduceRow(facts.doctor, now);
+  const rollup = (row, id, kind) => ({
+    id, label: row.label, state: row.state, reasonClass: row.reasonClass,
+    observedAt: row.observedAt, validUntil: row.validUntil, rollup: kind,
+  });
+  return {
+    products,
+    doctor,
+    // Flat per-row projection so receipt status and Doctor gating need no v4 knowledge.
+    components: [
+      ...products.map((product) => rollup(product, product.id, 'product')),
+      rollup(doctor, DOCTOR_ROLLUP_ID, 'doctor'),
+    ],
+  };
+}
+
 function reduceSystemModule(snapshot, { now = new Date(), validation = null, profile = null } = {}) {
   const checked = validation || validateSnapshot(snapshot, now);
   if (!checked.ok) return publicAttention(checked.reasonClass, {}, SYSTEM_MODULE_ID);
   if (snapshot.trust !== 'trusted') return publicAttention('module-untrusted', snapshot, SYSTEM_MODULE_ID);
   if (checked.validUntil <= now) return publicAttention('module-stale', snapshot, SYSTEM_MODULE_ID);
   if (profile && snapshot.facts.profile !== profile) return publicAttention('profile-mismatch', snapshot, SYSTEM_MODULE_ID);
-  const components = snapshot.facts.components.map((component) => reduceSystemComponent(component, snapshot.factsVersion, now));
+  const productFacts = snapshot.factsVersion === SYSTEM_FACTS_VERSION_V4 ? reduceProductFacts(snapshot.facts, now) : null;
+  const components = productFacts
+    ? productFacts.components
+    : snapshot.facts.components.map((component) => reduceSystemComponent(component, snapshot.factsVersion, now));
   let state = 'healthy';
   let reasonClass = 'none';
   if (components.some((component) => component.state === 'repair needed')) {
@@ -297,6 +461,7 @@ function reduceSystemModule(snapshot, { now = new Date(), validation = null, pro
     factsVersion: snapshot.factsVersion,
     profile: snapshot.facts.profile,
     components,
+    ...(productFacts ? { products: productFacts.products, doctor: productFacts.doctor } : {}),
   };
 }
 
@@ -438,7 +603,7 @@ function loadHealthModules({ workspace, now = new Date(), fsImpl = fs, expectedC
 module.exports = {
   HEALTH_MODULE_DIRECTORY, MODULE_SNAPSHOT_SCHEMA, PUBLIC_MODULE_ID, PUBLIC_STATES, PUBLIC_MODULE_FILE,
   CONTINUITY_MODULE_ID, CONTINUITY_MODULE_FILE, CONTINUITY_FACTS_VERSION, CONTINUITY_TARGETS, CONTINUITY_EVIDENCE_STATES,
-  SYSTEM_MODULE_ID, SYSTEM_MODULE_FILE, SYSTEM_FACTS_VERSION, SYSTEM_FACTS_VERSION_V3, SYSTEM_FACTS_VERSIONS, SYSTEM_COMPONENT_STATES, MEMORY_COMPONENTS,
+  SYSTEM_MODULE_ID, SYSTEM_MODULE_FILE, SYSTEM_FACTS_VERSION, SYSTEM_FACTS_VERSION_V3, SYSTEM_FACTS_VERSION_V4, SYSTEM_FACTS_VERSIONS, SYSTEM_COMPONENT_STATES, MEMORY_COMPONENTS,
   loadHealthModules, missingContinuityModule, modulePath, ownerOnly, reduceHealthModule, reduceContinuityModule,
   reduceSystemModule, systemComponentLabel, validateSnapshot,
 };

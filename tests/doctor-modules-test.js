@@ -1018,3 +1018,419 @@ test('a present untrusted or stale continuity snapshot fails closed as that modu
   }));
   assert.equal(loadHealthModules({ workspace: staleRoot, now: NOW }).modules[0].reasonClass, 'module-stale');
 });
+
+// --- facts/v4: product rows with sub-checks and the jarvOS Doctor block ---
+
+const SEVERITY = ['healthy', 'not configured', 'warning', 'repair needed'];
+const FRESH_UNTIL = new Date(NOW.getTime() + 15 * 60 * 1000).toISOString();
+
+function checkV4(id, state = 'healthy', overrides = {}) {
+  return {
+    id,
+    label: `Check ${id}`,
+    state,
+    reasonClass: state === 'healthy' ? 'none' : 'reported-condition',
+    observedAt: NOW.toISOString(),
+    validUntil: FRESH_UNTIL,
+    evidence: null,
+    ...overrides,
+  };
+}
+
+// Independent restatement of the aggregate rule so the tests do not lean on the library.
+function rollupV4(checks) {
+  const worst = checks.reduce((a, c) => (SEVERITY.indexOf(c.state) > SEVERITY.indexOf(a.state) ? c : a));
+  const observed = checks.map((c) => c.observedAt).filter(Boolean).sort();
+  const valid = checks.map((c) => c.validUntil).filter(Boolean).sort();
+  return {
+    state: worst.state,
+    reasonClass: worst.state === 'healthy' ? 'none' : worst.reasonClass,
+    observedAt: observed[0] ?? null,
+    validUntil: valid[0] ?? null,
+  };
+}
+
+function productV4(id, order, checks, overrides = {}) {
+  return { id, label: `Product ${id}`, maker: 'Acme', order, ...rollupV4(checks), version: null, checks, ...overrides };
+}
+
+function doctorCheckV4(part, state = 'healthy', overrides = {}) {
+  const { evidence, ...check } = checkV4(`doctor-${part}`, state, { part, ...overrides });
+  return check;
+}
+
+function doctorV4(overrides = {}, checks = ['last-run', 'reviewed-release', 'repairs', 'alerts'].map((part) => doctorCheckV4(part))) {
+  return { label: 'jarvOS Doctor', ...rollupV4(checks), checks, ...overrides };
+}
+
+function systemSnapshotV4(facts = {}, overrides = {}) {
+  return systemSnapshot({
+    factsVersion: 'jarvos-system-doctor-facts/v4',
+    facts: {
+      profile: 'minimal',
+      products: [productV4('alpha', 1, [checkV4('alpha-core'), checkV4('alpha-search')])],
+      doctor: doctorV4(),
+      ...facts,
+    },
+    ...overrides,
+  });
+}
+
+function readSystemV4(input, { now = NOW } = {}) {
+  const root = workspace();
+  writeSnapshot(root, input);
+  return loadHealthModules({ workspace: root, now, profile: 'minimal' }).modules[0];
+}
+
+function assertInvalid(module) {
+  assert.equal(module.state, 'needs your attention');
+  assert.equal(module.reasonClass, 'module-invalid');
+  assert.equal(module.products, undefined);
+  assert.equal(module.components, undefined);
+}
+
+test('a v4 snapshot aggregates each product row from its checks and keeps snapshot labels', () => {
+  const early = new Date(NOW.getTime() - 20 * 60 * 1000).toISOString();
+  const soon = new Date(NOW.getTime() + 5 * 60 * 1000).toISOString();
+  const checks = [
+    checkV4('capture-ideas', 'healthy', { observedAt: early }),
+    checkV4('capture-journal', 'healthy', { validUntil: soon }),
+  ];
+  const input = systemSnapshotV4({
+    products: [
+      productV4('gbrain', 1, [checkV4('gbrain-core')], { label: 'Garry Brain', maker: 'Garry' }),
+      productV4('capture', 2, checks),
+    ],
+  });
+  const module = readSystemV4(input);
+  assert.equal(module.state, 'healthy');
+  assert.equal(module.factsVersion, 'jarvos-system-doctor-facts/v4');
+  assert.deepEqual(module.products.map((product) => [product.id, product.label, product.maker, product.order]),
+    [['gbrain', 'Garry Brain', 'Garry', 1], ['capture', 'Product capture', 'Acme', 2]]);
+  const capture = module.products[1];
+  assert.equal(capture.state, 'healthy');
+  assert.equal(capture.observedAt, early);
+  assert.equal(capture.validUntil, soon);
+  assert.deepEqual(capture.checks.map((check) => check.id), ['capture-ideas', 'capture-journal']);
+  assert.equal(module.doctor.label, 'jarvOS Doctor');
+  assert.equal(module.doctor.state, 'healthy');
+  assert.equal(module.doctor.checks.length, 4);
+
+  const receipt = buildSystemDoctorReceipt({
+    ok: true, profile: { id: 'minimal', title: 'Minimal' }, workspace: '/portable/workspace', results: [], modules: [module],
+  });
+  assert.equal(receipt.schema, 'jarvos-system-doctor-report/v1');
+  assert.equal(receipt.factsVersion, 'jarvos-system-doctor-facts/v4');
+  assert.deepEqual(receipt.products, module.products);
+  assert.deepEqual(receipt.doctor, module.doctor);
+  const text = renderSystemDoctor({ systemDoctor: receipt }, { now: NOW });
+  assert.match(text, /Products\n✅ Garry Brain\n   ✅ Check gbrain-core\n✅ Product capture\n   ✅ Check capture-ideas/);
+  assert.match(text, /✅ jarvOS Doctor\n   ✅ Check doctor-last-run/);
+  assert.equal((text.match(/✅|❌|⚠️/g) || []).length, 1 + 1 + 1 + 2 + 1 + 4);
+});
+
+test('the worst check decides a v4 row and the first worst check names its reason', () => {
+  const module = readSystemV4(systemSnapshotV4({
+    products: [productV4('alpha', 1, [
+      checkV4('a1', 'not configured', { reasonClass: 'not-set-up' }),
+      checkV4('a2', 'warning', { reasonClass: 'slow' }),
+      checkV4('a3', 'repair needed', { reasonClass: 'broken' }),
+      checkV4('a4', 'repair needed', { reasonClass: 'other-break' }),
+    ])],
+  }));
+  assert.equal(module.products[0].state, 'repair needed');
+  assert.equal(module.products[0].reasonClass, 'broken');
+  assert.equal(module.state, 'repair needed');
+  assert.equal(module.reasonClass, 'component-failed');
+});
+
+test('a v4 row that restates its checks more kindly or more freshly is rejected', () => {
+  const early = new Date(NOW.getTime() - 20 * 60 * 1000).toISOString();
+  const late = new Date(NOW.getTime() + 60 * 60 * 1000).toISOString();
+  const mixed = [
+    checkV4('a1', 'healthy', { observedAt: early }),
+    checkV4('a2', 'warning', { validUntil: FRESH_UNTIL }),
+    checkV4('a3', 'healthy', { validUntil: new Date(NOW.getTime() + 5 * 60 * 1000).toISOString() }),
+  ];
+  const tampers = [
+    { state: 'healthy' },
+    { state: 'repair needed' },
+    { reasonClass: 'none' },
+    { observedAt: NOW.toISOString() },
+    { observedAt: new Date(NOW.getTime() - 60 * 60 * 1000).toISOString() },
+    { validUntil: late },
+    { validUntil: null },
+  ];
+  const mixedDoctor = [
+    doctorCheckV4('last-run', 'healthy', { observedAt: early }),
+    doctorCheckV4('reviewed-release', 'warning'),
+    doctorCheckV4('repairs', 'healthy', { validUntil: new Date(NOW.getTime() + 5 * 60 * 1000).toISOString() }),
+    doctorCheckV4('alerts'),
+  ];
+  assert.equal(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, mixed)] })).reasonClass, 'component-degraded');
+  assert.equal(readSystemV4(systemSnapshotV4({ doctor: doctorV4({}, mixedDoctor) })).doctor.state, 'warning');
+  for (const tamper of tampers) {
+    assertInvalid(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, mixed, tamper)] })));
+    assertInvalid(readSystemV4(systemSnapshotV4({ doctor: doctorV4(tamper, mixedDoctor) })));
+  }
+});
+
+test('a v4 check that expires at read time turns its row yellow and re-aggregates', () => {
+  const stale = checkV4('a-stale', 'healthy', {
+    observedAt: new Date(NOW.getTime() - 60 * 60 * 1000).toISOString(),
+    validUntil: new Date(NOW.getTime() - 1).toISOString(),
+  });
+  const input = systemSnapshotV4({
+    products: [
+      productV4('alpha', 1, [checkV4('a-fresh'), stale]),
+      productV4('beta', 2, [checkV4('b-fresh')]),
+    ],
+  });
+  const module = readSystemV4(input);
+  const [alpha, beta] = module.products;
+  assert.equal(alpha.checks[1].state, 'warning');
+  assert.equal(alpha.checks[1].reasonClass, 'component-stale');
+  assert.equal(alpha.checks[0].state, 'healthy');
+  assert.equal(alpha.state, 'warning');
+  assert.equal(alpha.reasonClass, 'component-stale');
+  assert.equal(alpha.validUntil, stale.validUntil);
+  assert.equal(beta.state, 'healthy');
+  assert.equal(module.state, 'needs your attention');
+  assert.equal(module.reasonClass, 'component-degraded');
+
+  // Exactly at the deadline is already stale; one millisecond later is not.
+  const edge = (validUntil) => readSystemV4(systemSnapshotV4({
+    products: [productV4('alpha', 1, [checkV4('a1', 'healthy', { observedAt: stale.observedAt, validUntil })])],
+  })).products[0];
+  assert.equal(edge(NOW.toISOString()).reasonClass, 'component-stale');
+  assert.equal(edge(new Date(NOW.getTime() + 1).toISOString()).state, 'healthy');
+
+  // The Doctor block follows the same rule.
+  const doctorStale = doctorCheckV4('repairs', 'healthy', { observedAt: stale.observedAt, validUntil: stale.validUntil });
+  const doctor = readSystemV4(systemSnapshotV4({
+    doctor: doctorV4({}, ['last-run', 'reviewed-release', 'alerts'].map((part) => doctorCheckV4(part)).concat(doctorStale)),
+  })).doctor;
+  assert.equal(doctor.state, 'warning');
+  assert.equal(doctor.checks.find((check) => check.part === 'repairs').reasonClass, 'component-stale');
+
+  // An expired failure keeps its own severity and reason rather than becoming a softer "stale".
+  const failed = readSystemV4(systemSnapshotV4({
+    products: [productV4('alpha', 1, [{ ...stale, state: 'repair needed', reasonClass: 'broken' }])],
+  })).products[0];
+  assert.equal(failed.state, 'repair needed');
+  assert.equal(failed.reasonClass, 'broken');
+});
+
+test('a v4 healthy check without dates is rejected, an undated degraded check is not', () => {
+  const undated = { observedAt: null, validUntil: null };
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, [checkV4('a1'), checkV4('a2', 'healthy', undated)])] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, [checkV4('a1', 'healthy', undated)])] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({
+    doctor: doctorV4({}, ['last-run', 'reviewed-release', 'repairs'].map((part) => doctorCheckV4(part))
+      .concat(doctorCheckV4('alerts', 'healthy', undated))),
+  })));
+  // A healthy row cannot claim dates its checks lack either.
+  assertInvalid(readSystemV4(systemSnapshotV4({
+    products: [productV4('alpha', 1, [checkV4('a1', 'healthy', undated)], { observedAt: NOW.toISOString(), validUntil: FRESH_UNTIL })],
+  })));
+
+  const degraded = readSystemV4(systemSnapshotV4({
+    products: [productV4('alpha', 1, [checkV4('a1'), checkV4('a2', 'not configured', undated)])],
+  })).products[0];
+  assert.equal(degraded.state, 'not configured');
+  assert.equal(degraded.observedAt, NOW.toISOString());
+  const allUndated = readSystemV4(systemSnapshotV4({
+    products: [productV4('alpha', 1, [checkV4('a1', 'warning', undated)])],
+  })).products[0];
+  assert.deepEqual([allUndated.state, allUndated.observedAt, allUndated.validUntil], ['warning', null, null]);
+});
+
+test('a v4 version block is display-only: present, absent or malformed never changes state', () => {
+  const version = {
+    installedVersion: '1.2.3',
+    latestVersion: '1.4.0',
+    versionSource: { installed: 'package.json', latest: 'github-release' },
+    latestCheckedAt: NOW.toISOString(),
+  };
+  const read = (variant, checks = [checkV4('a1'), checkV4('a2', 'warning')]) => {
+    const product = productV4('alpha', 1, checks);
+    if (variant === 'absent') delete product.version;
+    else product.version = variant;
+    return readSystemV4(systemSnapshotV4({ products: [product] }));
+  };
+  for (const checks of [[checkV4('a1')], [checkV4('a1'), checkV4('a2', 'warning')]]) {
+    const baseline = read(null, checks);
+    assert.equal(baseline.products[0].version, null);
+    const outcomes = [version, 'absent', { ...version, extra: 1 }, { ...version, installedVersion: 7 },
+      { ...version, versionSource: null }, { ...version, latestCheckedAt: 'yesterday' },
+      { ...version, latestVersion: '1.0\n<script>' }, 'v1', []].map((variant) => read(variant, checks));
+    for (const outcome of outcomes) {
+      assert.equal(outcome.state, baseline.state);
+      assert.equal(outcome.reasonClass, baseline.reasonClass);
+      assert.equal(outcome.products[0].state, baseline.products[0].state);
+      assert.equal(outcome.products[0].reasonClass, baseline.products[0].reasonClass);
+      assert.equal(outcome.products[0].observedAt, baseline.products[0].observedAt);
+      assert.equal(outcome.products[0].validUntil, baseline.products[0].validUntil);
+    }
+    assert.deepEqual(outcomes[0].products[0].version, version);
+    for (const dropped of outcomes.slice(1)) assert.equal(dropped.products[0].version, null);
+  }
+  const noUpdate = read({ ...version, installedVersion: '1.4.0', latestVersion: null, versionSource: { installed: 'package.json', latest: null }, latestCheckedAt: null });
+  assert.equal(noUpdate.products[0].version.latestVersion, null);
+});
+
+test('v4 ids must be unique and products must be ordered by order', () => {
+  const alpha = (order, id = 'alpha') => productV4(id, order, [checkV4(`${id}-core`)]);
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [alpha(2), alpha(1, 'beta')] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [alpha(1), alpha(1, 'beta')] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [alpha(1), alpha(2)] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, [checkV4('same'), checkV4('same')])] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [alpha(1), productV4('beta', 2, [checkV4('alpha-core')])] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, [checkV4('alpha')])] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [alpha(1, 'doctor')] })));
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, [checkV4('doctor-last-run')])] })));
+  assert.equal(readSystemV4(systemSnapshotV4({ products: [alpha(1), alpha(7, 'beta')] })).state, 'healthy');
+  assert.equal(readSystemV4(systemSnapshotV4({ products: [] })).state, 'healthy');
+});
+
+test('v4 rows are open-ended up to eight checks, with a closed shape', () => {
+  const many = (count) => Array.from({ length: count }, (_, index) => checkV4(`c${index}`));
+  assert.equal(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, many(8))] })).products[0].checks.length, 8);
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [productV4('alpha', 1, many(8).concat(checkV4('c8')))] })));
+  const empty = productV4('alpha', 1, [checkV4('c0')], { checks: [] });
+  assertInvalid(readSystemV4(systemSnapshotV4({ products: [empty] })));
+
+  const base = productV4('alpha', 1, [checkV4('c0')]);
+  const malformed = [
+    { ...base, privateNote: 'do-not-leak' },
+    { ...base, label: '' },
+    { ...base, label: 'x'.repeat(81) },
+    { ...base, label: 'Line\nbreak' },
+    { ...base, maker: 3 },
+    { ...base, order: -1 },
+    { ...base, order: 1.5 },
+    { ...base, id: 'Not Safe' },
+    { ...base, checks: [{ ...base.checks[0], privateNote: 'do-not-leak' }] },
+    { ...base, checks: [{ ...base.checks[0], state: 'degraded' }] },
+    { ...base, checks: [{ ...base.checks[0], label: ' padded ' }] },
+    { ...base, checks: [{ ...base.checks[0], observedAt: new Date(NOW.getTime() + 1000).toISOString() }] },
+    { ...base, checks: [{ ...base.checks[0], observedAt: NOW.toISOString(), validUntil: NOW.toISOString() }] },
+    { ...base, checks: [{ ...base.checks[0], validUntil: null }] },
+  ];
+  for (const product of malformed) {
+    const module = readSystemV4(systemSnapshotV4({ products: [product] }));
+    assertInvalid(module);
+  }
+  const withoutDoctor = systemSnapshotV4();
+  delete withoutDoctor.facts.doctor;
+  assertInvalid(readSystemV4(withoutDoctor));
+});
+
+test('the v4 Doctor block needs each of its four parts exactly once', () => {
+  const parts = ['last-run', 'reviewed-release', 'repairs', 'alerts'];
+  const doctor = (list) => doctorV4({}, list.map((part) => doctorCheckV4(part)));
+  assert.equal(readSystemV4(systemSnapshotV4({ doctor: doctor(parts) })).doctor.checks.length, 4);
+  assertInvalid(readSystemV4(systemSnapshotV4({ doctor: doctor(parts.slice(1)) })));
+  assertInvalid(readSystemV4(systemSnapshotV4({
+    doctor: doctorV4({}, [...parts, 'alerts'].map((part, index) => doctorCheckV4(part, 'healthy', { id: `doctor-${index}` }))),
+  })));
+  assertInvalid(readSystemV4(systemSnapshotV4({
+    doctor: doctorV4({}, [...parts.slice(1), 'unknown'].map((part) => doctorCheckV4(part))),
+  })));
+  assertInvalid(readSystemV4(systemSnapshotV4({
+    doctor: doctorV4({}, parts.map((part) => ({ ...doctorCheckV4(part), evidence: null }))),
+  })));
+});
+
+test('a degraded Doctor block degrades the v4 module and the receipt status', () => {
+  const module = readSystemV4(systemSnapshotV4({
+    doctor: doctorV4({}, ['last-run', 'reviewed-release', 'repairs', 'alerts']
+      .map((part) => doctorCheckV4(part, part === 'alerts' ? 'repair needed' : 'healthy', part === 'alerts' ? { reasonClass: 'alert-open' } : {}))),
+  }));
+  assert.equal(module.doctor.state, 'repair needed');
+  assert.equal(module.state, 'repair needed');
+  const receipt = buildSystemDoctorReceipt({
+    ok: false, profile: { id: 'minimal', title: 'Minimal' }, workspace: '/w', results: [], modules: [module],
+  });
+  assert.equal(receipt.status, 'repair needed');
+  const text = renderSystemDoctor({ systemDoctor: receipt }, { now: NOW });
+  assert.match(text, /❌ Check doctor-alerts — alert open\. Fix it, then rerun Doctor\./);
+});
+
+test('v4 search evidence keeps the v3 green rule without any hard-coded product table', () => {
+  const evidence = (overrides) => ({ httpReachable: true, searchResultCount: 3, runtimeToolAvailable: true, ...overrides });
+  const read = (check) => readSystemV4(systemSnapshotV4({ products: [productV4('search', 1, [check])] }));
+  for (const [overrides, reasonClass] of [
+    [{ searchResultCount: 0 }, 'search-empty'],
+    [{ httpReachable: false }, 'http-unreachable'],
+    [{ runtimeToolAvailable: false }, 'runtime-tool-missing'],
+  ]) {
+    const product = read(checkV4('any-id', 'healthy', { evidence: evidence(overrides) })).products[0];
+    assert.equal(product.state, 'warning');
+    assert.equal(product.reasonClass, reasonClass);
+  }
+  assert.equal(read(checkV4('any-id', 'healthy', { evidence: evidence({}) })).products[0].state, 'healthy');
+  assertInvalid(read(checkV4('provider.searxng')));
+  assertInvalid(read(checkV4('any-id', 'healthy', { evidence: { httpReachable: true } })));
+  assert.equal(read(checkV4('provider.searxng', 'healthy', { evidence: evidence({}) })).products[0].state, 'healthy');
+});
+
+test('v4 rows inherit the outer module gates and profile binding', () => {
+  const root = workspace();
+  writeSnapshot(root, systemSnapshotV4());
+  const mismatch = loadHealthModules({ workspace: root, now: NOW, profile: 'local-openclaw' }).modules[0];
+  assert.equal(mismatch.reasonClass, 'profile-mismatch');
+  assert.equal(mismatch.products, undefined);
+  assert.equal(readSystemV4(systemSnapshotV4({}, { trust: 'untrusted' })).reasonClass, 'module-untrusted');
+  const late = new Date(NOW.getTime() + 2 * 60 * 60 * 1000);
+  assert.equal(readSystemV4(systemSnapshotV4(), { now: late }).reasonClass, 'module-stale');
+});
+
+test('v2 and v3 System facts are accepted and reduced exactly as before, with no v4 fields', () => {
+  const v2 = readSystemV4(systemSnapshot({
+    facts: { profile: 'minimal', components: [systemComponent('provider.paperclip'), systemComponent('provider.telegram', 'warning')] },
+  }));
+  assert.deepEqual(v2, {
+    id: 'system',
+    state: 'needs your attention',
+    generation: 11,
+    observedAt: NOW.toISOString(),
+    validUntil: new Date(NOW.getTime() + 60 * 60 * 1000).toISOString(),
+    reasonClass: 'component-degraded',
+    factsVersion: 'jarvos-system-doctor-facts/v2',
+    profile: 'minimal',
+    components: [
+      { ...systemComponent('provider.paperclip'), label: 'Paperclip', observedAt: null, validUntil: null },
+      { ...systemComponent('provider.telegram', 'warning'), label: 'Telegram', observedAt: null, validUntil: null },
+    ],
+  });
+
+  const observedAt = new Date(NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const validUntil = new Date(NOW.getTime() - 1).toISOString();
+  const v3 = readSystemV4(systemSnapshotV3({
+    facts: { profile: 'minimal', components: [
+      systemComponentV3('provider.paperclip'),
+      systemComponentV3('provider.openclaw', 'healthy', { observedAt, validUntil }),
+    ] },
+  }));
+  assert.deepEqual(v3.components.map((component) => [component.id, component.state, component.reasonClass]),
+    [['provider.paperclip', 'healthy', 'none'], ['provider.openclaw', 'warning', 'component-stale']]);
+  assert.equal(v3.factsVersion, 'jarvos-system-doctor-facts/v3');
+  assert.equal(v3.reasonClass, 'component-degraded');
+
+  for (const module of [v2, v3]) {
+    assert.equal(module.products, undefined);
+    assert.equal(module.doctor, undefined);
+    assert.equal(module.components.some((component) => 'rollup' in component), false);
+    const receipt = buildSystemDoctorReceipt({ ok: false, profile: { id: 'minimal', title: 'Minimal' }, workspace: '/w', results: [], modules: [module] });
+    assert.deepEqual(receipt.products, []);
+    assert.equal(receipt.doctor, null);
+    assert.equal(receipt.components.some((component) => 'rollup' in component), false);
+    assert.doesNotMatch(renderSystemDoctor({ systemDoctor: receipt }, { now: NOW }), /Products/);
+  }
+});
+
+test('v4 is not a downgrade path: the v2 and v3 shapes are rejected under the v4 version', () => {
+  assertInvalid(readSystemV4(systemSnapshot({ factsVersion: 'jarvos-system-doctor-facts/v4', facts: { profile: 'minimal', components: [] } })));
+  assertInvalid(readSystemV4(systemSnapshotV3({ facts: { profile: 'minimal', products: [], doctor: doctorV4() } })));
+});
