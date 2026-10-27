@@ -2176,7 +2176,7 @@ function recall(options = {}) {
   const config = gbrain.resolveConfig(options.config || {});
   const bundle = gbrain.recallBundle({ ...options.config, ...config }, {
     query,
-    includeQmd: options.includeQmd !== false,
+    includeQmd: options.includeQmd === true,
     autoGraph: options.autoGraph !== false,
     seeds: Array.isArray(options.seeds) ? options.seeds : undefined,
     dryRun: options.dryRun === true,
@@ -2211,7 +2211,7 @@ function synthesizeRecall(options = {}) {
   const config = gbrain.resolveConfig(options.config || {});
   const bundle = gbrain.recallBundle({ ...options.config, ...config }, {
     query,
-    includeQmd: options.includeQmd !== false,
+    includeQmd: options.includeQmd === true,
     autoGraph: options.autoGraph !== false,
     seeds: Array.isArray(options.seeds) ? options.seeds : undefined,
     limit: options.limit,

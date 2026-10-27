@@ -215,7 +215,7 @@ const {
 - `syncBrain(config, { dryRun })` wraps `gbrain sync --repo <brainDir>` and `gbrain embed --stale`.
 - `runRetrievalEval(config, { dryRun, compareQmd })` runs fixture queries through GBrain search and optionally QMD, then fails questions whose expected evidence is missing.
 - `graphRecall(config, { seeds, depth, dryRun })` runs `gbrain graph-query <seed> --depth <n>` and returns parsed graph nodes for sidecar recall.
-- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime resolver bundle with direct GBrain search, optional QMD broad lookup, and graph sidecar expansion.
+- `recallBundle(config, { query, includeQmd, autoGraph, seeds })` returns a compact runtime resolver bundle with direct GBrain search, optional QMD broad lookup (off unless `includeQmd: true`), and graph sidecar expansion.
 - `renderRecallMarkdown(bundle)` renders a bundle into context-ready Markdown.
 
 Failed direct GBrain searches include a `Failure:` JSON line with only bounded
@@ -322,7 +322,8 @@ The `gbrain_recall` engine runs the recall bundle and checks its combined
 Markdown output. If a question does not define explicit `recall` expectations,
 the recall engine treats the GBrain, QMD, and graph expectations as acceptable
 evidence candidates. This lets the eval distinguish direct-search gaps from
-runtime recall failures.
+runtime recall failures. The recall bundle only runs QMD when `--compare-qmd`
+is also passed.
 
 With `--compare-recall`, direct `gbrain` remains an explicit diagnostic
 comparator; the health-bearing result is `gbrain_recall` together with any
@@ -368,10 +369,10 @@ node scripts/jarvos-gbrain.js recall \
   --format markdown
 ```
 
-By default, the bundle runs direct GBrain search, QMD broad lookup, and graph
-expansion from the first GBrain search slugs. Use `--graph-seed` to force known
-anchors, `--no-qmd` when QMD is unavailable, or `--no-graph` when only direct
-search is needed.
+By default, the bundle runs direct GBrain search and graph expansion from the
+first GBrain search slugs. QMD broad lookup is opt-in: pass `--qmd` (or
+`includeQmd: true` to `recallBundle`) when QMD is installed. Use `--graph-seed`
+to force known anchors, or `--no-graph` when only direct search is needed.
 
 This command is a retrieval adapter, not automatic prompt injection. Runtime
 wiring should decide when to call it and how much of its Markdown to include.
