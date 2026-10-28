@@ -294,6 +294,10 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+### Features
+
+* **doctor (SUP-4041):** add `jarvos-system-doctor-facts/v4` — product rows with sub-checks and a jarvOS Doctor block, with per-check read-time staleness; v2 and v3 are read unchanged
+
 ### Bug Fixes
 
 * **secondbrain (SUP-4142):** treat mid-clause capture-phrase catalogs as mentions, not directives — only clause-initial note/idea/save language authorizes durable capture

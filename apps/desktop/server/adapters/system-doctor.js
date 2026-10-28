@@ -21,6 +21,7 @@ const {
   MEMORY_COMPONENTS,
   SYSTEM_FACTS_VERSION,
   SYSTEM_FACTS_VERSION_V3,
+  SYSTEM_FACTS_VERSION_V4,
   SYSTEM_FACTS_VERSIONS,
 } = require('../vendor/jarvos-doctor-modules');
 const {
@@ -32,6 +33,8 @@ const MEMORY_ORDER = (MEMORY_COMPONENTS || []).map(([id]) => id);
 const MEMORY_LABELS = Object.fromEntries(MEMORY_COMPONENTS || []);
 const COMPONENT_STATES = new Set(['healthy', 'warning', 'repair needed', 'not configured']);
 const RECEIPT_STATUSES = new Set(['healthy', 'repair needed', 'needs your attention']);
+// v3 and v4 components carry their own date pair; v2 components never do.
+const DATED_FACTS_VERSIONS = new Set([SYSTEM_FACTS_VERSION_V3, SYSTEM_FACTS_VERSION_V4]);
 
 const KNOWN_GUIDANCE = Object.freeze({
   'http-unreachable': 'HTTP check failed. Restore access, then rerun Doctor.',
@@ -103,12 +106,34 @@ function decorateComponent(component) {
     section: component.section,
     state: component.state,
     reasonClass: component.reasonClass || 'none',
+    ...(component.rollup ? { rollup: component.rollup } : {}),
     message: component.message || null,
     guidance,
     observedAt: component.observedAt || null,
     validUntil: component.validUntil || null,
     freshness: component.freshness || 'unavailable',
   };
+}
+
+// Light shape check for a v4 product or Doctor row; the producer owns the deep rules.
+function validV4Row(row, { needsId }) {
+  return isPlainObject(row)
+    && (!needsId || (typeof row.id === 'string' && row.id))
+    && typeof row.label === 'string' && Boolean(row.label)
+    && COMPONENT_STATES.has(row.state)
+    && Array.isArray(row.checks)
+    && row.checks.every((check) => isPlainObject(check)
+      && (typeof check.id === 'string' && check.id)
+      && typeof check.label === 'string' && Boolean(check.label)
+      && COMPONENT_STATES.has(check.state));
+}
+
+function validateV4Rows(receipt) {
+  if (!Array.isArray(receipt.products) || !receipt.products.every((p) => validV4Row(p, { needsId: true }))) {
+    return { ok: false, error: 'receipt.products invalid' };
+  }
+  if (!validV4Row(receipt.doctor, { needsId: false })) return { ok: false, error: 'receipt.doctor invalid' };
+  return null;
 }
 
 function validateReceipt(receipt, now = new Date()) {
@@ -143,7 +168,7 @@ function validateReceipt(receipt, now = new Date()) {
     if (!COMPONENT_STATES.has(component.state)) {
       return { ok: false, error: `component.state invalid for ${component.id}` };
     }
-    if (receipt.factsVersion === SYSTEM_FACTS_VERSION_V3) {
+    if (DATED_FACTS_VERSIONS.has(receipt.factsVersion)) {
       if (!Object.hasOwn(component, 'observedAt') || !Object.hasOwn(component, 'validUntil')) {
         return { ok: false, error: `component dates required for ${component.id}` };
       }
@@ -157,6 +182,10 @@ function validateReceipt(receipt, now = new Date()) {
       return { ok: false, error: `component dates unsupported for ${component.id}` };
     }
   }
+  if (receipt.factsVersion === SYSTEM_FACTS_VERSION_V4) {
+    const rows = validateV4Rows(receipt);
+    if (rows) return rows;
+  }
   return { ok: true, receipt: normalizeReceipt(receipt) };
 }
 
@@ -168,7 +197,7 @@ function normalizeReceipt(receipt) {
   for (const raw of receipt.components) {
     const component = decorateComponent(raw);
     if (component.section === 'core') core.push(component);
-    else if (component.section === 'memory' || String(component.id).startsWith('memory.')) {
+    else if (component.section === 'memory' || (!component.rollup && String(component.id).startsWith('memory.'))) {
       memoryById.set(component.id, { ...component, section: 'memory' });
     } else optional.push({ ...component, section: component.section || 'optional' });
   }
@@ -205,6 +234,8 @@ function normalizeReceipt(receipt) {
     observations: receipt.observations || [],
     coverage: 'Published observations only; unobserved checks are not verified.',
     presentation: 'compact-scoreboard',
+    // Additive v4 rows; Desktop renders only the flat rollup components for now.
+    ...(receipt.factsVersion === SYSTEM_FACTS_VERSION_V4 ? { products: receipt.products, doctor: receipt.doctor } : {}),
   };
 }
 

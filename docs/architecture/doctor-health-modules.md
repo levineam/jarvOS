@@ -169,6 +169,128 @@ component-level check only; the outer module's own trust and freshness gate is
 unchanged and still governs the module as a whole before any component is
 reduced.
 
+### Product rows with sub-checks (v4)
+
+`jarvos-system-doctor-facts/v4` regroups the flat component list into product
+rows, each carrying its own sub-checks, plus a jarvOS Doctor status block.
+v2 and v3 snapshots are read exactly as before; v4 is an addition, not a
+migration, and a v4 version string never accepts a v2 or v3 shape.
+
+```json
+{
+  "factsVersion": "jarvos-system-doctor-facts/v4",
+  "facts": {
+    "profile": "minimal",
+    "products": [
+      {
+        "id": "capture",
+        "label": "Capture",
+        "maker": "jarvOS",
+        "order": 1,
+        "state": "healthy",
+        "reasonClass": "none",
+        "observedAt": "2026-09-03T17:55:00.000Z",
+        "validUntil": "2026-09-03T18:10:00.000Z",
+        "version": {
+          "installedVersion": "0.11.0",
+          "latestVersion": "0.12.0",
+          "versionSource": { "installed": "package.json", "latest": "github-release" },
+          "latestCheckedAt": "2026-09-03T17:00:00.000Z"
+        },
+        "checks": [
+          {
+            "id": "capture-ideas",
+            "label": "Ideas",
+            "state": "healthy",
+            "reasonClass": "none",
+            "observedAt": "2026-09-03T17:55:00.000Z",
+            "validUntil": "2026-09-03T18:15:00.000Z",
+            "evidence": null
+          }
+        ]
+      }
+    ],
+    "doctor": {
+      "label": "jarvOS Doctor",
+      "state": "healthy",
+      "reasonClass": "none",
+      "observedAt": "2026-09-03T17:58:00.000Z",
+      "validUntil": "2026-09-03T18:20:00.000Z",
+      "checks": [
+        {
+          "id": "doctor-last-run",
+          "part": "last-run",
+          "label": "Last run",
+          "state": "healthy",
+          "reasonClass": "none",
+          "observedAt": "2026-09-03T17:58:00.000Z",
+          "validUntil": "2026-09-03T18:20:00.000Z"
+        }
+      ]
+    }
+  }
+}
+```
+
+Grouping never loosens the green rule. A row reads green only when every one of
+its checks is healthy and dated, and every check's own deadline is still in the
+future. The reader rejects the whole snapshot (`module-invalid`) unless all of
+the following hold:
+
+- A product's or the Doctor's `state` equals the worst of its checks, ranked
+  `repair needed` > `warning` > `not configured` > `healthy`. Its `reasonClass`
+  is `none` when healthy and otherwise the reason of the first check at that
+  worst state.
+- The row's `observedAt` equals the oldest check `observedAt`, and its
+  `validUntil` equals the earliest check `validUntil`. A row cannot be newer or
+  longer-lived than its weakest check. Checks without dates are skipped; a row
+  with no dated check at all reports `null`/`null`.
+- Every healthy check carries both timestamps. An unknown check age (v3's
+  `null`/`null`) is allowed only on a check that is not healthy.
+- Check timestamps follow the v3 rules: a pair of both `null` or both valid ISO
+  timestamps, `validUntil` strictly after `observedAt`, `observedAt` not after
+  the reader's clock.
+- Product and check ids are safe public ids and unique across the whole
+  snapshot, including the Doctor's checks; `doctor` is reserved. Products are
+  strictly ascending by `order` (a non-negative integer). There are at most 32
+  products.
+- Each product and the Doctor carry 1 to 8 checks. The list is open-ended, so a
+  producer can add checks (for example `ideas` and `journal` under `capture`)
+  without a version bump.
+- The Doctor carries exactly four checks, one for each `part`: `last-run`,
+  `reviewed-release`, `repairs`, and `alerts`.
+- Labels and `maker` come from the snapshot and are non-empty single-line text
+  of at most 80 characters. v4 has no built-in label tables.
+- A check `evidence` is `null` or the SearXNG proof shape. A check with
+  id `provider.searxng` must carry it, and a healthy check whose proof shows no
+  HTTP response, no search result, or no runtime tool is downgraded to
+  `warning` as in v2 and v3.
+
+The `version` block is display-only and optional. It never affects a state,
+`observedAt`, `validUntil`, or whether the snapshot is accepted. A block that
+is absent, null, or malformed in any way (unknown field, wrong type, control
+characters, bad timestamp) reads as `version: null`; jarvOS drops it instead of
+rejecting the snapshot, so an unreliable version lookup cannot hide a real
+health result.
+
+Freshness is recomputed at read time, per check, against the same clock as v3.
+A healthy check whose own `validUntil` has passed (the deadline itself counts
+as passed) becomes `warning` with `reasonClass: "component-stale"`; an expired
+failure keeps its severity and reason. The product row and the Doctor block are
+then re-aggregated from the reduced checks, so one stale check turns its whole
+row yellow even when the outer module was published moments ago. The outer
+module gates (trust, freshness, profile binding) are unchanged and still apply
+first. The module is `repair needed` when any row is, and `needs your attention`
+when any product or the Doctor is not healthy.
+
+The `jarvos-system-doctor-report/v1` receipt keeps its schema. It gains two
+additive fields, `products` (the reduced product rows, `[]` for v2 and v3) and
+`doctor` (the reduced Doctor block, `null` for v2 and v3), and its `components`
+list carries one rollup row per product and one for the Doctor (marked with
+`rollup`) so status and gating need no v4 knowledge. `jarvos doctor` prints a
+Products section with each product's installed version, its sub-checks, and the
+Doctor block beneath it.
+
 A rejected module snapshot — `module-invalid`, `module-stale`, or
 `module-untrusted` — is evidence the reader could not trust, not a service
 claiming a fault. The `systemDoctor` receipt lists it as `warning` with its

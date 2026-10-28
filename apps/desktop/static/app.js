@@ -356,7 +356,7 @@ function doctorRows(components) {
       ? `Last checked ${fmt.esc(new Date(c.observedAt).toLocaleString())}${c.validUntil ? ` · valid until ${fmt.esc(new Date(c.validUntil).toLocaleString())}` : ''}`
       : 'Last checked unavailable';
     return `
-    <div class="doctor-row" data-component-id="${fmt.esc(c.id)}" data-section="${fmt.esc(c.section)}" data-state="${fmt.esc(c.state)}">
+    <div class="doctor-row" data-component-id="${fmt.esc(c.id)}" data-section="${fmt.esc(c.section)}"${c.rollup ? ` data-rollup="${fmt.esc(c.rollup)}"` : ''} data-state="${fmt.esc(c.state)}">
       <span class="doctor-icon ${doctorStateClass(c.state)}" aria-label="${fmt.esc(c.state)}" title="${fmt.esc(c.state)}"></span>
       <div class="doctor-row-body">
         <span class="nm">${fmt.esc(c.label || c.id)}</span>
