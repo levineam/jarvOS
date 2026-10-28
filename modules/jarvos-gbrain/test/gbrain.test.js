@@ -709,7 +709,7 @@ test('combined recall records an empty QMD subpath without hiding valid GBrain e
   fs.chmodSync(gbrainBin, 0o755);
   fs.chmodSync(qmdBin, 0o755);
 
-  const result = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { compareRecall: true });
+  const result = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { includeQmd: true, compareRecall: true });
 
   assert.equal(result.ok, true);
   assert.equal(result.results[0].engines.gbrain_recall.ok, true);
@@ -750,6 +750,7 @@ if (args[0] === 'graph-query') {
     gbrainDir: root,
     qmdBin,
   }, {
+    includeQmd: true,
     compareRecall: true,
   });
 
@@ -822,7 +823,7 @@ if (process.argv.join(' ').includes('malformed qmd')) process.stdout.write('not-
   assert.equal(missing.results[0].engines.qmd.failureReason, 'missing-engine');
 });
 
-test('recallBundle combines GBrain search, QMD lookup, and graph expansion', () => {
+test('recallBundle combines GBrain search, opt-in QMD lookup, and graph expansion', () => {
   const root = tempDir();
   const gbrainBin = path.join(root, 'fake-gbrain');
   const qmdBin = path.join(root, 'fake-qmd');
@@ -847,11 +848,13 @@ if (args[0] === 'graph-query') {
     qmdBin,
   }, {
     query: 'runtime recall',
+    includeQmd: true,
     limit: 2,
     graphSeedLimit: 1,
   });
 
   assert.equal(result.ok, true);
+  assert.equal(result.includeQmd, true);
   assert.equal(result.engines.gbrain.ok, true);
   assert.equal(result.engines.qmd.ok, true);
   assert.deepEqual(result.graphSeeds, ['projects/jarvos-runtime-recall']);
@@ -860,6 +863,61 @@ if (args[0] === 'graph-query') {
   assert.match(result.markdown, /## Direct GBrain Search/);
   assert.match(result.markdown, /## QMD Broad Lookup/);
   assert.match(result.markdown, /## GBrain Graph Sidecar/);
+});
+
+// A qmd stub that records every invocation, so tests can prove it was never spawned.
+function writeQmdSpy(root) {
+  const qmdBin = path.join(root, 'fake-qmd');
+  const spyPath = path.join(root, 'qmd-invoked');
+  fs.writeFileSync(qmdBin, `#!/bin/sh\necho invoked >> "${spyPath}"\nprintf "%s\\n" "[]"\n`, 'utf8');
+  fs.chmodSync(qmdBin, 0o755);
+  return { qmdBin, spyPath };
+}
+
+test('recallBundle does not invoke QMD by default and is ok with GBrain alone', () => {
+  const root = tempDir();
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "[0.9] projects/solo -- gbrain only"\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  const { qmdBin, spyPath } = writeQmdSpy(root);
+
+  const result = gbrain.recallBundle({ gbrainBin, gbrainDir: root, qmdBin }, { query: 'solo', autoGraph: false });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.includeQmd, false);
+  assert.equal(result.engines.qmd, undefined);
+  assert.doesNotMatch(result.markdown, /QMD Broad Lookup/);
+  assert.equal(fs.existsSync(spyPath), false, 'qmd must not be spawned unless includeQmd: true');
+
+  const explicit = gbrain.recallBundle({ gbrainBin, gbrainDir: root, qmdBin }, { query: 'solo', autoGraph: false, includeQmd: true });
+  assert.equal(explicit.includeQmd, true);
+  assert.ok(explicit.engines.qmd, 'includeQmd: true runs the QMD leg');
+  assert.equal(fs.existsSync(spyPath), true);
+});
+
+test('runRetrievalEval without compareQmd never touches QMD, even with compareRecall', () => {
+  const root = tempDir();
+  const evalPath = path.join(root, 'eval.json');
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  fs.writeFileSync(evalPath, JSON.stringify({
+    version: 1,
+    questions: [{ query: 'solo', expected: { gbrain: 'projects/solo' } }],
+  }), 'utf8');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nif [ "$1" = "graph-query" ]; then printf "%s\\n" "No edges found"; else printf "%s\\n" "[0.9] projects/solo -- gbrain only"; fi\n', 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  const { qmdBin, spyPath } = writeQmdSpy(root);
+
+  const result = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { compareRecall: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.results[0].engines.qmd, undefined);
+  assert.equal(result.results[0].engines.gbrain_recall.bundle.includeQmd, false);
+  assert.equal(fs.existsSync(spyPath), false, 'eval must not spawn qmd without compareQmd');
+
+  const compared = gbrain.runRetrievalEval({ evalPath, gbrainBin, gbrainDir: root, qmdBin }, { compareQmd: true, compareRecall: true });
+  assert.ok(compared.results[0].engines.qmd, 'compareQmd keeps the QMD comparison opt-in');
+  assert.equal(compared.results[0].engines.gbrain_recall.bundle.includeQmd, true);
+  assert.equal(fs.existsSync(spyPath), true);
 });
 
 test('renderRecallMarkdown preserves recalled code fences', () => {

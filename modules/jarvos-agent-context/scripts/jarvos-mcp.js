@@ -368,7 +368,7 @@ const TOOLS = [
       required: ['query'],
       properties: {
         query: { type: 'string', description: 'Natural-language recall query.' },
-        includeQmd: { type: 'boolean', description: 'Include QMD broad vault lookup when available.' },
+        includeQmd: { type: 'boolean', description: 'Optional, off by default. Set true to include QMD broad vault lookup when qmd is installed.' },
         autoGraph: { type: 'boolean', description: 'Expand graph context from discovered GBrain seeds.' },
         seeds: { type: 'array', items: { type: 'string' }, description: 'Optional explicit GBrain graph seed pages.' },
         synthesize: { type: 'boolean', description: 'Return a concise retrieval synthesis with the source bundle.' },
@@ -384,7 +384,7 @@ const TOOLS = [
       required: ['query'],
       properties: {
         query: { type: 'string', description: 'Natural-language synthesis question.' },
-        includeQmd: { type: 'boolean', description: 'Include QMD broad vault lookup when available.' },
+        includeQmd: { type: 'boolean', description: 'Optional, off by default. Set true to include QMD broad vault lookup when qmd is installed.' },
         autoGraph: { type: 'boolean', description: 'Expand graph context from discovered GBrain seeds.' },
         seeds: { type: 'array', items: { type: 'string' }, description: 'Optional explicit GBrain graph seed pages.' },
         evidenceLimit: { type: 'number', description: 'Maximum evidence lines to include before the source bundle.' },

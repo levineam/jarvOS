@@ -67,6 +67,7 @@ const READ_ONLY_TOOLS = Object.freeze({
   },
   jarvos_recall: {
     required: ['query'],
+    // includeQmd is optional and off by default (QMD runs only when true).
     properties: { query: QUERY_ARG, includeQmd: { type: 'boolean' }, autoGraph: { type: 'boolean' } },
   },
   jarvos_startup_brief: { properties: { query: QUERY_ARG, maxChars: MAX_CHARS_ARG } },

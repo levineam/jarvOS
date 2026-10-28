@@ -1872,7 +1872,8 @@ function recallBundle(overrides = {}, options = {}) {
   const query = firstString(options.query, overrides.query);
   const dryRun = options.dryRun === true;
   const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_RECALL_LIMIT, DEFAULT_RETRIEVAL_LIMIT);
-  const includeQmd = options.includeQmd !== false && overrides.includeQmd !== false;
+  // QMD is opt-in: the qmd leg runs only when the caller passes includeQmd: true.
+  const includeQmd = options.includeQmd === true && overrides.includeQmd !== false;
   const autoGraph = options.autoGraph !== false && overrides.autoGraph !== false;
   const graphDepth = positiveInteger(
     options.graphDepth || overrides.graphDepth || process.env.JARVOS_GBRAIN_GRAPH_DEPTH,
@@ -1967,13 +1968,13 @@ function recallBundle(overrides = {}, options = {}) {
   };
 }
 
-function runRecallEval(config, entry, query, expectedCandidates, dryRun, limit, graphDepth, graphSeedLimit) {
+function runRecallEval(config, entry, query, expectedCandidates, dryRun, limit, graphDepth, graphSeedLimit, includeQmd = false) {
   const seeds = typeof entry === 'object' ? graphSeedsForEntry(entry) : [];
   const depth = typeof entry === 'object' ? graphDepthForEntry(entry, graphDepth) : graphDepth;
   const bundle = recallBundle(config, {
     dryRun,
     query,
-    includeQmd: true,
+    includeQmd,
     autoGraph: true,
     seeds,
     graphDepth: depth,
@@ -2017,6 +2018,8 @@ function runRetrievalEval(overrides = {}, options = {}) {
   const questions = readEvalQuestions(config);
   const dryRun = options.dryRun === true;
   const compareQmd = options.compareQmd === true;
+  // The combined recall leg runs QMD only when asked (includeQmd) or when comparing QMD.
+  const includeQmd = options.includeQmd === true || compareQmd;
   const compareGraph = options.compareGraph === true;
   const compareRecall = options.compareRecall === true;
   const limit = positiveInteger(options.limit || overrides.limit || process.env.JARVOS_GBRAIN_EVAL_LIMIT, DEFAULT_EVAL_LIMIT);
@@ -2074,6 +2077,7 @@ function runRetrievalEval(overrides = {}, options = {}) {
         limit,
         graphDepth,
         graphSeedLimit,
+        includeQmd,
       );
       engines.gbrain_recall = recallResult;
       engineQueries.gbrain_recall = recallQuery;
