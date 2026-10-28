@@ -265,6 +265,8 @@ function loadPublishedReceipt(filePath, fsImpl = fs, opts = {}, now = new Date()
   if (factsVersion === SYSTEM_FACTS_VERSION_V4) {
     // v4 ages every check itself, so an expired envelope is aged rather than refused.
     if (freshness.freshness === 'unavailable' || !validateReceipt(base, now).ok) return null;
+    // The contract gives every row 1-8 checks; a row with none has nothing to age, so refuse it.
+    if (![...raw.products, raw.doctor].every((row) => Array.isArray(row?.checks) && row.checks.length >= 1 && row.checks.length <= 8)) return null;
     const checked = validateReceipt({ ...base, ...applyV4Ages(raw, now, freshness.freshness) }, now);
     return checked.ok ? checked.receipt : null;
   }
@@ -311,7 +313,6 @@ function ageCheck(check, now, envelopeFreshness) {
 // A v4 row is a pure function of its aged checks: worst state (first wins a
 // tie), oldest observedAt, earliest validUntil. Whatever the row said is replaced.
 function ageRow(row, now, envelopeFreshness) {
-  if (!row.checks.length) return row;
   const checks = row.checks.map((check) => ageCheck(check, now, envelopeFreshness));
   const worst = checks.reduce((a, c) => (STATE_SEVERITY[c.state] > STATE_SEVERITY[a.state] ? c : a));
   // Fixed-width ISO strings sort as time.

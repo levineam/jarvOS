@@ -172,6 +172,13 @@ test('v4 an undated healthy check never reads as healthy or rescues an expired r
   assert.equal(row.state, 'warning');
   assert.equal(result.receipt.components.find((c) => c.id === 'openclaw').state, 'warning');
 });
+test('v4 a row with no checks is refused, even under an expired envelope', (t) => {
+  const empty = { id: 'capture', label: 'Capture', maker: 'x', order: 1, version: null, ...v4Row([]) };
+  assert.equal(v4ReceiptFile(t, { products: [empty], doctor: v4DoctorRow(), envelope: EXPIRED }).load().ok, false);
+  assert.equal(v4ReceiptFile(t, { products: [empty], doctor: v4DoctorRow() }).load().ok, false);
+  const product = { id: 'openclaw', label: 'OpenClaw', maker: 'x', order: 1, version: null, ...v4Row([v4Check('gateway', FRESH)]) };
+  assert.equal(v4ReceiptFile(t, { products: [product], doctor: { ...v4DoctorRow(), checks: [] }, envelope: EXPIRED }).load().ok, false);
+});
 test('v4 an expired failure keeps its state and reason, and a row of one stale healthy check warns', (t) => {
   const products = [
     { id: 'a', label: 'A', maker: 'x', order: 1, version: null, ...v4Row([v4Check('a1', EXPIRED, 'repair needed', 'search-empty')]) },
