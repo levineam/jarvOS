@@ -61,7 +61,7 @@ function printJson(value) {
 }
 
 function usage() {
-  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--compare-graph] [--compare-recall]\n       [--graph-depth n] [--graph-seed-limit n]\n       [--limit n] [--timeout-ms n] [--qmd-bin path] [--qmd-mode search|query|vsearch]\n       [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  recall --query text [--no-qmd] [--no-graph] [--graph-seed slug] [--graph-depth n]\n         [--graph-seed-limit n] [--limit n] [--timeout-ms n] [--format markdown]\n  doctor\n\n`);
+  process.stdout.write(`jarvos-gbrain\n\nCommands:\n  plan [--manifest path]\n  import [--dry-run] [--manifest path] [--brain-dir path] [--vault-dir path]\n  sync [--dry-run] [--brain-dir path] [--gbrain-dir path]\n  eval [--dry-run] [--eval-file path] [--compare-qmd] [--compare-graph] [--compare-recall]\n       [--graph-depth n] [--graph-seed-limit n]\n       [--limit n] [--timeout-ms n] [--qmd-bin path] [--qmd-mode search|query|vsearch]\n       [--qmd-collection name] [--qmd-index name]\n  graph [--dry-run] --seed slug [--seed slug] [--depth n] [--timeout-ms n]\n  recall --query text [--qmd] [--no-graph] [--graph-seed slug] [--graph-depth n]\n         [--graph-seed-limit n] [--limit n] [--timeout-ms n] [--format markdown]\n  doctor\n\n`);
   process.stdout.write('Eval evidence options: --result-artifact path --public-revision sha --runtime-revision sha\n');
 }
 
@@ -120,7 +120,7 @@ function main() {
       const result = recallBundle(config, {
         dryRun: hasFlag('--dry-run'),
         query: argValue('--query'),
-        includeQmd: !hasFlag('--no-qmd'),
+        includeQmd: hasFlag('--qmd') && !hasFlag('--no-qmd'),
         autoGraph: !hasFlag('--no-graph'),
         seeds: argValues('--graph-seed'),
         graphDepth: argValue('--graph-depth'),

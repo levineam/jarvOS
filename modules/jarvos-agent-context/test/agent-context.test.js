@@ -18,6 +18,7 @@ const {
   healthTodayJournal,
   hydrate,
   readSessionThread,
+  recall,
   redactObviousSecrets,
   synthesizeRecall,
   verifyNoteCaptureContract,
@@ -2367,6 +2368,31 @@ test('jarvos_recall can return WS5 synthesis over WS4 retrieval evidence', () =>
   assert.match(result.markdown, /jarvOS Retrieval Synthesis/);
   assert.match(result.markdown, /Retrieval Status/);
   assert.match(result.markdown, /Source Bundle/);
+});
+
+test('recall and synthesizeRecall keep QMD opt-in and spawn qmd only for includeQmd: true', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-recall-qmd-optin-'));
+  const gbrainBin = path.join(root, 'fake-gbrain');
+  const qmdBin = path.join(root, 'fake-qmd');
+  const spyPath = path.join(root, 'qmd-invoked');
+  fs.writeFileSync(gbrainBin, '#!/bin/sh\nprintf "%s\\n" "[0.9] projects/solo -- gbrain only"\n', 'utf8');
+  fs.writeFileSync(qmdBin, `#!/bin/sh\necho invoked >> "${spyPath}"\nprintf "%s\\n" "[]"\n`, 'utf8');
+  fs.chmodSync(gbrainBin, 0o755);
+  fs.chmodSync(qmdBin, 0o755);
+  const config = { gbrainBin, qmdBin, gbrainDir: root, brainDir: root, vaultDir: root, notesDir: root };
+
+  for (const fn of [recall, synthesizeRecall]) {
+    const result = fn({ query: 'solo', autoGraph: false, config });
+    assert.equal(result.ok, true);
+    assert.equal(result.bundle.includeQmd, false);
+    assert.equal(result.bundle.engines.qmd, undefined);
+    assert.equal(fs.existsSync(spyPath), false, `${fn.name} must not spawn qmd by default`);
+  }
+
+  const optedIn = recall({ query: 'solo', autoGraph: false, includeQmd: true, config });
+  assert.equal(optedIn.bundle.includeQmd, true);
+  assert.ok(optedIn.bundle.engines.qmd, 'includeQmd: true still runs the QMD leg');
+  assert.equal(fs.existsSync(spyPath), true);
 });
 
 test('MCP jarvos_synthesize returns text content', async () => {
