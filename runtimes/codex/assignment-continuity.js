@@ -38,6 +38,14 @@ function safeDirectory(directory, privateOnly = false) {
   }
 }
 
+function sessionEnvironment(input, env) {
+  const sessionId = input?.session_id;
+  if (typeof sessionId !== 'string' || !UUID.test(sessionId)) return null;
+  // Fail closed: an ambient id that is present but empty or different is rejected.
+  if (env.CODEX_THREAD_ID !== undefined && env.CODEX_THREAD_ID !== sessionId) return null;
+  return { ...env, CODEX_THREAD_ID: sessionId };
+}
+
 function stateFiles(env) {
   const sessionId = env.CODEX_THREAD_ID;
   if (!UUID.test(sessionId || '')) throw new Error('session-identity');
@@ -106,15 +114,18 @@ async function capture(input, { env = process.env, readTurn = readNativeTurn, no
   let files; let token; let pending;
   try {
     if (input?.agent_id) return { status: 'unavailable' };
-    files = stateFiles(env); token = crypto.randomUUID();
+    const sessionEnv = sessionEnvironment(input, env);
+    // Invalid captures still fence older context for the ambient session.
+    files = stateFiles(sessionEnv || env); token = crypto.randomUUID();
     let previous;
     try { previous = readPrivate(files.fence).token; } catch {}
     // The independent fence prevents a late older reader from restoring stale context.
     atomicWrite(files.fence, { token });
     if (UUID.test(previous || '')) { try { fs.unlinkSync(pendingFile(files, previous)); } catch {} }
     pending = pendingFile(files, token);
-    if (input?.hook_event_name !== 'PreCompact' || input.session_id !== files.sessionId || !UUID.test(input.turn_id || '')
+    if (!sessionEnv || input?.hook_event_name !== 'PreCompact' || input.session_id !== files.sessionId || !UUID.test(input.turn_id || '')
       || input.agent_id || !['manual', 'auto'].includes(input.trigger)) throw new Error('hook-identity');
+    env = sessionEnv;
     if (!trustedExecutable(env.JARVOS_CODEX_NATIVE_COMMAND)) throw new Error('native-reader-unavailable');
     const capturedAt = now();
     const source = await readTurn({ sessionId: files.sessionId, turnId: input.turn_id, command: env.JARVOS_CODEX_NATIVE_COMMAND, env });
@@ -149,6 +160,8 @@ function render(record) {
 async function consume(input, { env = process.env, now = Date.now, readTurn = readNativeTurn } = {}) {
   let moved;
   try {
+    env = sessionEnvironment(input, env);
+    if (!env) throw new Error('session-identity');
     if (input?.hook_event_name !== 'SessionStart' || input.source !== 'compact' || input.agent_id || input.session_id !== env.CODEX_THREAD_ID) throw new Error('hook-identity');
     const files = stateFiles(env);
     const pending = pendingFile(files, readPrivate(files.fence).token);
