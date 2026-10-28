@@ -513,6 +513,9 @@ function createHostProjectsContextProvider(env = process.env) {
     },
   };
   if (proposalEnabled) {
+    const usePortfolioRoster = trustedPortfolioRosterQuery && portfolioRosterCapabilityReceiptPath;
+    const proposalQuery = usePortfolioRoster ? trustedPortfolioRosterQuery : trustedRosterQuery;
+    const proposalCapabilityReceiptPath = usePortfolioRoster ? portfolioRosterCapabilityReceiptPath : capabilityReceiptPath;
     const publicPolicy = freezeJsonCopy({
       enabled: proposalPolicy.enabled,
       authorizedSubjects: proposalPolicy.authorizedSubjects,
@@ -521,7 +524,7 @@ function createHostProjectsContextProvider(env = process.env) {
       ttlSeconds: proposalPolicy.ttlSeconds,
     });
     hostProvider.propose = async ({ proposal }) => {
-      const capabilityReceipt = capabilityReceiptPath ? readPrivateJson(capabilityReceiptPath) : null;
+      const capabilityReceipt = proposalCapabilityReceiptPath ? readPrivateJson(proposalCapabilityReceiptPath) : null;
       const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
       const hostSecret = hostSecretPath ? readPrivate(hostSecretPath) : null;
       return provider.propose({
@@ -536,8 +539,8 @@ function createHostProjectsContextProvider(env = process.env) {
         hostSecret,
         hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
         subject: trustedSubject,
-        query: freezeJsonCopy(JSON.parse(JSON.stringify(trustedRosterQuery))),
-        profileDigest: crypto.createHash('sha256').update(canonicalJson(trustedRosterQuery)).digest('hex'),
+        query: freezeJsonCopy(JSON.parse(JSON.stringify(proposalQuery))),
+        profileDigest: crypto.createHash('sha256').update(canonicalJson(proposalQuery)).digest('hex'),
       });
     };
   }

@@ -142,7 +142,10 @@ separate owner-only proposal state directory, authorized subject, and bounded
 retention/rate/TTL policy. The provider receives host-owned identity,
 capability, scope, and state paths, including `capabilitySecret` and `hostSecret`
 read from the trusted config's `capabilitySecret` and `hostSecretFile` files,
-respectively, as on roster reads. MCP callers supply only the bounded proposal
+respectively, as on roster reads. Proposals use the validated host-owned
+`portfolioRosterQuery` and distinct `portfolioRosterCapabilityReceiptPath` binding
+when available, including its query digest; otherwise they retain the orientation
+query and receipt. MCP callers supply only the bounded proposal
 envelope. Applying a proposal is deliberately absent from both this library and
 MCP.
 

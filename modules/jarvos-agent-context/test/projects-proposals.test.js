@@ -94,7 +94,7 @@ test('invalid proposals are never forwarded and provider errors stay typed and p
   assert.equal(typeof agentContext.createProject, 'undefined');
 });
 
-function withHostProposalProvider(callback, { proposals = true, hostSecretOnly = false } = {}) {
+function withHostProposalProvider(callback, { proposals = true, hostSecretOnly = false, portfolioRoster = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-proposals-host-'));
   const workspaceRoot = path.join(root, 'workspace');
   const repositoryRoot = path.join(workspaceRoot, 'repository');
@@ -120,19 +120,27 @@ function withHostProposalProvider(callback, { proposals = true, hostSecretOnly =
   const capability = path.join(stateRoot, 'capability');
   fs.writeFileSync(capability, 'host-capability-secret');
   fs.chmodSync(capability, 0o600);
+  const capabilityReceiptPath = path.join(stateRoot, 'orientation-receipt.json');
+  const capabilityReceipt = { receiptId: 'orientation-receipt' };
+  fs.writeFileSync(capabilityReceiptPath, JSON.stringify(capabilityReceipt), { mode: 0o600 });
+  const portfolioRosterQuery = { scope: { projectIds: [], outcomeIds: [], includeDescendants: true }, include: ['hierarchy'], limits: { maxItems: 100 } };
+  const portfolioRosterCapabilityReceiptPath = path.join(stateRoot, 'portfolio-roster-receipt.json');
+  const portfolioRosterCapabilityReceipt = { receiptId: 'portfolio-roster-receipt' };
+  if (portfolioRoster) fs.writeFileSync(portfolioRosterCapabilityReceiptPath, JSON.stringify(portfolioRosterCapabilityReceipt), { mode: 0o600 });
   const config = path.join(root, 'projects-context.json');
   const query = { scope: { projectIds: ['prj_000001'], outcomeIds: [], includeDescendants: false }, include: ['hierarchy'], limits: { maxItems: 12 } };
   fs.writeFileSync(config, JSON.stringify({
     workspaceRoot, repositoryRoot, stateRoot, registryStateDir, releaseProviderStateDir: releaseStateDir,
     providerModule, ...(hostSecretOnly ? { hostSecretFile: capability } : { capabilitySecret: capability }),
-    hostId: 'trusted-host', subject: 'agent:trusted', query,
+    hostId: 'trusted-host', subject: 'agent:trusted', query, capabilityReceiptPath,
+    ...(portfolioRoster ? { portfolioRosterQuery, portfolioRosterCapabilityReceiptPath } : {}),
     ...(proposals ? { proposals: { enabled: true, stateDir: proposalStateDir, authorizedSubjects: ['agent:trusted'], maxEntries: 20, maxPerHour: 5, ttlSeconds: 3600 } } : {}),
   }));
   fs.chmodSync(config, 0o600);
   const prior = process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
   process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = config;
   setMcpProjectsContextProvider(null);
-  return Promise.resolve().then(() => callback({ providerModule, query, proposalStateDir })).finally(() => {
+  return Promise.resolve().then(() => callback({ providerModule, query, capabilityReceipt, portfolioRosterQuery, portfolioRosterCapabilityReceipt, proposalStateDir })).finally(() => {
     setMcpProjectsContextProvider(null);
     if (prior === undefined) delete process.env.JARVOS_PROJECTS_CONTEXT_CONFIG;
     else process.env.JARVOS_PROJECTS_CONTEXT_CONFIG = prior;
@@ -141,7 +149,7 @@ function withHostProposalProvider(callback, { proposals = true, hostSecretOnly =
 }
 
 test('ordinary configured hosts expose only an opt-in pending proposal transport', async () => {
-  await withHostProposalProvider(async ({ providerModule, query, proposalStateDir }) => {
+  await withHostProposalProvider(async ({ providerModule, query, capabilityReceipt, proposalStateDir }) => {
     const result = JSON.parse((await callTool('jarvos_projects_propose_v1', {
       proposal: proposal(), subject: 'agent:spoofed', hostId: 'spoofed-host', query: { scope: { projectIds: ['prj_999999'] } },
     })).content[0].text);
@@ -156,6 +164,7 @@ test('ordinary configured hosts expose only an opt-in pending proposal transport
     assert.equal(forwarded.subject, 'agent:trusted');
     assert.equal(forwarded.hostId, 'trusted-host');
     assert.deepEqual(forwarded.query, query);
+    assert.deepEqual(forwarded.capability, capabilityReceipt);
     assert.equal(forwarded.proposalStateDir, fs.realpathSync(proposalStateDir));
     assert.equal(forwarded.proposalPolicy.stateDir, undefined);
     assert.ok(Object.isFrozen(forwarded.proposalPolicy));
@@ -164,6 +173,24 @@ test('ordinary configured hosts expose only an opt-in pending proposal transport
     const explicitNull = await agentContext.proposePendingProjectsContext({ provider: null, proposal: proposal() });
     assert.equal(explicitNull.code, 'PROJECTS_PROPOSAL_UNAVAILABLE');
   });
+});
+
+test('proposals use the distinct host portfolio roster binding when configured', async () => {
+  await withHostProposalProvider(async ({ providerModule, portfolioRosterQuery, portfolioRosterCapabilityReceipt }) => {
+    const result = JSON.parse((await callTool('jarvos_projects_propose_v1', {
+      proposal: proposal(), query: { scope: { projectIds: ['prj_999999'] } }, capability: { receiptId: 'spoofed' },
+    })).content[0].text);
+    assert.equal(result.status, 'proposed');
+    const { calls } = require(providerModule);
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0].query, portfolioRosterQuery);
+    assert.deepEqual(calls[0].capability, portfolioRosterCapabilityReceipt);
+    assert.equal(calls[0].profileDigest, crypto.createHash('sha256').update(canonicalJson(portfolioRosterQuery)).digest('hex'));
+    assert.equal(calls[0].subject, 'agent:trusted');
+    assert.equal(calls[0].hostId, 'trusted-host');
+    assert.equal(calls[0].hostSecret, 'host-capability-secret');
+    assert.ok(Object.isFrozen(calls[0].query));
+  }, { portfolioRoster: true, hostSecretOnly: true });
 });
 
 test('hostSecretFile alone supplies the host secret to the proposal provider', async () => {
@@ -179,10 +206,11 @@ test('hostSecretFile alone supplies the host secret to the proposal provider', a
 });
 
 test('proposal callers cannot inject host identity, secrets, or paths', async () => {
-  await withHostProposalProvider(async ({ providerModule }) => {
+  await withHostProposalProvider(async ({ providerModule, query, capabilityReceipt }) => {
     const injected = {
       subject: 'agent:spoofed', hostId: 'spoofed-host', hostSecret: 'spoofed-secret',
       capabilitySecret: 'spoofed-capability', hostSecretFile: '/spoofed/secret', stateRoot: '/spoofed/state',
+      query: { scope: { projectIds: ['prj_999999'] } }, capability: { receiptId: 'spoofed' },
     };
     const { calls } = require(providerModule);
     for (const [key, value] of Object.entries(injected)) {
@@ -198,6 +226,8 @@ test('proposal callers cannot inject host identity, secrets, or paths', async ()
     assert.equal(calls[0].hostSecret, 'host-capability-secret');
     assert.equal(calls[0].capabilitySecret, null);
     assert.equal(calls[0].hostSecretFile, undefined);
+    assert.deepEqual(calls[0].query, query);
+    assert.deepEqual(calls[0].capability, capabilityReceipt);
     assert.notEqual(calls[0].stateRoot, injected.stateRoot);
   }, { hostSecretOnly: true });
 });
