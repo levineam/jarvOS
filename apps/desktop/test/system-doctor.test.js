@@ -58,6 +58,64 @@ test('v3 preserves a component date pair and warns only for stale component evid
   assert.equal(row.reasonClass, 'component-stale');
   assert.match(row.guidance, /published evidence is stale/i);
 });
+function v4Facts() {
+  const at = { observedAt: '2026-09-10T11:00:00.000Z', validUntil: '2026-09-10T13:00:00.000Z' };
+  const check = (id, extra = {}) => ({ id, label: `Check ${id}`, state: 'healthy', reasonClass: 'none', ...at, ...extra });
+  const row = (checks, extra = {}) => ({ state: 'healthy', reasonClass: 'none', ...at, ...extra, checks });
+  return { profile: 'local-openclaw',
+    products: [{ id: 'capture', label: 'Capture', maker: 'jarvOS', order: 1, version: null, ...row([check('capture-ideas', { evidence: null })]) }],
+    doctor: { label: 'jarvOS Doctor', ...row(['last-run', 'reviewed-release', 'repairs', 'alerts'].map((part) => {
+      const { evidence, ...rest } = check(`doctor-${part}`); return { ...rest, part };
+    })) } };
+}
+test('v4 published rollups load with dates, products and Doctor passed through', (t) => {
+  const f = fixture(t, { factsVersion: 'jarvos-system-doctor-facts/v4', facts: v4Facts() });
+  const result = doctor.loadReceipt(f.cfg, { now });
+  assert.equal(result.ok, true, result.error);
+  const { receipt } = result;
+  assert.equal(receipt.factsVersion, 'jarvos-system-doctor-facts/v4');
+  assert.deepEqual(receipt.sections.optional.map((r) => [r.id, r.label, r.rollup]),
+    [['capture', 'Capture', 'product'], ['doctor', 'jarvOS Doctor', 'doctor']]);
+  assert.equal(receipt.sections.optional[1].observedAt, '2026-09-10T11:00:00.000Z');
+  assert.equal(receipt.sections.optional[1].freshness, 'current');
+  assert.equal(receipt.products[0].checks[0].id, 'capture-ideas');
+  assert.equal(receipt.doctor.checks.length, 4);
+  assert.equal(receipt.status, 'healthy');
+});
+test('v4 receipt file loads, a malformed products block is refused, and v3 still loads', (t) => {
+  const f = fixture(t);
+  const file = path.join(f.workspace, 'receipt.json');
+  const at = { observedAt: '2026-09-10T11:00:00.000Z', validUntil: '2026-09-10T13:00:00.000Z' };
+  const facts = v4Facts();
+  const receipt = { schema: doctor.REPORT_SCHEMA, profile: { id: 'local-openclaw', title: 'Local' }, workspace: f.workspace,
+    status: 'healthy', factsVersion: 'jarvos-system-doctor-facts/v4', ...at,
+    components: [
+      { id: 'capture', label: 'Capture', section: 'optional', state: 'healthy', rollup: 'product', ...at },
+      { id: 'doctor', label: 'jarvOS Doctor', section: 'optional', state: 'healthy', rollup: 'doctor', ...at },
+    ], products: facts.products, doctor: facts.doctor };
+  f.cfg.systemDoctor.receiptFile = file;
+  const write = () => fs.writeFileSync(file, JSON.stringify(receipt), { mode: 0o600 });
+  write();
+  const v4 = doctor.loadReceipt(f.cfg, { now });
+  assert.equal(v4.ok, true);
+  assert.equal(v4.receipt.products.length, 1);
+  assert.equal(v4.receipt.doctor.label, 'jarvOS Doctor');
+  assert.deepEqual(v4.receipt.components.map((c) => c.rollup), ['product', 'doctor']);
+  receipt.products = [{ id: 42, label: 'Capture', state: 'healthy', checks: [] }];
+  write();
+  assert.equal(doctor.loadReceipt(f.cfg, { now }).ok, false);
+  receipt.products = facts.products;
+  delete receipt.doctor;
+  write();
+  assert.equal(doctor.loadReceipt(f.cfg, { now }).ok, false);
+  const v3 = { ...receipt, factsVersion: 'jarvos-system-doctor-facts/v3', components: [receipt.components[0]] };
+  delete v3.products;
+  fs.writeFileSync(file, JSON.stringify(v3), { mode: 0o600 });
+  const loaded = doctor.loadReceipt(f.cfg, { now });
+  assert.equal(loaded.ok, true);
+  assert.equal(loaded.receipt.products, undefined);
+  assert.equal(loaded.receipt.doctor, undefined);
+});
 test('expiry removes healthy claims and a newer publication is picked up without restart', (t) => {
   const f = fixture(t);
   let result = doctor.loadReceipt(f.cfg, { now: new Date('2026-09-10T14:00:00Z') });

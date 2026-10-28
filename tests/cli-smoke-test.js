@@ -662,6 +662,44 @@ try {
   assert.equal(systemTextDoctor.status, 1, systemTextDoctor.stderr || systemTextDoctor.stdout);
   assert.match(systemTextDoctor.stdout, /⚠️ SearXNG — No search results\. Run a real search, then rerun Doctor\./);
   assert.doesNotMatch(systemTextDoctor.stdout, /PASS|FAIL|WARN|SKIP|Selected optional components|System Doctor:|READY/);
+
+  const v4Check = (id, state, extra = {}) => ({
+    id, label: id, state, reasonClass: state === 'healthy' ? 'none' : 'unavailable',
+    observedAt: '2026-08-12T23:00:00.000Z', validUntil: '2099-08-13T23:00:00.000Z', ...extra,
+  });
+  const v4Doctor = ['last-run', 'reviewed-release', 'repairs', 'alerts'].map((part) => v4Check(`doctor-${part}`, 'healthy', { part }));
+  const v4Rollup = (checks) => ({
+    state: checks.some((check) => check.state !== 'healthy') ? 'warning' : 'healthy',
+    reasonClass: checks.find((check) => check.state !== 'healthy')?.reasonClass || 'none',
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+  });
+  const v4Checks = [v4Check('capture-ideas', 'healthy', { evidence: null }), v4Check('capture-journal', 'warning', { evidence: null })];
+  fs.writeFileSync(systemSnapshotPath, `${JSON.stringify({
+    schema: 'jarvos-health-module-snapshot/v1',
+    moduleId: 'system',
+    generation: 4,
+    observedAt: '2026-08-12T23:00:00.000Z',
+    validUntil: '2099-08-13T23:00:00.000Z',
+    trust: 'trusted',
+    factsVersion: 'jarvos-system-doctor-facts/v4',
+    facts: {
+      profile: 'minimal',
+      products: [{ id: 'capture', label: 'Capture', maker: 'jarvOS', order: 1, ...v4Rollup(v4Checks), version: null, checks: v4Checks }],
+      doctor: { label: 'jarvOS Doctor', ...v4Rollup(v4Doctor), checks: v4Doctor },
+    },
+  })}\n`, 'utf8');
+  fs.chmodSync(systemSnapshotPath, 0o600);
+  const v4JsonDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace, '--json'], { env });
+  assert.equal(v4JsonDoctor.status, 1, v4JsonDoctor.stderr || v4JsonDoctor.stdout);
+  const v4Report = JSON.parse(v4JsonDoctor.stdout);
+  assert.equal(v4Report.systemDoctor.schema, 'jarvos-system-doctor-report/v1');
+  assert.equal(v4Report.systemDoctor.factsVersion, 'jarvos-system-doctor-facts/v4');
+  assert.equal(v4Report.systemDoctor.products[0].state, 'warning');
+  assert.equal(v4Report.systemDoctor.doctor.state, 'healthy');
+  const v4TextDoctor = run(['doctor', '--profile', 'minimal', '--workspace', workspace], { env });
+  assert.equal(v4TextDoctor.status, 1, v4TextDoctor.stderr || v4TextDoctor.stdout);
+  assert.match(v4TextDoctor.stdout, /Products\n⚠️ Capture\n   ✅ capture-ideas\n   ⚠️ capture-journal — unavailable\. Verify it, then rerun Doctor\.\n\n✅ jarvOS Doctor\n   ✅ doctor-last-run/);
   fs.unlinkSync(systemSnapshotPath);
 
   const localDoctorEnv = {
