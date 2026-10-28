@@ -71,10 +71,48 @@ const pending = (f) => {
 };
 const context = (result) => result.hookSpecificOutput?.additionalContext || '';
 
+for (const ambient of [undefined, SESSION]) {
+  test(`session identity ${ambient ? 'matching ambient id' : 'stdin-only id'} captures and consumes`, async () => {
+    const f = fixture();
+    try {
+      if (ambient === undefined) delete f.env.CODEX_THREAD_ID;
+      const env = Object.freeze({ ...f.env });
+      const readTurn = async (options) => {
+        assert.equal(options.env.CODEX_THREAD_ID, SESSION);
+        assert.equal(options.sessionId, SESSION);
+        return { startedAt: 1700000000, items: [peer('p', assignment)] };
+      };
+      assert.equal((await continuity.capture(input, { env, readTurn })).status, 'captured');
+      assert.ok(context(await continuity.consume(compact, { env, readTurn })).includes(assignment));
+      assert.equal(env.CODEX_THREAD_ID, ambient);
+    } finally { f.close(); }
+  });
+}
+
+test('session identity rejects mismatched/malformed ids and preserves env-only rejection', async () => {
+  const f = fixture();
+  try {
+    for (const [ambient, sessionId] of [[SOURCE, SESSION], ['malformed', SESSION], ['', SESSION],
+      [undefined, 'malformed'], [undefined, 123], [SESSION, undefined]]) {
+      const env = { ...f.env };
+      if (ambient === undefined) delete env.CODEX_THREAD_ID;
+      else env.CODEX_THREAD_ID = ambient;
+      let reads = 0;
+      const readTurn = async () => { reads++; return { startedAt: 1700000000, items: [peer('p', assignment)] }; };
+      assert.equal((await continuity.capture({ ...input, session_id: sessionId }, { env, readTurn })).status, 'unavailable');
+      await continuity.capture(input, { env: f.env, readTurn: source([peer('p', assignment)]) });
+      assert.equal(context(await continuity.consume({ ...compact, session_id: sessionId }, { env, readTurn })), '');
+      assert.equal(reads, 0, 'invalid identity must not read native turns');
+      assert.ok(context(await continuity.consume(compact, { env: f.env, readTurn: source([peer('p', assignment)]) })).includes(assignment));
+    }
+  } finally { f.close(); }
+});
+
 for (const oldQuestion of ['What upgrade?', 'Why are these blocked?']) {
   test(`actual precompact/start hooks preserve current assignment instead of ${oldQuestion}`, () => {
     const f = fixture();
     try {
+      if (oldQuestion === 'What upgrade?') delete f.env.CODEX_THREAD_ID;
       f.set({ olderHumanQuestion: oldQuestion, items: [peer('delivery', assignment),
         entry({ id: 'checkpoint', type: 'agentMessage', phase: 'commentary', text: 'Step one verified. Step two remains.' }),
         entry({ id: 'write-completed', type: 'commandExecution', status: 'completed', exitCode: 0 })] });
