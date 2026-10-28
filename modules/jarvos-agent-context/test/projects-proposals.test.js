@@ -94,7 +94,7 @@ test('invalid proposals are never forwarded and provider errors stay typed and p
   assert.equal(typeof agentContext.createProject, 'undefined');
 });
 
-function withHostProposalProvider(callback, { proposals = true } = {}) {
+function withHostProposalProvider(callback, { proposals = true, hostSecretOnly = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-proposals-host-'));
   const workspaceRoot = path.join(root, 'workspace');
   const repositoryRoot = path.join(workspaceRoot, 'repository');
@@ -124,7 +124,8 @@ function withHostProposalProvider(callback, { proposals = true } = {}) {
   const query = { scope: { projectIds: ['prj_000001'], outcomeIds: [], includeDescendants: false }, include: ['hierarchy'], limits: { maxItems: 12 } };
   fs.writeFileSync(config, JSON.stringify({
     workspaceRoot, repositoryRoot, stateRoot, registryStateDir, releaseProviderStateDir: releaseStateDir,
-    providerModule, capabilitySecret: capability, hostId: 'trusted-host', subject: 'agent:trusted', query,
+    providerModule, ...(hostSecretOnly ? { hostSecretFile: capability } : { capabilitySecret: capability }),
+    hostId: 'trusted-host', subject: 'agent:trusted', query,
     ...(proposals ? { proposals: { enabled: true, stateDir: proposalStateDir, authorizedSubjects: ['agent:trusted'], maxEntries: 20, maxPerHour: 5, ttlSeconds: 3600 } } : {}),
   }));
   fs.chmodSync(config, 0o600);
@@ -163,6 +164,42 @@ test('ordinary configured hosts expose only an opt-in pending proposal transport
     const explicitNull = await agentContext.proposePendingProjectsContext({ provider: null, proposal: proposal() });
     assert.equal(explicitNull.code, 'PROJECTS_PROPOSAL_UNAVAILABLE');
   });
+});
+
+test('hostSecretFile alone supplies the host secret to the proposal provider', async () => {
+  await withHostProposalProvider(async ({ providerModule }) => {
+    const result = JSON.parse((await callTool('jarvos_projects_propose_v1', { proposal: proposal() })).content[0].text);
+    assert.equal(result.status, 'proposed');
+    const { calls } = require(providerModule);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].hostSecret, 'host-capability-secret');
+    assert.equal(calls[0].capabilitySecret, null);
+    assert.doesNotMatch(JSON.stringify(result), /host-capability-secret/);
+  }, { hostSecretOnly: true });
+});
+
+test('proposal callers cannot inject host identity, secrets, or paths', async () => {
+  await withHostProposalProvider(async ({ providerModule }) => {
+    const injected = {
+      subject: 'agent:spoofed', hostId: 'spoofed-host', hostSecret: 'spoofed-secret',
+      capabilitySecret: 'spoofed-capability', hostSecretFile: '/spoofed/secret', stateRoot: '/spoofed/state',
+    };
+    const { calls } = require(providerModule);
+    for (const [key, value] of Object.entries(injected)) {
+      const result = JSON.parse((await callTool('jarvos_projects_propose_v1', { proposal: proposal({ [key]: value }) })).content[0].text);
+      assert.equal(result.code, 'PROJECTS_PROPOSAL_INVALID');
+    }
+    assert.equal(calls.length, 0);
+    const result = JSON.parse((await callTool('jarvos_projects_propose_v1', { proposal: proposal(), ...injected })).content[0].text);
+    assert.equal(result.status, 'proposed');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].subject, 'agent:trusted');
+    assert.equal(calls[0].hostId, 'trusted-host');
+    assert.equal(calls[0].hostSecret, 'host-capability-secret');
+    assert.equal(calls[0].capabilitySecret, null);
+    assert.equal(calls[0].hostSecretFile, undefined);
+    assert.notEqual(calls[0].stateRoot, injected.stateRoot);
+  }, { hostSecretOnly: true });
 });
 
 test('disabled or malformed host proposal opt-in keeps reads available and proposal unavailable', async () => {

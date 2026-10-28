@@ -140,7 +140,9 @@ create or update the registry, tasks, releases, or external handoffs. They are
 exposed only when trusted host config has an enabled `proposals` block with a
 separate owner-only proposal state directory, authorized subject, and bounded
 retention/rate/TTL policy. The provider receives host-owned identity,
-capability, scope, and state paths; MCP callers supply only the bounded proposal
+capability, scope, and state paths, including `capabilitySecret` and `hostSecret`
+read from the trusted config's `capabilitySecret` and `hostSecretFile` files,
+respectively, as on roster reads. MCP callers supply only the bounded proposal
 envelope. Applying a proposal is deliberately absent from both this library and
 MCP.
 
