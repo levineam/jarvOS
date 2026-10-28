@@ -84,7 +84,9 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
     });
   }
 
-  if (intentId && !result.note?.written) {
+  // Only a plan that creates a note depends on it; an identified journal-only
+  // plan continues to its own canonical journal stages.
+  if (intentId && plan.createNote && !result.note?.written) {
     result.artifactReceipt = createArtifactReceipt({ artifacts: result.note?.artifactReceipt?.artifacts || [] });
     return result;
   }

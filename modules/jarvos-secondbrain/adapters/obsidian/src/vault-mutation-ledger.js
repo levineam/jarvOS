@@ -26,6 +26,38 @@ function writeAtomic(filePath, value, fsImpl) {
 }
 
 function unsafeMode(stat) { return (stat.mode & 0o077) !== 0; }
+function isPlainObject(value) { return Boolean(value) && typeof value === 'object' && !Array.isArray(value); }
+// Existing ledger state that cannot be read or validated is uncertain evidence.
+// It is preserved byte for byte and refused; it is never reset, deleted or
+// quarantined to let a caller proceed. The message never includes ledger bytes.
+function ledgerUncertain(reason) {
+  const error = new Error(`vault mutation ledger state is uncertain: ${reason}`);
+  error.code = 'vault_mutation_ledger_uncertain';
+  return error;
+}
+
+// Stages of one identified capture share an identity family. The first request
+// planned for any stage binds the whole family to its hash, vault and source.
+const CAPTURE_STAGE = /^(capture:.+):(?:note|journal:create|journal:section)$/;
+const REQUEST_HASH = /^[a-f0-9]{64}$/;
+function captureFamilyId(operationId) {
+  const match = CAPTURE_STAGE.exec(String(operationId || ''));
+  return match ? match[1] : null;
+}
+function captureConflict(message) {
+  const error = new Error(message);
+  error.code = 'capture_identity_request_conflict';
+  return error;
+}
+function validCaptureBinding(binding) {
+  return Boolean(binding) && typeof binding === 'object' && !Array.isArray(binding)
+    && typeof binding.requestHash === 'string' && REQUEST_HASH.test(binding.requestHash)
+    && typeof binding.vaultId === 'string' && Boolean(binding.vaultId)
+    && typeof binding.source === 'string' && Boolean(binding.source);
+}
+function sameCaptureBinding(left, right) {
+  return left.requestHash === right.requestHash && left.vaultId === right.vaultId && left.source === right.source;
+}
 
 function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now(), leaseMs = 30_000, lockRetryMs = 5, lockAttempts = 100, retentionMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   if (typeof filePath !== 'string' || !path.isAbsolute(filePath)) throw new Error('ledger filePath must be absolute');
@@ -65,33 +97,36 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     fsImpl.writeFileSync(file, `${JSON.stringify({ schemaVersion: 1, reason, quarantinedAt: now(), record: raw })}\n`, { mode: 0o600 });
     try { fsImpl.chmodSync(file, 0o600); } catch {}
   }
-  function readUnlocked({ repair = false } = {}) {
-    let data;
+  // The single shared read for every public path. Only a ledger file that the
+  // initial stat reports missing is a new store. Once stat succeeds, any read
+  // failure (including ENOENT), unsafe mode, bad JSON, wrong schema or core
+  // maps, or any malformed record is refused before any caller can plan,
+  // claim, prune or replay.
+  function readUnlocked() {
+    let stat;
     try {
-      const stat = fsImpl.statSync(filePath);
-      if (unsafeMode(stat)) throw new Error('ledger permissions are unsafe');
-      data = JSON.parse(fsImpl.readFileSync(filePath, 'utf8'));
+      stat = fsImpl.statSync(filePath);
     } catch (error) {
       if (error.code === 'ENOENT') return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} };
-      if (repair) { quarantineUnlocked({ rawLedger: true }, error.message); return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} }; }
-      throw error;
+      throw ledgerUncertain('unreadable');
     }
-    if (data?.schemaVersion !== 1 || !data.operations || !data.claims || typeof data.operations !== 'object') {
-      if (repair) { quarantineUnlocked(data, 'malformed_ledger'); return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} }; }
-      throw new Error('Invalid vault mutation ledger');
+    if (unsafeMode(stat)) throw ledgerUncertain('unsafe_permissions');
+    let text;
+    try { text = fsImpl.readFileSync(filePath, 'utf8'); } catch { throw ledgerUncertain('unreadable'); }
+    let data;
+    try { data = JSON.parse(text); } catch { throw ledgerUncertain('unparseable'); }
+    if (!isPlainObject(data) || data.schemaVersion !== 1 || !isPlainObject(data.operations) || !isPlainObject(data.claims)) {
+      throw ledgerUncertain('malformed_ledger');
     }
-    if (!data.sequences || typeof data.sequences !== 'object' || Array.isArray(data.sequences)) data.sequences = {};
-    let changed = false;
+    if (data.sequences === undefined) data.sequences = {};
+    else if (!isPlainObject(data.sequences)) throw ledgerUncertain('malformed_sequences');
     for (const [id, record] of Object.entries(data.operations)) {
+      let valid = false;
       try {
-        if (!record || !STATES.has(record.status) || record.operation?.operationId !== id) throw new Error('malformed_record');
-        validateOperation(record.operation);
-      } catch (error) {
-        if (!repair) throw error;
-        quarantineUnlocked(record, error.message || 'malformed_record'); delete data.operations[id]; changed = true;
-      }
+        valid = isPlainObject(record) && STATES.has(record.status) && record.operation?.operationId === id && Boolean(validateOperation(record.operation));
+      } catch { valid = false; }
+      if (!valid) throw ledgerUncertain('malformed_record');
     }
-    if (repair && changed) writeAtomic(filePath, data, fsImpl);
     return data;
   }
   function ensureUnlocked(data, input) {
@@ -99,9 +134,47 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (old && JSON.stringify(old.operation) !== JSON.stringify(operation)) throw new Error('operationId already belongs to a different mutation');
     const collision = Object.values(data.operations).find((entry) => entry.operation.operationId !== operation.operationId && key(entry.operation) === key(operation) && entry.operation.sequence === operation.sequence);
     if (collision) throw new Error('Duplicate same-file operation sequence');
+    // Every admission path (planNext, ensure, claim) passes here inside its own
+    // transaction, for new and existing records alike, so the family binding is
+    // enforced before any claim or effect.
+    const bindingCreated = admitCaptureFamilyUnlocked(data, operation);
     const created = !old;
     if (created) data.operations[operation.operationId] = { operation, status: 'planned', createdAt: now(), updatedAt: now(), attempts: 0, history: [{ status: 'planned', at: now() }] };
-    return { record: data.operations[operation.operationId], created };
+    return { record: data.operations[operation.operationId], created, changed: created || bindingCreated };
+  }
+  // The family's current binding: a valid map entry and every family record
+  // (including an exact stored one) must agree on hash, vault and source.
+  // Anything malformed, missing or inconsistent is held, never repaired.
+  function captureFamilyBindingUnlocked(data, family) {
+    const map = data.captureRequests;
+    if (map !== undefined && !isPlainObject(map)) throw captureConflict('capture request bindings are malformed');
+    const entry = map ? map[family] : undefined;
+    if (entry !== undefined && !validCaptureBinding(entry)) throw captureConflict('capture request binding is malformed');
+    let bound = entry;
+    for (const record of Object.values(data.operations)) {
+      if (captureFamilyId(record.operation.operationId) !== family) continue;
+      const earlier = { requestHash: record.operation.captureRequestHash, vaultId: record.operation.vaultId, source: record.operation.source };
+      if (!validCaptureBinding(earlier)) throw captureConflict('capture identity has an uncertain earlier request');
+      if (bound && !sameCaptureBinding(bound, earlier)) throw captureConflict('capture identity has inconsistent earlier requests');
+      bound = bound || earlier;
+    }
+    return { bound, entry };
+  }
+  // Runs inside the caller's transaction, so concurrent first admissions of
+  // different stages serialize on the ledger lock and the first request wins.
+  // Reserved family IDs are matched whether or not they carry a hash. The
+  // ledger is left unchanged on refusal; the map is replaced only after all
+  // checks pass.
+  function admitCaptureFamilyUnlocked(data, operation) {
+    const family = captureFamilyId(operation.operationId);
+    if (!family) return false;
+    const requested = { requestHash: operation.captureRequestHash, vaultId: operation.vaultId, source: operation.source };
+    if (!validCaptureBinding(requested)) throw captureConflict('capture request is missing a valid hash, vault or source');
+    const { bound, entry } = captureFamilyBindingUnlocked(data, family);
+    if (bound && !sameCaptureBinding(bound, requested)) throw captureConflict('capture identity is already bound to a different request');
+    if (entry !== undefined) return false;
+    data.captureRequests = { ...(data.captureRequests || {}), [family]: { ...requested, boundAt: now() } };
+    return true;
   }
   function recordTransition(record, status, evidence) {
     if (!STATES.has(status)) throw new Error('Invalid ledger transition');
@@ -110,17 +183,19 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     record.history.push({ status, at: record.updatedAt, evidence });
     if (evidence !== undefined) record.evidence = evidence;
   }
-  function ensure(operation) { return transaction(() => { const data = readUnlocked({ repair: true }); const { record, created } = ensureUnlocked(data, operation); if (created) writeAtomic(filePath, data, fsImpl); return record; }); }
+  function ensure(operation) { return transaction(() => { const data = readUnlocked(); const { record, changed } = ensureUnlocked(data, operation); if (changed) writeAtomic(filePath, data, fsImpl); return record; }); }
   // Allocate the FIFO sequence and persist the complete operation in one
   // transaction. Callers may use any positive placeholder sequence; an
   // existing operationId keeps its original durable sequence on retry.
   function planNext(input) { return transaction(() => {
     const candidate = validateOperation(input);
-    const data = readUnlocked({ repair: true });
+    const data = readUnlocked();
+    const bindingCreated = admitCaptureFamilyUnlocked(data, candidate);
     const existing = data.operations[candidate.operationId];
     if (existing) {
       const retried = validateOperation({ ...candidate, sequence: existing.operation.sequence });
       if (JSON.stringify(existing.operation) !== JSON.stringify(retried)) throw new Error('operationId already belongs to a different mutation');
+      if (bindingCreated) writeAtomic(filePath, data, fsImpl);
       return existing;
     }
     const sequenceKey = key(candidate);
@@ -136,7 +211,7 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
   }); }
   function nextSequence(vaultId, vaultRelativePath) { return transaction(() => {
     if (typeof vaultId !== 'string' || !vaultId || typeof vaultRelativePath !== 'string' || !vaultRelativePath) throw new Error('vaultId and vaultRelativePath are required');
-    const data = readUnlocked({ repair: true });
+    const data = readUnlocked();
     const sequenceKey = `${vaultId}\0${vaultRelativePath}`;
     const observed = Object.values(data.operations)
       .filter((record) => key(record.operation) === sequenceKey)
@@ -148,8 +223,8 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
   }); }
   function claim(operation, ownerId, { allowAmbiguousRetry = false, local = false } = {}) { return transaction(() => {
     if (!ownerId) throw new Error('claim ownerId is required');
-    const data = readUnlocked({ repair: true }); const ensured = ensureUnlocked(data, operation); const { record, created } = ensured; const claimKey = key(record.operation); const stamp = now();
-    const persistCreated = () => { if (created) writeAtomic(filePath, data, fsImpl); };
+    const data = readUnlocked(); const ensured = ensureUnlocked(data, operation); const { record, changed } = ensured; const claimKey = key(record.operation); const stamp = now();
+    const persistCreated = () => { if (changed) writeAtomic(filePath, data, fsImpl); };
     const prior = Object.values(data.operations).filter((entry) => key(entry.operation) === claimKey && entry.operation.sequence < record.operation.sequence && !TERMINAL.has(entry.status));
     if (prior.length) { persistCreated(); return { granted: false, reason: prior.some((entry) => ['unknown_after_dispatch', 'conflict', 'quarantined'].includes(entry.status)) ? 'prior_operation_blocked' : 'prior_operation_pending', record }; }
     if (TERMINAL.has(record.status)) { persistCreated(); return { granted: false, reason: record.status === 'acknowledged' ? 'already_acknowledged' : 'already_terminal', record }; }
@@ -163,15 +238,34 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
   }); }
   function transition(operationId, status, { ownerId, fence, evidence } = {}) { return transaction(() => {
     if (!STATES.has(status)) throw new Error('Invalid ledger transition');
-    const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); const claimKey = key(record.operation); const claim = data.claims[claimKey];
+    const data = readUnlocked(); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); const claimKey = key(record.operation); const claim = data.claims[claimKey];
     if (!ownerId || !Number.isSafeInteger(fence) || !claim || claim.operationId !== operationId || claim.ownerId !== ownerId || claim.fence !== fence) throw new Error('Lost mutation claim ownership or fence');
     recordTransition(record, status, evidence); if (TERMINAL.has(status) || ['planned', 'conflict', 'quarantined', 'local_applied', 'unknown_after_dispatch'].includes(status)) delete data.claims[claimKey]; writeAtomic(filePath, data, fsImpl); return record;
   }); }
-  function quarantine(operationId, reason) { return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); quarantineUnlocked(record, reason); recordTransition(record, 'quarantined', { reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
-  function resolve(operatorId, operationId, status, reason) { if (!operatorId || !reason || !['superseded', 'abandoned'].includes(status)) throw new Error('operator, reason, and terminal resolution are required'); return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); recordTransition(record, status, { operatorId, reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
-  function read() { return transaction(() => readUnlocked({ repair: true })); }
+  function quarantine(operationId, reason) { return transaction(() => { const data = readUnlocked(); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); quarantineUnlocked(record, reason); recordTransition(record, 'quarantined', { reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
+  function resolve(operatorId, operationId, status, reason) { if (!operatorId || !reason || !['superseded', 'abandoned'].includes(status)) throw new Error('operator, reason, and terminal resolution are required'); return transaction(() => { const data = readUnlocked(); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); recordTransition(record, status, { operatorId, reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
+  function read() { return transaction(() => readUnlocked()); }
   function active() { return Object.values(read().operations).filter((record) => !TERMINAL.has(record.status) && record.status !== 'quarantined').sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
-  function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
+  // Before any expired terminal capture record is deleted, its complete family
+  // binding is derived from every retained sibling and persisted in the same
+  // write. An uncertain or inconsistent family refuses the whole prune, so no
+  // record is deleted before its family is safely bound. Non-terminal states,
+  // including unknown_after_dispatch, are never pruned.
+  function pruneRetained() { return transaction(() => {
+    const data = readUnlocked();
+    const expired = Object.entries(data.operations)
+      .filter(([, record]) => TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs)
+      .map(([id]) => id);
+    if (!expired.length) return;
+    const additions = {};
+    for (const family of new Set(expired.map((id) => captureFamilyId(id)).filter(Boolean))) {
+      const { bound, entry } = captureFamilyBindingUnlocked(data, family);
+      if (entry === undefined) additions[family] = { requestHash: bound.requestHash, vaultId: bound.vaultId, source: bound.source, boundAt: now() };
+    }
+    if (Object.keys(additions).length) data.captureRequests = { ...(data.captureRequests || {}), ...additions };
+    for (const id of expired) delete data.operations[id];
+    writeAtomic(filePath, data, fsImpl);
+  }); }
   return Object.freeze({ active, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, planNext, read, resolve, transition, quarantine, pruneRetained, filePath });
 }
 module.exports = { BLOCKING, STATES, TERMINAL, createVaultMutationLedger };

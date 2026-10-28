@@ -54,7 +54,13 @@ const vault = {
   }),
 };
 const context = vm.createContext({ app: { vault }, TextDecoder, Uint8Array,
-  atob: (value) => Buffer.from(value, 'base64').toString('binary') });
+  atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+  // Browser btoa: Latin-1 input only, as Obsidian's runtime provides it.
+  btoa: (value) => {
+    const text = String(value);
+    if (/[^\u0000-ÿ]/.test(text)) throw new Error('InvalidCharacterError: btoa input is not Latin-1');
+    return Buffer.from(text, 'binary').toString('base64');
+  } });
 let faultTriggered = false;
 let pendingPolls = 0;
 const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capture-fixture',
