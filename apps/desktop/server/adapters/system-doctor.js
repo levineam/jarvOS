@@ -35,6 +35,8 @@ const COMPONENT_STATES = new Set(['healthy', 'warning', 'repair needed', 'not co
 const RECEIPT_STATUSES = new Set(['healthy', 'repair needed', 'needs your attention']);
 // v3 and v4 components carry their own date pair; v2 components never do.
 const DATED_FACTS_VERSIONS = new Set([SYSTEM_FACTS_VERSION_V3, SYSTEM_FACTS_VERSION_V4]);
+// Same severity order as the jarvOS aggregateChecks: a row shows its worst check.
+const STATE_SEVERITY = { healthy: 0, 'not configured': 1, warning: 2, 'repair needed': 3 };
 
 const KNOWN_GUIDANCE = Object.freeze({
   'http-unreachable': 'HTTP check failed. Restore access, then rerun Doctor.',
@@ -258,8 +260,15 @@ function loadPublishedReceipt(filePath, fsImpl = fs, opts = {}, now = new Date()
   if (raw?.schema !== REPORT_SCHEMA || !Array.isArray(raw.components)) return null;
   if (raw.profile?.id !== opts.profile || path.resolve(raw.workspace || '.') !== path.resolve(opts.workspace || '.')) return null;
   const freshness = observation(raw, now);
-  if (freshness.freshness !== 'current') return null;
   const factsVersion = raw.factsVersion == null ? SYSTEM_FACTS_VERSION : raw.factsVersion;
+  const base = { ...raw, factsVersion, source: 'receipt-file', observations: [{ id: 'system', ...freshness }] };
+  if (factsVersion === SYSTEM_FACTS_VERSION_V4) {
+    // v4 ages every check itself, so an expired envelope is aged rather than refused.
+    if (freshness.freshness === 'unavailable' || !validateReceipt(base, now).ok) return null;
+    const checked = validateReceipt({ ...base, ...applyV4Ages(raw, now, freshness.freshness) }, now);
+    return checked.ok ? checked.receipt : null;
+  }
+  if (freshness.freshness !== 'current') return null;
   const components = raw.components.map((c) => {
     if (!isPlainObject(c)) return c;
     const dates = observation(c, now);
@@ -267,7 +276,7 @@ function loadPublishedReceipt(filePath, fsImpl = fs, opts = {}, now = new Date()
       ? { ...c, ...dates, state: 'warning', reasonClass: 'component-stale', message: null }
       : { ...c, ...dates };
   });
-  const checked = validateReceipt({ ...raw, factsVersion, source: 'receipt-file', observations: [{ id: 'system', ...freshness }], components }, now);
+  const checked = validateReceipt({ ...base, components }, now);
   return checked.ok ? checked.receipt : null;
 }
 
@@ -279,6 +288,70 @@ function observation(item, now) {
     observedAt: Number.isFinite(start) ? new Date(start).toISOString() : null,
     validUntil: Number.isFinite(end) ? new Date(end).toISOString() : null,
     freshness: !valid ? 'unavailable' : end <= now.getTime() ? 'stale' : 'current',
+  };
+}
+
+// Ages one v4 check on its own. Only a healthy check is rewritten: an expired
+// failure keeps its state and reason, and an expired envelope only downgrades
+// checks that would otherwise still claim health.
+function ageCheck(check, now, envelopeFreshness) {
+  const next = { ...check, ...observation(check, now) };
+  if (next.state !== 'healthy') return next;
+  if (next.freshness === 'stale') {
+    return { ...next, state: 'warning', reasonClass: 'component-stale', message: null };
+  }
+  if (envelopeFreshness !== 'current') return { ...next, state: 'warning', reasonClass: 'module-stale' };
+  return next;
+}
+
+// A v4 row is a pure function of its aged checks: worst state (first wins a
+// tie), oldest observedAt, earliest validUntil. Whatever the row said is replaced.
+function ageRow(row, now, envelopeFreshness) {
+  if (!row.checks.length) return row;
+  const checks = row.checks.map((check) => ageCheck(check, now, envelopeFreshness));
+  const worst = checks.reduce((a, c) => (STATE_SEVERITY[c.state] > STATE_SEVERITY[a.state] ? c : a));
+  // Fixed-width ISO strings sort as time.
+  const observed = checks.map((c) => c.observedAt).filter(Boolean).sort();
+  const valid = checks.map((c) => c.validUntil).filter(Boolean).sort();
+  return {
+    ...row,
+    state: worst.state,
+    reasonClass: worst.state === 'healthy' ? 'none' : worst.reasonClass,
+    ...observation({ observedAt: observed[0] ?? null, validUntil: valid[0] ?? null }, now),
+    checks,
+  };
+}
+
+function rollupComponent(row, id) {
+  return {
+    id,
+    label: row.label,
+    section: 'optional',
+    state: row.state,
+    reasonClass: row.reasonClass,
+    observedAt: row.observedAt,
+    validUntil: row.validUntil,
+    freshness: row.freshness,
+    message: null,
+    rollup: id === 'doctor' ? 'doctor' : 'product',
+  };
+}
+
+// Ages a v4 receipt: every check, then each row from its checks, then the flat
+// rollup components from the rows. Non-rollup components keep the v3 rule.
+function applyV4Ages(receipt, now, envelopeFreshness) {
+  const flat = receipt.components.filter((c) => !(isPlainObject(c) && c.rollup)).map((c) => {
+    const next = { ...c, ...observation(c, now) };
+    if (next.state !== 'healthy') return next;
+    if (next.freshness === 'stale') return { ...next, state: 'warning', reasonClass: 'component-stale', message: null };
+    return envelopeFreshness !== 'current' ? { ...next, state: 'warning', reasonClass: 'module-stale' } : next;
+  });
+  const products = receipt.products.map((row) => ageRow(row, now, envelopeFreshness));
+  const doctor = ageRow(receipt.doctor, now, envelopeFreshness);
+  return {
+    components: [...flat, ...products.map((row) => rollupComponent(row, row.id)), rollupComponent(doctor, 'doctor')],
+    products,
+    doctor,
   };
 }
 

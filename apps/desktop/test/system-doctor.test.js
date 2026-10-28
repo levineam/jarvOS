@@ -116,6 +116,108 @@ test('v4 receipt file loads, a malformed products block is refused, and v3 still
   assert.equal(loaded.receipt.products, undefined);
   assert.equal(loaded.receipt.doctor, undefined);
 });
+// ── facts/v4 per-check aging ──
+const V4_NAME = 'jarvos-system-doctor-facts/v4';
+const FRESH = { observedAt: '2026-09-10T11:00:00.000Z', validUntil: '2026-09-10T13:00:00.000Z' };
+const EXPIRED = { observedAt: '2026-09-10T08:00:00.000Z', validUntil: '2026-09-10T10:00:00.000Z' };
+const v4Check = (id, dates, state = 'healthy', reasonClass = 'none', extra = {}) => ({ id, label: `Check ${id}`, state, reasonClass, ...dates, ...extra });
+const v4Row = (checks, extra = {}) => ({ ...extra, checks, state: 'healthy', reasonClass: 'none', ...FRESH });
+function v4DoctorRow(overrides = {}) {
+  const parts = ['last-run', 'reviewed-release', 'repairs', 'alerts'];
+  return v4Row(parts.map((part) => ({ ...v4Check(`doctor-${part}`, overrides[part] || FRESH, ...(overrides[`${part}State`] || [])), part })), { label: 'jarvOS Doctor' });
+}
+function v4ReceiptFile(t, { products, doctor: doctorRow, envelope = FRESH }) {
+  const f = fixture(t);
+  const file = path.join(f.workspace, 'receipt.json');
+  const receipt = { schema: doctor.REPORT_SCHEMA, profile: { id: 'local-openclaw', title: 'Local' }, workspace: f.workspace,
+    status: 'healthy', factsVersion: V4_NAME, ...envelope,
+    components: [], products, doctor: doctorRow };
+  f.cfg.systemDoctor.receiptFile = file;
+  fs.writeFileSync(file, JSON.stringify(receipt), { mode: 0o600 });
+  return { f, receipt, load: (at = now) => doctor.loadReceipt(f.cfg, { now: at }) };
+}
+test('v4 an expired memory check beside a fresh gateway failure still shows the failure, not stale', (t) => {
+  const product = { id: 'openclaw', label: 'OpenClaw', maker: 'x', order: 1, version: null, ...v4Row([
+    v4Check('memory', EXPIRED),
+    v4Check('gateway', FRESH, 'repair needed', 'http-unreachable'),
+  ]) };
+  const { load } = v4ReceiptFile(t, { products: [product], doctor: v4DoctorRow() });
+  const result = load();
+  assert.equal(result.ok, true, result.error);
+  const row = result.receipt.products[0];
+  assert.equal(row.checks[0].state, 'warning');
+  assert.equal(row.checks[0].reasonClass, 'component-stale');
+  assert.equal(row.checks[1].state, 'repair needed');
+  assert.equal(row.state, 'repair needed');
+  assert.equal(row.reasonClass, 'http-unreachable');
+  assert.equal(row.observedAt, EXPIRED.observedAt);
+  assert.equal(row.validUntil, EXPIRED.validUntil);
+  const rollup = result.receipt.components.find((c) => c.id === 'openclaw');
+  assert.equal(rollup.state, 'repair needed');
+  assert.equal(rollup.reasonClass, 'http-unreachable');
+  assert.equal(result.receipt.status, 'repair needed');
+});
+test('v4 an expired failure keeps its state and reason, and a row of one stale healthy check warns', (t) => {
+  const products = [
+    { id: 'a', label: 'A', maker: 'x', order: 1, version: null, ...v4Row([v4Check('a1', EXPIRED, 'repair needed', 'search-empty')]) },
+    { id: 'b', label: 'B', maker: 'x', order: 2, version: null, ...v4Row([v4Check('b1', EXPIRED)]) },
+  ];
+  const result = v4ReceiptFile(t, { products, doctor: v4DoctorRow() }).load();
+  assert.equal(result.ok, true, result.error);
+  assert.deepEqual(result.receipt.products.map((p) => [p.state, p.reasonClass]), [['repair needed', 'search-empty'], ['warning', 'component-stale']]);
+  assert.equal(result.receipt.components.find((c) => c.id === 'a').freshness, 'stale');
+});
+test('v4 doctor block ages each check on its own', (t) => {
+  const product = { id: 'a', label: 'A', maker: 'x', order: 1, version: null, ...v4Row([v4Check('a1', FRESH)]) };
+  const doctorRow = v4DoctorRow({ 'last-run': EXPIRED, 'alerts': FRESH, alertsState: ['warning', 'alerts-open'] });
+  const result = v4ReceiptFile(t, { products: [product], doctor: doctorRow }).load();
+  assert.equal(result.ok, true, result.error);
+  const block = result.receipt.doctor;
+  assert.deepEqual(block.checks.map((c) => [c.part, c.state, c.reasonClass]), [
+    ['last-run', 'warning', 'component-stale'], ['reviewed-release', 'healthy', 'none'],
+    ['repairs', 'healthy', 'none'], ['alerts', 'warning', 'alerts-open']]);
+  assert.equal(block.state, 'warning');
+  assert.equal(block.reasonClass, 'component-stale');
+  assert.equal(block.observedAt, EXPIRED.observedAt);
+  assert.equal(block.validUntil, EXPIRED.validUntil);
+  const rollup = result.receipt.components.find((c) => c.rollup === 'doctor');
+  assert.equal(rollup.state, 'warning');
+  assert.equal(rollup.validUntil, EXPIRED.validUntil);
+  assert.equal(result.receipt.products[0].state, 'healthy');
+});
+test('v4 an expired envelope turns healthy checks module-stale but keeps failures', (t) => {
+  const product = { id: 'a', label: 'A', maker: 'x', order: 1, version: null, ...v4Row([
+    v4Check('a1', FRESH), v4Check('a2', FRESH, 'repair needed', 'http-unreachable')]) };
+  const healthy = { id: 'b', label: 'B', maker: 'x', order: 2, version: null, ...v4Row([v4Check('b1', FRESH)]) };
+  const envelope = { observedAt: '2026-09-10T10:00:00.000Z', validUntil: '2026-09-10T11:55:00.000Z' };
+  const result = v4ReceiptFile(t, { products: [product, healthy], doctor: v4DoctorRow(), envelope }).load();
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.receipt.observations[0].freshness, 'stale');
+  const [a, b] = result.receipt.products;
+  assert.deepEqual(a.checks.map((c) => [c.state, c.reasonClass]), [['warning', 'module-stale'], ['repair needed', 'http-unreachable']]);
+  assert.equal(a.state, 'repair needed');
+  assert.deepEqual([b.state, b.reasonClass], ['warning', 'module-stale']);
+  assert.ok(result.receipt.doctor.checks.every((c) => c.state === 'warning' && c.reasonClass === 'module-stale'));
+  assert.notEqual(result.receipt.status, 'healthy');
+});
+test('v2 and v3 receipts still reject an expired envelope and age whole components', (t) => {
+  const f = fixture(t);
+  const file = path.join(f.workspace, 'receipt.json');
+  f.cfg.systemDoctor.receiptFile = file;
+  for (const factsVersion of [SYSTEM_FACTS_VERSION, 'jarvos-system-doctor-facts/v3']) {
+    const dated = factsVersion === SYSTEM_FACTS_VERSION ? {} : EXPIRED;
+    const receipt = { schema: doctor.REPORT_SCHEMA, profile: { id: 'local-openclaw', title: 'Local' }, workspace: f.workspace,
+      status: 'healthy', factsVersion, ...FRESH,
+      components: [{ id: 'core', label: 'Core', section: 'core', state: 'healthy', ...dated }] };
+    fs.writeFileSync(file, JSON.stringify(receipt), { mode: 0o600 });
+    const loaded = doctor.loadReceipt(f.cfg, { now });
+    assert.equal(loaded.ok, true, factsVersion);
+    assert.equal(loaded.receipt.products, undefined);
+    assert.equal(loaded.receipt.components[0].state, dated.observedAt ? 'warning' : 'healthy');
+    assert.equal(loaded.receipt.components[0].reasonClass, dated.observedAt ? 'component-stale' : 'none');
+    assert.equal(doctor.loadReceipt(f.cfg, { now: new Date('2026-09-10T14:00:00Z') }).ok, false, factsVersion);
+  }
+});
 test('expiry removes healthy claims and a newer publication is picked up without restart', (t) => {
   const f = fixture(t);
   let result = doctor.loadReceipt(f.cfg, { now: new Date('2026-09-10T14:00:00Z') });
