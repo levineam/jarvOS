@@ -523,6 +523,7 @@ function createHostProjectsContextProvider(env = process.env) {
     hostProvider.propose = async ({ proposal }) => {
       const capabilityReceipt = capabilityReceiptPath ? readPrivateJson(capabilityReceiptPath) : null;
       const capabilitySecret = capabilitySecretPath ? readPrivate(capabilitySecretPath) : null;
+      const hostSecret = hostSecretPath ? readPrivate(hostSecretPath) : null;
       return provider.propose({
         proposal,
         repositoryRoot,
@@ -532,6 +533,7 @@ function createHostProjectsContextProvider(env = process.env) {
         proposalPolicy: publicPolicy,
         capability: capabilityReceipt,
         capabilitySecret,
+        hostSecret,
         hostId: typeof config.hostId === 'string' && config.hostId.trim() ? config.hostId.trim() : undefined,
         subject: trustedSubject,
         query: freezeJsonCopy(JSON.parse(JSON.stringify(trustedRosterQuery))),
