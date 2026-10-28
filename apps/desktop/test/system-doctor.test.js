@@ -157,6 +157,21 @@ test('v4 an expired memory check beside a fresh gateway failure still shows the 
   assert.equal(rollup.reasonClass, 'http-unreachable');
   assert.equal(result.receipt.status, 'repair needed');
 });
+test('v4 an undated healthy check never reads as healthy or rescues an expired row', (t) => {
+  const undated = { observedAt: null, validUntil: null };
+  const product = { id: 'openclaw', label: 'OpenClaw', maker: 'x', order: 1, version: null, ...v4Row([
+    v4Check('memory', EXPIRED),
+    v4Check('gateway', undated),
+  ]) };
+  const { load } = v4ReceiptFile(t, { products: [product], doctor: v4DoctorRow() });
+  const result = load();
+  assert.equal(result.ok, true, result.error);
+  const row = result.receipt.products[0];
+  assert.equal(row.checks[1].state, 'warning');
+  assert.equal(row.checks[1].reasonClass, 'evidence-time-missing');
+  assert.equal(row.state, 'warning');
+  assert.equal(result.receipt.components.find((c) => c.id === 'openclaw').state, 'warning');
+});
 test('v4 an expired failure keeps its state and reason, and a row of one stale healthy check warns', (t) => {
   const products = [
     { id: 'a', label: 'A', maker: 'x', order: 1, version: null, ...v4Row([v4Check('a1', EXPIRED, 'repair needed', 'search-empty')]) },

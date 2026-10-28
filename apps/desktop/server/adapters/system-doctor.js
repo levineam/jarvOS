@@ -297,6 +297,10 @@ function observation(item, now) {
 function ageCheck(check, now, envelopeFreshness) {
   const next = { ...check, ...observation(check, now) };
   if (next.state !== 'healthy') return next;
+  // A green check needs an age: missing or unreadable dates can never read as healthy.
+  if (next.freshness === 'unavailable') {
+    return { ...next, state: 'warning', reasonClass: 'evidence-time-missing', message: null };
+  }
   if (next.freshness === 'stale') {
     return { ...next, state: 'warning', reasonClass: 'component-stale', message: null };
   }
