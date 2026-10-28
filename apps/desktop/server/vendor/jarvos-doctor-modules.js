@@ -55,6 +55,8 @@ const PROVIDER_LABELS = Object.freeze({
   'provider.telegram': 'Telegram',
 });
 const SAFE_PUBLIC_ID = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
+// RegExp.test coerces its argument, so 42 would pass as "42"; require a string first.
+const safeId = (value) => typeof value === 'string' && SAFE_PUBLIC_ID.test(value);
 const CONTINUITY_TARGETS = Object.freeze(['codex', 'hermes', 'openclaw']);
 const KNOWN_CONTINUITY_PRODUCERS = Object.freeze(['jarvos-gbrain']);
 const CONTINUITY_EVIDENCE_STATES = Object.freeze([
@@ -170,9 +172,9 @@ function validateSystemComponent(component, factsVersion, now) {
   const isV3 = factsVersion === SYSTEM_FACTS_VERSION_V3;
   const fields = isV3 ? SYSTEM_COMPONENT_FIELDS_V3 : SYSTEM_COMPONENT_FIELDS_V2;
   if (!exactObject(component, fields)
-    || !SAFE_PUBLIC_ID.test(component.id)
+    || !safeId(component.id)
     || !SYSTEM_COMPONENT_STATES.includes(component.state)
-    || !SAFE_PUBLIC_ID.test(component.reasonClass)) return false;
+    || !safeId(component.reasonClass)) return false;
   if (isV3 && !validComponentCheckDates(component, now)) return false;
   if (component.id !== 'provider.searxng') return component.evidence === null;
   return validSearchEvidence(component.evidence);
@@ -215,10 +217,10 @@ function aggregateChecks(checks) {
 
 function validateRowCheck(check, fields, now) {
   if (!exactObject(check, fields)
-    || !SAFE_PUBLIC_ID.test(check.id)
+    || !safeId(check.id)
     || !displayText(check.label)
     || !SYSTEM_COMPONENT_STATES.includes(check.state)
-    || !SAFE_PUBLIC_ID.test(check.reasonClass)
+    || !safeId(check.reasonClass)
     || !validComponentCheckDates(check, now)) return false;
   // Unlike v3, a green check can never have an unknown age.
   if (check.state === 'healthy' && check.observedAt === null) return false;
@@ -229,7 +231,7 @@ function validateRowCheck(check, fields, now) {
 
 function validateRow(row, checkFields, now) {
   if (!SYSTEM_COMPONENT_STATES.includes(row.state)
-    || !SAFE_PUBLIC_ID.test(row.reasonClass)
+    || !safeId(row.reasonClass)
     || !validComponentCheckDates(row, now)
     || !Array.isArray(row.checks)
     || row.checks.length < 1
@@ -245,7 +247,7 @@ function validateRow(row, checkFields, now) {
 
 function validateProduct(product, now) {
   return exactObject(product, PRODUCT_FIELDS_V4, ['version'])
-    && SAFE_PUBLIC_ID.test(product.id)
+    && safeId(product.id)
     && displayText(product.label)
     && displayText(product.maker)
     && Number.isSafeInteger(product.order)
@@ -264,7 +266,7 @@ function validateDoctor(doctor, now) {
 
 function validateProductFacts(facts, now) {
   if (!exactObject(facts, ['profile', 'products', 'doctor'])
-    || !SAFE_PUBLIC_ID.test(facts.profile)
+    || !safeId(facts.profile)
     || !Array.isArray(facts.products)
     || facts.products.length > MAX_PRODUCTS
     || !facts.products.every((product) => validateProduct(product, now))
@@ -281,7 +283,7 @@ function validateProductFacts(facts, now) {
 function validateSystemFacts(facts, factsVersion, now) {
   if (factsVersion === SYSTEM_FACTS_VERSION_V4) return validateProductFacts(facts, now);
   if (!exactObject(facts, ['profile', 'components'])
-    || !SAFE_PUBLIC_ID.test(facts.profile)
+    || !safeId(facts.profile)
     || !Array.isArray(facts.components)
     || facts.components.length > 64
     || !facts.components.every((component) => validateSystemComponent(component, factsVersion, now))) return false;

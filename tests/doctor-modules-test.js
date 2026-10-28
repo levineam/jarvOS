@@ -1434,3 +1434,47 @@ test('v4 is not a downgrade path: the v2 and v3 shapes are rejected under the v4
   assertInvalid(readSystemV4(systemSnapshot({ factsVersion: 'jarvos-system-doctor-facts/v4', facts: { profile: 'minimal', components: [] } })));
   assertInvalid(readSystemV4(systemSnapshotV3({ facts: { profile: 'minimal', products: [], doctor: doctorV4() } })));
 });
+
+test('non-string ids and reason classes are rejected instead of coerced, and the receipt never throws', () => {
+  const base = productV4('alpha', 1, [checkV4('c0')]);
+  const badDoctorCheck = (overrides) => doctorV4({}, ['last-run', 'reviewed-release', 'repairs', 'alerts']
+    .map((part, index) => doctorCheckV4(part, 'healthy', index === 0 ? overrides : {})));
+  const malformed = [
+    systemSnapshotV4({ products: [{ ...base, id: 42 }] }),
+    systemSnapshotV4({ products: [{ ...base, checks: [{ ...base.checks[0], id: 42 }] }] }),
+    systemSnapshotV4({ products: [{ ...base, checks: [{ ...base.checks[0], reasonClass: 42 }] }] }),
+    systemSnapshotV4({ products: [{ ...base, reasonClass: 42 }] }),
+    systemSnapshotV4({ doctor: badDoctorCheck({ id: 42 }) }),
+    systemSnapshotV4({ doctor: badDoctorCheck({ reasonClass: 42 }) }),
+    systemSnapshotV4({ doctor: badDoctorCheck({ part: 42 }) }),
+    systemSnapshotV4({ profile: 42 }),
+  ];
+  for (const input of malformed) {
+    const module = readSystemV4(input);
+    assertInvalid(module);
+    assert.doesNotThrow(() => buildSystemDoctorReceipt({
+      ok: false, profile: { id: 'minimal', title: 'Minimal' }, workspace: '/w', results: [], modules: [module],
+    }));
+  }
+});
+
+test('v2 and v3 reject numeric ids, reason classes and profiles without throwing', () => {
+  const variants = [
+    [systemSnapshot, systemComponent],
+    [systemSnapshotV3, systemComponentV3],
+  ];
+  for (const [snapshotFor, componentFor] of variants) {
+    const withFacts = (components, profile = 'minimal') => snapshotFor({ facts: { profile, components } });
+    for (const input of [
+      withFacts([{ ...componentFor('provider.paperclip'), id: 42 }]),
+      withFacts([{ ...componentFor('provider.paperclip'), reasonClass: 42 }]),
+      withFacts([componentFor('provider.paperclip')], 42),
+    ]) {
+      const module = readSystemV4(input);
+      assert.equal(module.reasonClass, 'module-invalid');
+      assert.doesNotThrow(() => buildSystemDoctorReceipt({
+        ok: false, profile: { id: 'minimal', title: 'Minimal' }, workspace: '/w', results: [], modules: [module],
+      }));
+    }
+  }
+});
