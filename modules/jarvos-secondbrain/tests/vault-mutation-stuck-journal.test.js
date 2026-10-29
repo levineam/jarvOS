@@ -324,7 +324,7 @@ test('a dispatch failure keeps a bounded, sanitized message beside errorClass', 
   try {
     const adapter = createVaultMutationAdapter({
       vaultRoot: root, vaultId: VAULT_ID, ledgerPath: path.join(root, 'ledger.json'), probe: () => ({ state: 'available', vaultId: VAULT_ID }),
-      evaluate() { throw new Error(`write ${root}/Journal/2026-10-28.md failed; see /Users/someone/.config/obsidian/log.txt; Authorization: Bearer abcdef0123456789; ${'x '.repeat(400)}`); },
+      evaluate() { throw new Error(`write ${root}/Journal/2026-10-28.md failed; see /Users/someone/.config/obsidian/log.txt; ${'x '.repeat(400)}Authorization: Bearer abcdef0123456789`); },
     });
     const receipt = adapter.execute({ schemaVersion: 1, operationId: 'op-20261028-errtext', vaultId: VAULT_ID, vaultRelativePath: JOURNAL, sequence: 1, operationKind: 'create', content: 'x' });
     assert.equal(receipt.status, 'unknown_after_dispatch');
@@ -344,17 +344,20 @@ test('a message-less or non-string failure records errorClass only', () => {
   assert.equal(sanitizeErrorMessage({ message: 42 }), undefined);
 });
 
-test('the sanitizer redacts quoted and escape-quoted credential keys in JSON error text', () => {
+test('the sanitizer drops everything after a credential key, however the value is quoted', () => {
   const json = sanitizeErrorMessage(new Error('dispatch failed: {"password":"correct horse battery","status":503}'));
-  assert.doesNotMatch(json, /correct horse/);
-  assert.match(json, /"password":<redacted>/);
-  assert.match(json, /503/);
+  assert.doesNotMatch(json, /correct horse|503/);
+  assert.match(json, new RegExp(`^dispatch failed: \\{"${PASSWORD_KEY}=<redacted>$`));
   const escaped = sanitizeErrorMessage(new Error('body={\\"api_key\\": \\"abc def ghi\\"}'));
   assert.doesNotMatch(escaped, /abc def/);
-  assert.match(escaped, /api_key/);
+  assert.match(escaped, new RegExp(`${['api', 'key'].join('_')}=<redacted>$`));
   const inner = sanitizeErrorMessage(new Error('{"password":"first \\"quoted\\" last","status":503}'));
   assert.doesNotMatch(inner, /first|quoted|last/);
-  assert.match(inner, /503/);
+  // Nested escaping (an error that embeds an already-serialized JSON string).
+  const nested = sanitizeErrorMessage(new Error(JSON.stringify(JSON.stringify({ [PASSWORD_KEY]: 'first "middle" last' }))));
+  assert.doesNotMatch(nested, /first|middle|last/);
+  // A credential word with no separator carries no value and is kept for diagnosis.
+  assert.equal(sanitizeErrorMessage(new Error('token expired; retry')), 'token expired; retry');
 });
 
 test('the sanitizer removes eval payloads, credentials and out-of-vault paths but keeps the diagnosis', () => {
@@ -362,7 +365,7 @@ test('the sanitizer removes eval payloads, credentials and out-of-vault paths bu
   const message = sanitizeErrorMessage(new Error(`ETIMEDOUT after 30000ms: spawn obsidian vault=Notes eval code=KGZ1bmN0aW9uKCkge30pKCk= ${vaultRoot}/Journal/x.md /Users/andrew/secret/stuff.txt ${PASSWORD_KEY}="correct horse" sk-ABCDEFGHIJKLMNOP`), { vaultRoot });
   assert.equal(message, 'ETIMEDOUT after 30000ms: spawn obsidian vault=Notes eval code=<redacted>');
   const detail = sanitizeErrorMessage(`ETIMEDOUT ${vaultRoot}/Journal/x.md /Users/andrew/secret/stuff.txt ${PASSWORD_KEY}="correct horse" sk-ABCDEFGHIJKLMNOP`, { vaultRoot });
-  assert.equal(detail, `ETIMEDOUT <vault>/Journal/x.md <path> ${PASSWORD_KEY}=<redacted> <redacted>`);
+  assert.equal(detail, `ETIMEDOUT <vault>/Journal/x.md <path> ${PASSWORD_KEY}=<redacted>`);
   assert.equal(sanitizeErrorMessage('a\u0000b\n\tc', { vaultRoot }), 'a b c');
   assert.equal(sanitizeErrorMessage('y '.repeat(500), { maxChars: 20 }).length, 20);
 });
