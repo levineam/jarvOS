@@ -44,6 +44,20 @@ function resolveVaultTarget({ vaultRoot, vaultRelativePath, fsImpl = fs } = {}) 
   return target;
 }
 
+// Read-only presence check shared by the storage adapter (skip a redundant
+// ensure-exists create) and the stuck-operation resolver (verify an intent was
+// met). It goes through the same root/symlink containment as every local write
+// target and requires a non-empty regular file, so a dangling link, a directory,
+// an escape, or a zero-byte placeholder never counts as "exists". It never
+// reads or returns file content.
+function vaultFileExists({ vaultRoot, vaultRelativePath, fsImpl = fs } = {}) {
+  try {
+    const target = resolveVaultTarget({ vaultRoot, vaultRelativePath, fsImpl });
+    const stat = fsImpl.lstatSync(target);
+    return stat.isFile() && !stat.isSymbolicLink() && stat.size > 0;
+  } catch { return false; }
+}
+
 function isHash(value) { return typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value); }
 function isOperationId(value) { return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/.test(value); }
 
@@ -162,4 +176,4 @@ function projectPublicCaptureResult(result = {}) {
   };
 }
 
-module.exports = { LIFECYCLE_STATES, PUBLIC_OBSIDIAN, PUBLIC_PERSISTENCE, PUBLIC_STATUSES, SYNC_STATES, createInternalReceipt, hashUtf8, projectPublicCaptureResult, projectPublicResult, resolveVaultTarget, validateOperation, validateVaultRelativeMarkdownPath };
+module.exports = { LIFECYCLE_STATES, PUBLIC_OBSIDIAN, PUBLIC_PERSISTENCE, PUBLIC_STATUSES, SYNC_STATES, createInternalReceipt, hashUtf8, projectPublicCaptureResult, projectPublicResult, resolveVaultTarget, validateOperation, validateVaultRelativeMarkdownPath, vaultFileExists };

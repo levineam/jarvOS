@@ -27,6 +27,7 @@ const {
   getVaultNotesDir,
 } = require('./lib/provenance-config');
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
+const { vaultFileExists } = require('../../../adapters/obsidian/src/vault-mutation-contract');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
@@ -673,7 +674,19 @@ function linkNoteToJournal({
   const stableIntent = intentId || `backlink-${crypto.randomUUID()}`;
   let receipt;
   try {
-    if (createIfMissing) {
+    // A journal the app already has needs no "ensure it exists" create: the
+    // backlink transform carries its own app readback, while a redundant create
+    // whose ack fails strands every later write to that day's journal. Disk-only
+    // bytes still go through create so the app registers them first.
+    const journalPresent = createIfMissing && (() => {
+      try {
+        if (typeof mutationService?.vaultFileState !== 'function') return false;
+        const activeRoot = vaultRoot || mutationService.vaultRoot || resolveVaultRootForJournal(journalPath);
+        const vaultRelativePath = journalPathRelativeToVault(journalPath, activeRoot);
+        return vaultFileExists({ vaultRoot: activeRoot, vaultRelativePath }) && mutationService.vaultFileState(vaultRelativePath) === 'present';
+      } catch { return false; }
+    })();
+    if (createIfMissing && !journalPresent) {
       const createReceipt = submitJournalCreate({ journalPath, mutationService, intentId: `${stableIntent}:create`, vaultRoot });
       if (!receiptAcknowledged(createReceipt)) throw Object.assign(new Error('Journal scaffold is not acknowledged by Obsidian'), { receipt: createReceipt });
     } else if (!existsSync(journalPath)) {

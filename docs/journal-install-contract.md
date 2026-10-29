@@ -135,6 +135,24 @@ guarded operation. It does not blindly replace a journal with an older disk
 copy, so a phone or tablet edit made in the meantime is preserved or surfaced
 as a conflict.
 
+One class of retained operation is resolved on a looser rule. An "ensure
+today's journal exists" create (`journal-create-<date>-...` or `<intent>:create`
+on `Journal/YYYY-MM-DD.md`) has a single intent: the journal exists. Its content
+is a snapshot, so once the journal is edited its exact-content readback can
+never match again, and an ambiguous one would block every later write to that
+day. When the app's vault index confirms the file is present, the command marks
+the create `superseded` (never `acknowledged`), also for any ensure-creates
+queued directly behind it. It never reads, writes or deletes vault content, never
+resolves any other kind of operation, and leaves everything alone if Obsidian
+cannot confirm the file. Preview with `--dry-run` (lists what would resolve; no
+drain, no ledger write). Resolving is opt-in because it edits the ledger: run with
+`--resolve-stuck` (or `JARVOS_RECONCILE_RESOLVE_STUCK=1`); a plain drain never resolves.
+
+```bash
+JARVOS_VAULT_ROOT=/path/to/vault \
+  node modules/jarvos-secondbrain/scripts/vault-mutation-reconcile.js --dry-run
+```
+
 ## Single-writer ownership
 
 jarvOS is the only automated creator of files in the configured `Journal/`

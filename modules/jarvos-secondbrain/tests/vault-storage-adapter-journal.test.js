@@ -88,6 +88,57 @@ test('missing journal creates before its acknowledged section transform', () => 
   });
 });
 
+function appAwareService(root, state) {
+  const service = fakeService(root);
+  service.asked = [];
+  service.vaultFileState = (vaultRelativePath) => { service.asked.push(vaultRelativePath); return state; };
+  return service;
+}
+
+test('an unidentified capture skips the redundant ensure-journal create when the app already has the journal', () => {
+  withVault(({ root, journalDir }) => {
+    fs.mkdirSync(journalDir, { recursive: true });
+    const journalPath = path.join(journalDir, '2030-02-03.md');
+    fs.writeFileSync(journalPath, '## 💡 Ideas\n-\n\nauthored since the scaffold\n', 'utf8');
+    const service = appAwareService(root, 'present');
+    const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+    const result = adapter.appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- New idea' });
+    assert.equal(result.acknowledged, true);
+    assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['transform']);
+    assert.deepEqual(service.asked, ['Journal/2030-02-03.md']);
+    assert.deepEqual(result.artifactReceipt.artifacts.map((artifact) => artifact.outcome), ['committed']);
+    assert.match(fs.readFileSync(journalPath, 'utf8'), /authored since the scaffold/);
+
+    const link = adapter.linkNoteToJournal({ noteTitle: 'Linked Note', date: '2030-02-03' });
+    assert.equal(link.acknowledged, true);
+    assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['transform', 'transform']);
+  });
+});
+
+test('a genuinely missing journal still creates, without asking the app', () => {
+  withVault(({ root, journalDir }) => {
+    const service = appAwareService(root, 'present');
+    const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+    const result = adapter.appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- New idea' });
+    assert.equal(result.acknowledged, true);
+    assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['create', 'transform']);
+    assert.deepEqual(service.asked, []);
+  });
+});
+
+test('a journal only on disk, or one the app cannot confirm, keeps its ensure create', () => {
+  for (const state of ['absent', 'unavailable', undefined]) {
+    withVault(({ root, journalDir }) => {
+      fs.mkdirSync(journalDir, { recursive: true });
+      fs.writeFileSync(path.join(journalDir, '2030-02-03.md'), '## 💡 Ideas\n-\n', 'utf8');
+      const service = state ? appAwareService(root, state) : fakeService(root);
+      createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir })
+        .appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- New idea' });
+      assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['create', 'transform'], `app state ${state}`);
+    });
+  }
+});
+
 test('unavailable service never falls back to a raw journal write', () => {
   withVault(({ root, journalDir }) => {
     const service = fakeService(root, { unavailable: true });

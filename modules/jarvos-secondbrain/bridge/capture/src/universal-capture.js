@@ -251,29 +251,69 @@ function captureWithJarvos(rawInput = {}, options = {}) {
   };
 }
 
-async function main() {
-  let input = '';
-  process.stdin.on('data', (chunk) => { input += chunk; });
-  process.stdin.on('end', () => {
-    try {
-      const parsed = input.trim() ? JSON.parse(input) : {};
-      const result = captureWithJarvos(parsed);
-      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-      if (result.routing?.plan?.ignored) {
-        process.stderr.write(`${result.error}\n`);
-        process.exitCode = 2;
+// Process exit codes for the capture CLI. A caller (an agent shell, a hook, a
+// script) reads the code, not the JSON, so a capture that was not acknowledged
+// must never exit 0.
+const EXIT_OK = 0;
+const EXIT_ERROR = 1; // unreadable input or an exception
+const EXIT_NOT_CAPTURED = 2; // ignored (no capture intent) or a bare command that needs input
+const EXIT_NOT_ACKNOWLEDGED = 3; // routed, but a promised artifact was not acknowledged
+
+function captureExitCode(result) {
+  if (result?.ok === true) return EXIT_OK;
+  if (result?.routing?.plan?.ignored || result?.hardCommand?.disposition === 'needs_input') return EXIT_NOT_CAPTURED;
+  return EXIT_NOT_ACKNOWLEDGED;
+}
+
+// Stderr line for a non-ok result: the first non-acknowledged artifact plus the
+// sanitized adapter failure text, when the mutation adapter recorded one.
+function captureFailureMessage(result) {
+  if (result?.ok === true) return null;
+  if (result?.error) return result.error;
+  if (result?.hardCommand?.disposition === 'needs_input') return result.routing?.response || 'Capture needs input.';
+  const artifacts = result?.artifactReceipt?.artifacts || [];
+  const failed = artifacts.filter((artifact) => !['committed', 'already_satisfied'].includes(artifact.outcome));
+  const parts = failed.map((artifact) => `${artifact.kind} ${artifact.vaultRelativePath}: ${artifact.outcome}`);
+  const evidence = [result?.journalEntry?.receipt, result?.note?.receipt, result?.noteLink?.receipt]
+    .map((receipt) => receipt?.adapterEvidence)
+    .find((entry) => entry?.errorClass || entry?.reason);
+  const detail = evidence ? ` (${evidence.errorClass || evidence.reason}${evidence.errorMessage ? `: ${evidence.errorMessage}` : ''})` : '';
+  return `Capture not acknowledged${parts.length ? `: ${parts.join('; ')}` : ''}${detail}`;
+}
+
+function main({ stdin = process.stdin, stdout = process.stdout, stderr = process.stderr, capture = captureWithJarvos, setExitCode = (code) => { process.exitCode = code; } } = {}) {
+  return new Promise((resolve) => {
+    let input = '';
+    stdin.on('data', (chunk) => { input += chunk; });
+    stdin.on('end', () => {
+      let code = EXIT_ERROR;
+      try {
+        const parsed = input.trim() ? JSON.parse(input) : {};
+        const result = capture(parsed);
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        code = captureExitCode(result);
+        const message = captureFailureMessage(result);
+        if (message) stderr.write(`${message}\n`);
+      } catch (error) {
+        stderr.write(`${JSON.stringify({
+          error: error.message,
+          errors: error.errors || [],
+        }, null, 2)}\n`);
+        code = EXIT_ERROR;
       }
-    } catch (error) {
-      process.stderr.write(`${JSON.stringify({
-        error: error.message,
-        errors: error.errors || [],
-      }, null, 2)}\n`);
-      process.exit(1);
-    }
+      setExitCode(code);
+      resolve(code);
+    });
   });
 }
 
 module.exports = {
+  EXIT_ERROR,
+  EXIT_NOT_ACKNOWLEDGED,
+  EXIT_NOT_CAPTURED,
+  EXIT_OK,
+  captureExitCode,
+  captureFailureMessage,
   captureWithJarvos,
   frontmatterForCaptureEvent,
   ignoredCaptureMessage,

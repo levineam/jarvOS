@@ -272,6 +272,40 @@ test('disk-only journal bytes are registered through create before backlink tran
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a journal the app already has skips the redundant create before the backlink transform', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-app-known-journal-'));
+  const journalDir = path.join(root, 'Journal');
+  const journalPath = path.join(journalDir, '2030-02-03.md');
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.writeFileSync(journalPath, '## 📝 Notes\n-\n\nOffline prose\n', 'utf8');
+  const transforms = createJarvosVaultTransforms();
+  const order = [];
+  let appContent = null;
+  let sequence = 0;
+  const mutationService = {
+    vaultRoot: root,
+    createWriteContext({ vaultRelativePath, intentId, operationSource }) { return { vaultId: 'disk-only-test', vaultRelativePath, operationId: intentId, sequence: ++sequence, source: operationSource }; },
+    asked: [],
+    vaultFileState(vaultRelativePath) { this.asked.push(vaultRelativePath); return 'present'; },
+    execute(operation) {
+      order.push(operation.operationKind);
+      assert.notEqual(operation.operationKind, 'create', 'an existing app journal needs no ensure create');
+      appContent = fs.readFileSync(journalPath, 'utf8');
+      appContent = transforms.applyNode(appContent, operation);
+      fs.writeFileSync(journalPath, appContent, 'utf8');
+      return { status: 'committed' };
+    },
+  };
+  try {
+    const result = linkNoteToJournal({ journalPath, noteTitle: 'Recovered Registration', mutationService, vaultRoot: root });
+    assert.deepEqual(order, ['transform']);
+    assert.deepEqual(mutationService.asked, ['Journal/2030-02-03.md']);
+    assert.equal(result.linked, true);
+    assert.match(appContent, /Offline prose/);
+    assert.match(appContent, /\[\[Recovered Registration\]\]/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('canonical transform preserves the latest editor content', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-obsidian-eval-journal-'));
   const journalDir = path.join(root, 'Journal');

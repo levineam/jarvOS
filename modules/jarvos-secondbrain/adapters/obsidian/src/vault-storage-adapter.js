@@ -11,6 +11,7 @@ const { loadConfig, normalizeSections, renderJournal } = require('../../../packa
 const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
 const { getTimeZone, getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
 const { cleanJournalEntryText, digestText } = require('../../../bridge/provenance/src/content-origin-contract.js');
+const { vaultFileExists } = require('./vault-mutation-contract');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
@@ -50,6 +51,17 @@ function journalArtifact({ journalPath, vaultRoot, receipt, intent = 'auxiliary'
 function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(), journalDir = getVaultJournalDir(), source = 'obsidian.vault-storage-adapter' } = {}) {
   const service = mutationService || require('../../../src/vault-mutation-service.js').createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source });
   if (typeof service.execute !== 'function' || typeof service.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
+  // An "ensure the journal exists" create is redundant, and a liability, when the
+  // journal is already there: its ack can fail on a flaky Obsidian CLI and leave
+  // an ambiguous head operation that blocks every later write to that day. Disk
+  // bytes alone are not proof the app has registered the file, so presence is
+  // confirmed by the service's read of the app vault index. Anything short of a
+  // clean "present" (no such read, app unreachable, absent) keeps the create.
+  function journalIsPresent(journalPath) {
+    const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
+    if (!vaultFileExists({ vaultRoot: path.resolve(vaultRoot), vaultRelativePath })) return false;
+    return typeof service.vaultFileState === 'function' && service.vaultFileState(vaultRelativePath) === 'present';
+  }
   function contextFor(vaultRelativePath, intentId, requestHash) { return service.createWriteContext({ vaultRelativePath, intentId, requestHash, operationSource: service.source }); }
   function executeTransform({ date, transformName, transformVersion = 1, replayPayload, intentId, requestHash }) {
     const journalPath = path.join(journalDir, `${date}.md`);
@@ -77,10 +89,11 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
     appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash, contentOrigin } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
-      // An existing identified journal needs only the section operation's
-      // app-owned readback. Rechecking the original scaffold's exact bytes after
-      // the backlink was added would turn every successful retry into conflict.
-      const journalExists = requestHash && fs.existsSync(path.join(journalDir, `${date}.md`));
+      // An existing journal needs only the section operation's app-owned
+      // readback. Rechecking the original scaffold's exact bytes after the
+      // backlink was added would turn every successful retry into conflict, and
+      // an unidentified capture's redundant create can strand the day's FIFO.
+      const journalExists = (requestHash && fs.existsSync(path.join(journalDir, `${date}.md`))) || journalIsPresent(path.join(journalDir, `${date}.md`));
       const ensured = journalExists ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash });
       if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
       const cleanLine = cleanJournalEntryText(String(line).trim());
@@ -120,8 +133,8 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
     },
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId } = {}) {
       if (!noteTitle) throw new Error('noteTitle is required');
-      const ensured = this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
-      if (!receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
+      const ensured = journalIsPresent(path.join(journalDir, `${date}.md`)) ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
+      if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
       const outcome = executeTransform({ date, transformName: 'journal-backlink', replayPayload: { linkTarget: noteTitle, section: heading, ...(noteId ? { noteId } : {}) }, intentId: intentId ? `${intentId}:backlink` : undefined });
       return {
         journalPath: outcome.journalPath,
@@ -129,7 +142,7 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         acknowledged: receiptIsAcknowledged(outcome.receipt),
         alreadyPresent: outcome.receipt.status === 'already_satisfied',
         artifactReceipt: artifactReceiptFor([
-          ...(ensured.artifactReceipt?.artifacts || []),
+          ...(ensured?.artifactReceipt?.artifacts || []),
           journalArtifact({ journalPath: outcome.journalPath, vaultRoot, receipt: outcome.receipt, intent: 'auxiliary' }),
         ]),
       };
