@@ -342,6 +342,16 @@ test('a message-less or non-string failure records errorClass only', () => {
   assert.equal(sanitizeErrorMessage({ message: 42 }), undefined);
 });
 
+test('the sanitizer redacts quoted and escape-quoted credential keys in JSON error text', () => {
+  const json = sanitizeErrorMessage(new Error('dispatch failed: {"password":"correct horse battery","status":503}'));
+  assert.doesNotMatch(json, /correct horse/);
+  assert.match(json, /"password":<redacted>/);
+  assert.match(json, /503/);
+  const escaped = sanitizeErrorMessage(new Error('body={\\"api_key\\": \\"abc def ghi\\"}'));
+  assert.doesNotMatch(escaped, /abc def/);
+  assert.match(escaped, /api_key/);
+});
+
 test('the sanitizer removes eval payloads, credentials and out-of-vault paths but keeps the diagnosis', () => {
   const vaultRoot = '/Volumes/Notes Vault';
   const message = sanitizeErrorMessage(new Error(`ETIMEDOUT after 30000ms: spawn obsidian vault=Notes eval code=KGZ1bmN0aW9uKCkge30pKCk= ${vaultRoot}/Journal/x.md /Users/andrew/secret/stuff.txt password="correct horse" sk-ABCDEFGHIJKLMNOP`), { vaultRoot });
