@@ -47,7 +47,7 @@ function sanitizeErrorMessage(raw, { vaultRoot, maxChars = ERROR_MESSAGE_MAX_CHA
     .replace(/(:\/\/)[^\s/@]+@/g, '$1<redacted>@')
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]{6,}/gi, '$1 <redacted>')
     // The key may be quoted or escape-quoted (JSON text in an error): `"password":"x"`, `\"token\": \"x\"`.
-    .replace(/\b([A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|credential|cookie|authorization)[A-Za-z0-9_.-]*)((?:\\?["'])?\s*[:=]\s*)(\\"(?:[^"\\]|\\[^"])*\\"|"[^"]*"|'[^']*'|\S+)/gi, '$1$2<redacted>')
+    .replace(/\b([A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|credential|cookie|authorization)[A-Za-z0-9_.-]*)((?:\\?["'])?\s*[:=]\s*)(\\"(?:[^"\\]|\\[^"])*\\"|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)/gi, '$1$2<redacted>')
     .replace(/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}|\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_[A-Za-z0-9_]{8,}|\bxox[abprs]-[A-Za-z0-9-]{8,}|\bAKIA[0-9A-Z]{12,}/g, '<redacted>')
     // Absolute paths that survived are outside the vault: keep no location.
     .replace(/(?:~|[A-Za-z]:\\)[^\s'"`<>|;,()\[\]{}]*|(?<![\w<>:.\/~-])(?:\/[^\s\/'"`<>|:;,()\[\]{}]+){2,}/g, '<path>')

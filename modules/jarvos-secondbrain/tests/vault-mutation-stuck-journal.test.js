@@ -350,6 +350,9 @@ test('the sanitizer redacts quoted and escape-quoted credential keys in JSON err
   const escaped = sanitizeErrorMessage(new Error('body={\\"api_key\\": \\"abc def ghi\\"}'));
   assert.doesNotMatch(escaped, /abc def/);
   assert.match(escaped, /api_key/);
+  const inner = sanitizeErrorMessage(new Error('{"password":"first \\"quoted\\" last","status":503}'));
+  assert.doesNotMatch(inner, /first|quoted|last/);
+  assert.match(inner, /503/);
 });
 
 test('the sanitizer removes eval payloads, credentials and out-of-vault paths but keeps the diagnosis', () => {
