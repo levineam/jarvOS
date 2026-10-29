@@ -298,7 +298,12 @@ function createConfiguredVaultMutationService({
       : receipt;
   }
 
-  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, source, transforms, vaultId, vaultRoot });
+  // 'present' | 'absent' | 'unavailable', read from the app's vault index.
+  function vaultFileState(vaultRelativePath) {
+    return typeof adapter.inspectFileExists === 'function' ? adapter.inspectFileExists(vaultRelativePath).status : 'unavailable';
+  }
+
+  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, source, transforms, vaultFileState, vaultId, vaultRoot });
 }
 
 module.exports = { PACKAGE_TEMPORARY_SHIMS, WRITER_INVENTORY, assertNoUnclassifiedVaultWrites, assertPackageImportBoundary, assertWriterInventory, configuredVaultId, createConfiguredVaultMutationService };

@@ -8,8 +8,15 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  EXIT_ERROR,
+  EXIT_NOT_ACKNOWLEDGED,
+  EXIT_NOT_CAPTURED,
+  EXIT_OK,
+  captureExitCode,
+  captureFailureMessage,
   captureWithJarvos,
   frontmatterForCaptureEvent,
+  main: captureMain,
   normalizeCaptureEvent,
 } = require('../bridge/capture/src/universal-capture');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
@@ -404,8 +411,11 @@ test('explicit capture CLI does not claim a disk write without Obsidian acknowle
     encoding: 'utf8',
   });
 
-  assert.equal(result.status, 0);
+  // ok:false must be visible to the caller's shell, not only in the JSON.
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /^Capture not acknowledged: .*(?:note|journal) .*\.md: (?:failed|deferred)/);
   const parsed = JSON.parse(result.stdout);
+  assert.equal(parsed.ok, false);
   assert.equal(parsed.routing.plan.ignored, false);
   assert.equal(parsed.routing.plan.route, 'note');
   assert.equal(parsed.note.written, false);
@@ -448,4 +458,56 @@ test('explicit durable idea flag wins over substantive false', () => {
     assert.ok(result.note);
     assert.equal(result.knowledge.qmdStatus, 'pending-refresh');
   });
+});
+
+async function runCaptureMain(input, capture) {
+  const { Readable, Writable } = require('node:stream');
+  const chunks = { stdout: '', stderr: '' };
+  const sink = (name) => new Writable({ write(chunk, _encoding, done) { chunks[name] += chunk; done(); } });
+  const exit = [];
+  const code = await captureMain({ stdin: Readable.from([input]), stdout: sink('stdout'), stderr: sink('stderr'), capture, setExitCode: (value) => exit.push(value) });
+  return { code, exit, ...chunks };
+}
+
+test('capture CLI exits non-zero whenever the result is not ok', async () => {
+  assert.equal(EXIT_OK, 0);
+  const acknowledged = { ok: true, routing: { plan: { ignored: false } }, artifactReceipt: { artifacts: [] } };
+  const unacknowledged = {
+    ok: false,
+    routing: { plan: { ignored: false } },
+    artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-10-28.md', outcome: 'deferred' }] },
+    journalEntry: { receipt: { status: 'unknown_after_dispatch', adapterEvidence: { errorClass: 'dispatch_failed', errorMessage: 'cli timed out' } } },
+  };
+
+  const ok = await runCaptureMain('{}', () => acknowledged);
+  assert.deepEqual([ok.code, ok.exit, ok.stderr], [EXIT_OK, [EXIT_OK], '']);
+  assert.equal(JSON.parse(ok.stdout).ok, true);
+
+  const bad = await runCaptureMain('{}', () => unacknowledged);
+  assert.equal(bad.code, EXIT_NOT_ACKNOWLEDGED);
+  assert.notEqual(bad.code, 0);
+  assert.equal(JSON.parse(bad.stdout).ok, false, 'the JSON stays on stdout');
+  assert.equal(bad.stderr, 'Capture not acknowledged: journal Journal/2026-10-28.md: deferred (dispatch_failed: cli timed out)\n');
+
+  const ignored = await runCaptureMain('{}', () => ({ ok: false, routing: { plan: { ignored: true } }, error: 'Capture ignored: nothing to do' }));
+  assert.deepEqual([ignored.code, ignored.stderr], [EXIT_NOT_CAPTURED, 'Capture ignored: nothing to do\n']);
+
+  const needsInput = await runCaptureMain('{}', () => ({ ok: false, hardCommand: { disposition: 'needs_input' }, routing: { response: 'What note should I capture?', plan: null } }));
+  assert.deepEqual([needsInput.code, needsInput.stderr], [EXIT_NOT_CAPTURED, 'What note should I capture?\n']);
+
+  const thrown = await runCaptureMain('{not json', () => acknowledged);
+  assert.equal(thrown.code, EXIT_ERROR);
+  assert.match(thrown.stderr, /"error"/);
+  assert.equal(thrown.stdout, '');
+});
+
+test('capture exit code and stderr message are derived from the result, not from a thrown error', () => {
+  assert.equal(captureExitCode({ ok: true }), 0);
+  assert.equal(captureExitCode({ ok: false }), EXIT_NOT_ACKNOWLEDGED);
+  assert.equal(captureExitCode(undefined), EXIT_NOT_ACKNOWLEDGED);
+  assert.equal(captureFailureMessage({ ok: true }), null);
+  assert.equal(
+    captureFailureMessage({ ok: false, artifactReceipt: { artifacts: [] }, journalEntry: { receipt: { adapterEvidence: { reason: 'prior_operation_blocked' } } } }),
+    'Capture not acknowledged (prior_operation_blocked)',
+  );
 });

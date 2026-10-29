@@ -42,6 +42,21 @@ Use `custom:<slug>` for a future agent that does not yet have a first-class
 source enum. Do not raw-write daily journal files. The canonical journal is
 `Journal/YYYY-MM-DD.md`; durable notes live under `Notes/`.
 
+## Exit codes
+
+The command exits non-zero whenever the result is not `ok`, so a shell caller
+never reads a missing journal link as success. The JSON result stays on stdout;
+a one-line reason goes to stderr (for a failed dispatch it includes the
+adapter's `errorClass` and a sanitized, bounded `errorMessage`, also available
+under `journalEntry.receipt.adapterEvidence`).
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Every promised artifact was acknowledged. |
+| 1 | Unreadable input or an exception (details on stderr). |
+| 2 | Nothing was captured: no capture intent, or a bare `note:` that needs input. |
+| 3 | Routed, but a promised note or journal artifact was not acknowledged. |
+
 ## Routing
 
 - `note:` / `make a note` / `save this` create a note and exactly one journal

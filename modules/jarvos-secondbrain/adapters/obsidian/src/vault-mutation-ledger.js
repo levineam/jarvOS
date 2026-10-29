@@ -168,10 +168,38 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     recordTransition(record, status, evidence); if (TERMINAL.has(status) || ['planned', 'conflict', 'quarantined', 'local_applied', 'unknown_after_dispatch'].includes(status)) delete data.claims[claimKey]; writeAtomic(filePath, data, fsImpl); return record;
   }); }
   function quarantine(operationId, reason) { return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); quarantineUnlocked(record, reason); recordTransition(record, 'quarantined', { reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
-  function resolve(operatorId, operationId, status, reason) { if (!operatorId || !reason || !['superseded', 'abandoned'].includes(status)) throw new Error('operator, reason, and terminal resolution are required'); return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); recordTransition(record, status, { operatorId, reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
+  // onlyIfStatus makes the resolution conditional inside the same transaction:
+  // a record that changed state since the caller planned it, or that a live
+  // claim is dispatching right now, is left alone and null is returned.
+  function resolve(operatorId, operationId, status, reason, { onlyIfStatus } = {}) { if (!operatorId || !reason || !['superseded', 'abandoned'].includes(status)) throw new Error('operator, reason, and terminal resolution are required'); return transaction(() => { const data = readUnlocked({ repair: true }); const record = data.operations[operationId]; if (!record) throw new Error('Unknown operationId'); if (onlyIfStatus) { const live = data.claims[key(record.operation)]; if (!onlyIfStatus.includes(record.status) || (live?.operationId === operationId && live.expiresAt > now())) return null; } recordTransition(record, status, { operatorId, reason }); delete data.claims[key(record.operation)]; writeAtomic(filePath, data, fsImpl); return record; }); }
   function read() { return transaction(() => readUnlocked({ repair: true })); }
+  // Strictly read-only view for previews: no lock file, no quarantine, no
+  // rewrite. Writers replace the ledger by atomic rename, so an unlocked read sees
+  // a whole snapshot. Records that read() would quarantine are left out of the
+  // snapshot instead of being moved; a missing ledger is empty and an unreadable
+  // or unsafe one throws.
+  function peek() {
+    let data;
+    try {
+      if (unsafeMode(fsImpl.statSync(filePath))) throw new Error('ledger permissions are unsafe');
+      data = JSON.parse(fsImpl.readFileSync(filePath, 'utf8'));
+    } catch (error) {
+      if (error.code === 'ENOENT') return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} };
+      throw error;
+    }
+    if (data?.schemaVersion !== 1 || !data.operations || !data.claims || typeof data.operations !== 'object') throw new Error('Invalid vault mutation ledger');
+    const operations = {};
+    for (const [id, record] of Object.entries(data.operations)) {
+      try {
+        if (!record || !STATES.has(record.status) || record.operation?.operationId !== id) throw new Error('malformed_record');
+        validateOperation(record.operation);
+        operations[id] = record;
+      } catch { /* would be quarantined by read(); a preview only ignores it */ }
+    }
+    return { ...data, operations, sequences: data.sequences && typeof data.sequences === 'object' && !Array.isArray(data.sequences) ? data.sequences : {} };
+  }
   function active() { return Object.values(read().operations).filter((record) => !TERMINAL.has(record.status) && record.status !== 'quarantined').sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
   function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
-  return Object.freeze({ active, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, planNext, read, resolve, transition, quarantine, pruneRetained, filePath });
+  return Object.freeze({ active, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, peek, planNext, read, resolve, transition, quarantine, pruneRetained, filePath });
 }
 module.exports = { BLOCKING, STATES, TERMINAL, createVaultMutationLedger };

@@ -5,7 +5,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { hashUtf8, resolveVaultTarget } = require('./vault-mutation-contract');
 
-function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability, offlineWriteCapability } = {}) {
+// Stuck-operation resolution. An "ensure the journal exists" create has one
+// intent: the day's journal is there. The storage adapter names these
+// `journal-create-<date>-<uuid>`, and the link-to-journal path names them
+// `<intent>:create`. Their create content is a snapshot of the journal at that
+// moment, so once the journal is edited the exact-content readback can never
+// match again and an ambiguous one blocks every later write to the same file.
+const ENSURE_EXISTS_ID = /^journal-create-|:create$/;
+const DEFAULT_JOURNAL_PATH = /^Journal\/\d{4}-\d{2}-\d{2}\.md$/;
+const RESOLVABLE_STATUSES = new Set(['planned', 'unknown_after_dispatch', 'conflict', 'blocked']);
+const STUCK_STATUSES = new Set(['unknown_after_dispatch', 'conflict']);
+const TERMINAL_STATUSES = new Set(['acknowledged', 'superseded', 'abandoned']);
+const ENSURE_EXISTS_RESOLUTION = 'ensure_exists_satisfied: target journal exists, create intent met';
+
+function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, journalPathPattern = DEFAULT_JOURNAL_PATH, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability, offlineWriteCapability } = {}) {
   if (!ledger || typeof ledger.active !== 'function') throw new Error('ledger is required');
   if (!adapter || typeof adapter.execute !== 'function') throw new Error('adapter is required');
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
@@ -78,6 +91,72 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms,
     }
     return summary;
   }
+
+  function isEnsureExistsCreate(operation) {
+    return operation.operationKind === 'create'
+      && typeof operation.content === 'string'
+      && ENSURE_EXISTS_ID.test(operation.operationId)
+      && journalPathPattern.test(operation.vaultRelativePath);
+  }
+  // Plans (and, unless dryRun, applies) the safe resolution of stuck ensure-exists
+  // creates on journal paths. Rule, per (vault, path) queue in FIFO order:
+  //   1. take the leading run of ensure-exists creates (create, journal path,
+  //      ensure id, status planned|unknown_after_dispatch|conflict|blocked, no
+  //      live dispatch claim);
+  //   2. act only if the run contains a stuck op (unknown_after_dispatch or conflict);
+  //   3. act only if the target is verified present by the adapter's read of the
+  //      app's vault index (the source acknowledgement itself trusts); an absent
+  //      or unreadable answer leaves everything untouched;
+  //   4. then mark each op in the run `superseded` through the ledger's operator
+  //      resolution, conditionally on its status not having changed.
+  // Vault content is never compared, written, or deleted. Any other
+  // head (transform, replace, delete, a create that is not an ensure) keeps the
+  // strict reconcile rules and is only reported.
+  function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists' } = {}) {
+    const summary = { dryRun: dryRun === true, resolved: [], skipped: [] };
+    if (typeof vaultId !== 'string' || !vaultId) return { ...summary, skipped: [{ reason: 'vault_identity_unavailable' }] };
+    if (typeof ledger.peek !== 'function' || typeof ledger.resolve !== 'function') return { ...summary, skipped: [{ reason: 'ledger_resolution_unavailable' }] };
+    // Planning never repairs, for a dry run and an apply alike. Applying goes
+    // through ledger.resolve, which repairs inside its own transaction exactly as
+    // every other ledger write does.
+    const data = ledger.peek();
+    const queues = new Map();
+    for (const record of Object.values(data.operations)) {
+      const { operation } = record;
+      if (operation.vaultId !== vaultId || !journalPathPattern.test(operation.vaultRelativePath) || TERMINAL_STATUSES.has(record.status)) continue;
+      if (!queues.has(operation.vaultRelativePath)) queues.set(operation.vaultRelativePath, []);
+      queues.get(operation.vaultRelativePath).push(record);
+    }
+    const describe = (record) => ({ operationId: record.operation.operationId, vaultRelativePath: record.operation.vaultRelativePath, sequence: record.operation.sequence, operationKind: record.operation.operationKind, status: record.status });
+    for (const [vaultRelativePath, queue] of [...queues.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+      queue.sort((a, b) => a.operation.sequence - b.operation.sequence);
+      const claim = data.claims?.[`${vaultId}\0${vaultRelativePath}`];
+      const claimed = (record) => Boolean(claim && claim.operationId === record.operation.operationId && claim.expiresAt > now());
+      const run = [];
+      for (const record of queue) {
+        if (!isEnsureExistsCreate(record.operation) || !RESOLVABLE_STATUSES.has(record.status) || claimed(record)) break;
+        run.push(record);
+      }
+      const head = queue[0];
+      if (!run.length) {
+        if (head.status !== 'planned') summary.skipped.push({ ...describe(head), reason: claimed(head) ? 'claim_active' : 'head_not_ensure_exists_create' });
+        continue;
+      }
+      if (!run.some((record) => STUCK_STATUSES.has(record.status))) continue;
+      const presence = typeof adapter.inspectFileExists === 'function' ? adapter.inspectFileExists(vaultRelativePath).status : 'unavailable';
+      if (presence !== 'present') {
+        summary.skipped.push({ ...describe(run[0]), reason: presence === 'absent' ? 'target_absent' : 'target_unverifiable' });
+        continue;
+      }
+      for (const record of run) {
+        if (dryRun) { summary.resolved.push({ ...describe(record), resolution: 'superseded' }); continue; }
+        const done = ledger.resolve(operatorId, record.operation.operationId, 'superseded', ENSURE_EXISTS_RESOLUTION, { onlyIfStatus: [...RESOLVABLE_STATUSES] });
+        if (!done) { summary.skipped.push({ ...describe(record), reason: 'changed_during_resolution' }); break; }
+        summary.resolved.push({ ...describe(record), resolution: 'superseded' });
+      }
+    }
+    return summary;
+  }
   function health() {
     const counts = { pending: 0, ambiguous: 0, conflict: 0, quarantined: 0, retainedTerminal: 0 };
     for (const record of Object.values(ledger.read().operations)) {
@@ -89,7 +168,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, transforms,
     }
     return counts;
   }
-  return Object.freeze({ drain, health, reconcileOne, safeOfflineSave });
+  return Object.freeze({ drain, health, reconcileOne, resolveSatisfiedEnsureCreates, safeOfflineSave });
 }
 
-module.exports = { createVaultMutationReconciler };
+module.exports = { DEFAULT_JOURNAL_PATH, ENSURE_EXISTS_RESOLUTION, createVaultMutationReconciler };

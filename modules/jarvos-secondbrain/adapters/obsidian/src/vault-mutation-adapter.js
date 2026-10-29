@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
@@ -22,6 +23,40 @@ function classifyCapabilityResult(inspected, vaultName, vaultId) {
   if (typeof inspected !== 'object' || Array.isArray(inspected)) return { state: 'app_unreachable', reason: 'capability_malformed_result' };
   if (inspected.hasVault !== true) return { state: 'api_incompatible' };
   return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId };
+}
+
+// Operator diagnostics for a failed dispatch. The raw exception can carry the
+// whole eval program (note content, base64), absolute home or vault paths and
+// credentials, so only a scrubbed, bounded rendering is ever persisted or
+// returned. errorClass stays the machine-readable field; this is human context.
+const ERROR_MESSAGE_MAX_CHARS = 300;
+function escapeRegExp(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+function sanitizeErrorMessage(raw, { vaultRoot, maxChars = ERROR_MESSAGE_MAX_CHARS } = {}) {
+  let text = typeof raw === 'string' ? raw : (typeof raw?.message === 'string' ? raw.message : '');
+  if (!text) return undefined;
+  // The CLI echoes its argv on failure, and `code=` is the full eval program.
+  text = text.replace(/\bcode=[\s\S]*/, 'code=<redacted>').replace(/[\0-\x08\x0b-\x1f\x7f]/g, ' ');
+  const roots = new Set();
+  for (const candidate of [vaultRoot, (() => { try { return vaultRoot && fs.realpathSync(vaultRoot); } catch { return null; } })()]) {
+    if (typeof candidate === 'string' && path.isAbsolute(candidate) && candidate.length > 1) roots.add(candidate.replace(/[\\/]+$/, ''));
+  }
+  for (const root of [...roots].sort((a, b) => b.length - a.length)) text = text.replace(new RegExp(`${escapeRegExp(root)}(?=$|[\\\\/\\s'"\`:;,)\\]}])`, 'g'), '<vault>');
+  const home = os.homedir();
+  if (home && home.length > 1) text = text.split(home).join('~');
+  text = text
+    .replace(/(:\/\/)[^\s/@]+@/g, '$1<redacted>@')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=-]{6,}/gi, '$1 <redacted>')
+    // Fail safe: once a credential-like key is followed by ':' or '=', drop the rest
+    // of the message. Quoted, escape-quoted or nested-escaped values cannot be
+    // bounded reliably, so no part of any value (or anything after it) is kept.
+    .replace(/\b([A-Za-z0-9_.-]*(?:token|secret|passw(?:or)?d|api[_-]?key|credential|cookie|authorization)[A-Za-z0-9_.-]*)(?:\\*["'])?\s*[:=][\s\S]*$/i, '$1=<redacted>')
+    .replace(/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}|\bgh[pousr]_[A-Za-z0-9]{8,}|\bgithub_pat_[A-Za-z0-9_]{8,}|\bxox[abprs]-[A-Za-z0-9-]{8,}|\bAKIA[0-9A-Z]{12,}/g, '<redacted>')
+    // Absolute paths that survived are outside the vault: keep no location.
+    .replace(/(?:~|[A-Za-z]:\\)[^\s'"`<>|;,()\[\]{}]*|(?<![\w<>:.\/~-])(?:\/[^\s\/'"`<>|:;,()\[\]{}]+){2,}/g, '<path>')
+    .replace(/[A-Za-z0-9+\/_-]{32,}={0,2}/g, '<redacted>')
+    .replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  return text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text;
 }
 
 function sleepSync(milliseconds) {
@@ -196,6 +231,23 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       return { status: 'unavailable' };
     } catch { return { status: 'unavailable' }; }
   }
+  // Read-only existence check against the app's own vault index: the same source
+  // acknowledgement uses, never Node-visible disk bytes (a file only on disk is
+  // not yet registered with Obsidian). It is bound to the configured vault name
+  // and never throws: anything but a clean yes/no answer is `unavailable`.
+  function inspectFileExists(vaultRelativePath) {
+    try {
+      const relativePath = validateVaultRelativeMarkdownPath(vaultRelativePath);
+      if (probe) { const check = probe(); if (!check || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) return { status: 'unavailable' }; }
+      const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.getFileByPath), exists: Boolean(app?.vault?.getFileByPath?.(${JSON.stringify(relativePath)})) })`, probeTimeoutMs);
+      if (classifyCapabilityResult(inspected, vaultName, vaultId).state !== 'available' || typeof inspected.exists !== 'boolean') return { status: 'unavailable' };
+      return { status: inspected.exists ? 'present' : 'absent' };
+    } catch { return { status: 'unavailable' }; }
+  }
+  function failureEvidence(errorClass, cause) {
+    const errorMessage = sanitizeErrorMessage(cause, { vaultRoot });
+    return { errorClass, ...(errorMessage ? { errorMessage } : {}) };
+  }
   function execute(input, { excludeOperationId } = {}) {
     const operation = validateOperation(input);
     if (operation.vaultId !== vaultId) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'wrong_vault' });
@@ -242,17 +294,19 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
         try { run(cleanupProgram(operation.operationId)); } catch { /* acknowledgement is already durable */ }
         return createInternalReceipt({ operation, status: 'committed', persistence: 'durable', obsidian: 'acknowledged' });
       }
-      if (result?.status === 'error' || result?.status === 'done') { mutationLedger.transition(operation.operationId, 'conflict', { ownerId, fence: claim.fence, evidence: { errorClass: result.errorClass || 'readback_mismatch' } }); try { run(cleanupProgram(operation.operationId)); } catch {} return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'conflict', persistence: 'durable', obsidian: 'unacknowledged' }); }
+      if (result?.status === 'error' || result?.status === 'done') { const failure = failureEvidence(result.errorClass || 'readback_mismatch', result.error); mutationLedger.transition(operation.operationId, 'conflict', { ownerId, fence: claim.fence, evidence: failure }); try { run(cleanupProgram(operation.operationId)); } catch {} return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'conflict', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure }); }
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     } catch (error) {
       if (error.code === 'EVAL_NOT_STAGED') {
         // The mutation program never reached the app; keep it retryable.
-        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: { errorClass: 'eval_not_staged' } });
-        return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged' });
+        const failure = failureEvidence('eval_not_staged', error);
+        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: failure });
+        return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure });
       }
-      mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence, evidence: { errorClass: error.code === 'ENOENT' ? 'cli_missing' : 'dispatch_failed' } });
-      return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
+      const failure = failureEvidence(error.code === 'ENOENT' ? 'cli_missing' : 'dispatch_failed', error);
+      mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence, evidence: failure });
+      return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure });
     }
   }
   function submit(input) {
@@ -276,9 +330,9 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   let publicAdapter;
   function createReconciler(options = {}) {
     const { createVaultMutationReconciler } = require('./vault-mutation-reconciler');
-    return createVaultMutationReconciler({ ...options, adapter: publicAdapter, ledger: mutationLedger, vaultRoot, transforms });
+    return createVaultMutationReconciler({ ...options, adapter: publicAdapter, ledger: mutationLedger, vaultRoot, vaultId, transforms });
   }
-  publicAdapter = Object.freeze({ acknowledgeIfSatisfied, capability, createReconciler, execute, inspectInvariant, ledger: ledgerView, submit });
+  publicAdapter = Object.freeze({ acknowledgeIfSatisfied, capability, createReconciler, execute, inspectFileExists, inspectInvariant, ledger: ledgerView, submit });
   return publicAdapter;
 }
-module.exports = { CAPABILITY_REASONS, CAPABILITY_STATES, RESULT_STORE, buildObsidianInvariantProgram, buildObsidianMutationProgram, createVaultMutationAdapter, runObsidianEval };
+module.exports = { CAPABILITY_REASONS, CAPABILITY_STATES, ERROR_MESSAGE_MAX_CHARS, RESULT_STORE, sanitizeErrorMessage, buildObsidianInvariantProgram, buildObsidianMutationProgram, createVaultMutationAdapter, runObsidianEval };
