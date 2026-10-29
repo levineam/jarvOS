@@ -512,3 +512,90 @@ for (const [name, queueContent] of [
     }
   });
 }
+
+// The CLI's linkNoteToTodayJournal() injects no mutation service, so the default
+// service is built inside linkNoteToJournal. A fake `obsidian` executable stands
+// in for the app (state persisted between calls) so the real adapter, ledger and
+// transforms run end to end.
+function fakeObsidianCli(dir, vaultName, files) {
+  const state = path.join(dir, 'app-state.json');
+  fs.writeFileSync(state, JSON.stringify({ files, store: {}, stage: {} }));
+  const script = path.join(dir, 'obsidian');
+  fs.writeFileSync(script, `#!${process.execPath}
+const fs = require('node:fs'); const vm = require('node:vm');
+const stateFile = ${JSON.stringify(state)};
+const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+const code = process.argv.find((arg) => arg.startsWith('code=')).slice(5);
+const settled = (value) => ({ then(fn) { fn(value); return this; }, catch() { return this; } });
+const vault = {
+  getName: () => ${JSON.stringify(vaultName)},
+  getFileByPath: (target) => (target in state.files ? { path: target } : null),
+  process(file, transform) { state.files[file.path] = transform(state.files[file.path]); return settled(state.files[file.path]); },
+  read: (file) => settled(state.files[file.path]),
+  create(target, content) { state.files[target] = content; return settled({ path: target }); },
+};
+const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON, __jarvosVaultMutationResults: state.store, __jarvosEvalStage: state.stage };
+context.globalThis = context;
+const raw = vm.runInNewContext(code, context);
+state.store = context.__jarvosVaultMutationResults; state.stage = context.__jarvosEvalStage;
+fs.writeFileSync(stateFile, JSON.stringify(state));
+process.stdout.write('=> ' + (typeof raw === 'string' ? raw : JSON.stringify(raw ?? null)) + '\\n');
+`, { mode: 0o755 });
+  return { script, read: () => JSON.parse(fs.readFileSync(state, 'utf8')) };
+}
+
+function withDefaultServiceEnv(fn) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-default-service-')));
+  const keys = ['OBSIDIAN_CLI', 'XDG_STATE_HOME'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const vaultRoot = path.join(root, 'Vault');
+  fs.mkdirSync(path.join(vaultRoot, 'Journal'), { recursive: true });
+  process.env.XDG_STATE_HOME = path.join(root, 'state');
+  try { return withVaultEnv(vaultRoot, () => fn({ root, vaultRoot, journalPath: path.join(vaultRoot, 'Journal', '2030-02-03.md') })); }
+  finally {
+    for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+const ledgerKinds = (root) => {
+  const dir = path.join(root, 'state', 'jarvos', 'vault-mutations');
+  const [file] = fs.readdirSync(dir).filter((name) => name.endsWith('.json'));
+  return Object.values(JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')).operations)
+    .sort((a, b) => a.operation.sequence - b.operation.sequence).map((record) => `${record.operation.operationKind}:${record.status}`);
+};
+
+test('default (uninjected) service: an app-registered journal gets only the backlink transform', () => {
+  withDefaultServiceEnv(({ root, vaultRoot, journalPath }) => {
+    const existing = '---\njournal: Journal\njournal-date: 2030-02-03\n---\n\n## 📝 Notes\n-\n\nProse written after the scaffold.\n';
+    fs.writeFileSync(journalPath, existing);
+    const cli = fakeObsidianCli(root, path.basename(vaultRoot), { 'Journal/2030-02-03.md': existing });
+    process.env.OBSIDIAN_CLI = cli.script;
+    const result = rawLinkNoteToJournal({ noteTitle: 'Default Path Note', journalPath });
+    assert.equal(result.linked, true);
+    assert.deepEqual(ledgerKinds(root), ['transform:acknowledged']);
+    const app = cli.read().files['Journal/2030-02-03.md'];
+    assert.match(app, /\[\[Default Path Note\]\]/);
+    assert.match(app, /Prose written after the scaffold\./);
+  });
+});
+
+test('default (uninjected) service: a journal the app does not have still gets its create first', () => {
+  withDefaultServiceEnv(({ root, vaultRoot, journalPath }) => {
+    const cli = fakeObsidianCli(root, path.basename(vaultRoot), {});
+    process.env.OBSIDIAN_CLI = cli.script;
+    const result = rawLinkNoteToJournal({ noteTitle: 'Fresh Default Note', journalPath });
+    assert.equal(result.linked, true);
+    assert.deepEqual(ledgerKinds(root), ['create:acknowledged', 'transform:acknowledged']);
+    assert.match(cli.read().files['Journal/2030-02-03.md'], /\[\[Fresh Default Note\]\]/);
+  });
+});
+
+test('default (uninjected) service: a journal only on disk is still registered through create', () => {
+  withDefaultServiceEnv(({ root, vaultRoot, journalPath }) => {
+    fs.writeFileSync(journalPath, '## 📝 Notes\n-\n\nOffline prose\n');
+    const cli = fakeObsidianCli(root, path.basename(vaultRoot), {});
+    process.env.OBSIDIAN_CLI = cli.script;
+    assert.equal(rawLinkNoteToJournal({ noteTitle: 'Disk Only Note', journalPath }).linked, true);
+    assert.deepEqual(ledgerKinds(root), ['create:acknowledged', 'transform:acknowledged']);
+  });
+});

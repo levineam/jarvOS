@@ -115,8 +115,11 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
   function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists' } = {}) {
     const summary = { dryRun: dryRun === true, resolved: [], skipped: [] };
     if (typeof vaultId !== 'string' || !vaultId) return { ...summary, skipped: [{ reason: 'vault_identity_unavailable' }] };
-    if (typeof ledger.read !== 'function' || typeof ledger.resolve !== 'function') return { ...summary, skipped: [{ reason: 'ledger_resolution_unavailable' }] };
-    const data = ledger.read();
+    if (typeof ledger.peek !== 'function' || typeof ledger.resolve !== 'function') return { ...summary, skipped: [{ reason: 'ledger_resolution_unavailable' }] };
+    // Planning never repairs, for a dry run and an apply alike. Applying goes
+    // through ledger.resolve, which repairs inside its own transaction exactly as
+    // every other ledger write does.
+    const data = ledger.peek();
     const queues = new Map();
     for (const record of Object.values(data.operations)) {
       const { operation } = record;

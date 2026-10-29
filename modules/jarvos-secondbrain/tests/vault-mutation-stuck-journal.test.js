@@ -189,6 +189,44 @@ test('dry run lists what would resolve and writes nothing, not even to the ledge
   } finally { f.cleanup(); }
 });
 
+test('dry run never repairs the ledger: a malformed record leaves the file byte-identical', () => {
+  const f = ledgerFixture('present');
+  try {
+    f.strand(ensureCreate('journal-create-2026-10-28-aaaa0030', 1));
+    const data = JSON.parse(fs.readFileSync(f.ledger.filePath, 'utf8'));
+    data.operations['bad-record-00000001'] = { status: 'planned', operation: { operationId: 'bad-record-00000001', schemaVersion: 1 } };
+    fs.writeFileSync(f.ledger.filePath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+    const before = fs.readFileSync(f.ledger.filePath);
+    const stateDir = path.dirname(f.ledger.filePath);
+    const entriesBefore = fs.readdirSync(stateDir).sort();
+
+    const preview = f.reconciler.resolveSatisfiedEnsureCreates({ dryRun: true });
+    assert.deepEqual(preview.resolved.map((entry) => entry.operationId), ['journal-create-2026-10-28-aaaa0030']);
+    assert.ok(Buffer.compare(fs.readFileSync(f.ledger.filePath), before) === 0, 'ledger bytes unchanged');
+    assert.deepEqual(fs.readdirSync(stateDir).sort(), entriesBefore, 'no quarantine directory, lock or temp file appeared');
+    assert.equal(JSON.parse(fs.readFileSync(f.ledger.filePath, 'utf8')).operations['bad-record-00000001'].status, 'planned');
+
+    // peek itself is a pure view; read() keeps repairing as before.
+    assert.equal(f.ledger.peek().operations['bad-record-00000001'], undefined);
+    assert.ok(Buffer.compare(fs.readFileSync(f.ledger.filePath), before) === 0);
+    f.ledger.read();
+    assert.equal(JSON.parse(fs.readFileSync(f.ledger.filePath, 'utf8')).operations['bad-record-00000001'], undefined);
+    assert.ok(fs.existsSync(`${f.ledger.filePath}.quarantine`));
+  } finally { f.cleanup(); }
+});
+
+test('peek of a missing or unsafe ledger is empty or an error, and writes nothing', () => {
+  const f = ledgerFixture('present');
+  try {
+    assert.deepEqual(f.ledger.peek().operations, {});
+    assert.equal(fs.existsSync(path.dirname(f.ledger.filePath)), false);
+    fs.mkdirSync(path.dirname(f.ledger.filePath), { recursive: true });
+    fs.writeFileSync(f.ledger.filePath, '{}', { mode: 0o644 });
+    assert.throws(() => f.ledger.peek(), /unsafe/);
+    assert.equal(fs.readFileSync(f.ledger.filePath, 'utf8'), '{}');
+  } finally { f.cleanup(); }
+});
+
 // ---- end to end against the real adapter, ledger and registered transforms ----
 function appVault(initial) {
   const file = { path: JOURNAL, content: initial };

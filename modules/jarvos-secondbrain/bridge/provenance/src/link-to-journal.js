@@ -674,25 +674,28 @@ function linkNoteToJournal({
   const stableIntent = intentId || `backlink-${crypto.randomUUID()}`;
   let receipt;
   try {
+    // Resolve the service once, up front, so an injected and a default service
+    // take the same path (the CLI's linkNoteToTodayJournal injects none).
+    const activeRoot = vaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath);
+    const service = mutationService || createObsidianOwnedMutationService({ vaultRoot: activeRoot, source: 'bridge.link-to-journal' });
     // A journal the app already has needs no "ensure it exists" create: the
     // backlink transform carries its own app readback, while a redundant create
     // whose ack fails strands every later write to that day's journal. Disk-only
     // bytes still go through create so the app registers them first.
     const journalPresent = createIfMissing && (() => {
       try {
-        if (typeof mutationService?.vaultFileState !== 'function') return false;
-        const activeRoot = vaultRoot || mutationService.vaultRoot || resolveVaultRootForJournal(journalPath);
+        if (typeof service.vaultFileState !== 'function') return false;
         const vaultRelativePath = journalPathRelativeToVault(journalPath, activeRoot);
-        return vaultFileExists({ vaultRoot: activeRoot, vaultRelativePath }) && mutationService.vaultFileState(vaultRelativePath) === 'present';
+        return vaultFileExists({ vaultRoot: activeRoot, vaultRelativePath }) && service.vaultFileState(vaultRelativePath) === 'present';
       } catch { return false; }
     })();
     if (createIfMissing && !journalPresent) {
-      const createReceipt = submitJournalCreate({ journalPath, mutationService, intentId: `${stableIntent}:create`, vaultRoot });
+      const createReceipt = submitJournalCreate({ journalPath, mutationService: service, intentId: `${stableIntent}:create`, vaultRoot });
       if (!receiptAcknowledged(createReceipt)) throw Object.assign(new Error('Journal scaffold is not acknowledged by Obsidian'), { receipt: createReceipt });
     } else if (!existsSync(journalPath)) {
       throw new Error(`Journal not found: ${journalPath}`);
     }
-    receipt = submitBacklinkMutation({ journalPath, linkTarget: noteTitle, section: normalizedSection, noteId, mutationService, intentId: `${stableIntent}:backlink`, vaultRoot });
+    receipt = submitBacklinkMutation({ journalPath, linkTarget: noteTitle, section: normalizedSection, noteId, mutationService: service, intentId: `${stableIntent}:backlink`, vaultRoot });
     if (!receiptAcknowledged(receipt)) throw Object.assign(new Error('Journal backlink is not acknowledged by Obsidian'), { receipt });
   } catch (error) {
     if (!deferOnFailure) throw error;
