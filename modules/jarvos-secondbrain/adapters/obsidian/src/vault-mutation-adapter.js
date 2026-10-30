@@ -75,16 +75,55 @@ function parseEvalResult(output) { const match = [...String(output || '').matchA
 const EVAL_STAGE = '__jarvosEvalStage';
 const EVAL_CHUNK_BYTES = 6_000;
 const EMPTY_EVAL_RETRIES = 4;
-function evalOnce(code, { vaultName, command, deadline, execute, emptyRetries }) {
+// Each CLI call launches a full Electron process, and a launch can die within
+// about a second (non-zero exit or a signal). Such a call is relaunched twice
+// more with a short backoff, inside the caller's deadline. Timeouts, a missing
+// CLI and any slow failure are never relaunched. A replay is safe for the same
+// reason empty responses are: every program is idempotent against the app's
+// current content (create reads back an existing file, replace only swaps the
+// expected content, transforms check before applying, delete of an absent file
+// is done) and the staged runner deletes its stage before evaluating.
+const FAST_LAUNCH_FAILURE_MS = 5_000;
+const LAUNCH_RETRY_BACKOFF_MS = Object.freeze([1_000, 2_000]);
+function isFastLaunchFailure(error, elapsedMs) {
+  if (error.code !== undefined || elapsedMs > FAST_LAUNCH_FAILURE_MS) return false;
+  return typeof error.status === 'number' ? error.status !== 0 : Boolean(error.signal);
+}
+// Read-only and cheap: `pgrep -x` exits 1 when the app is not running. Any
+// other outcome is "unknown" and simply omitted from the evidence.
+function obsidianAppRunning() {
+  try { execFileSync('pgrep', ['-x', 'Obsidian'], { timeout: 1_000, stdio: 'ignore' }); return true; }
+  catch (error) { return error?.status === 1 ? false : undefined; }
+}
+function evalOnce(code, { vaultName, command, deadline, execute, emptyRetries, retryBackoffMs, stats, isAppRunning }) {
+  let launchRetries = 0;
   for (let attempt = 0; ; attempt += 1) {
     let output;
-    try { output = execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (error) { const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed')); wrapped.code = error.code; throw wrapped; }
+    for (;;) {
+      const startedAt = Date.now();
+      try { output = execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), stdio: ['ignore', 'pipe', 'pipe'] }); break; }
+      catch (error) {
+        const elapsedMs = Date.now() - startedAt;
+        const backoff = retryBackoffMs[launchRetries];
+        if (backoff !== undefined && isFastLaunchFailure(error, elapsedMs) && Date.now() + backoff < deadline) {
+          launchRetries += 1;
+          if (stats) stats.retries += 1;
+          sleepSync(backoff);
+          continue;
+        }
+        const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed'));
+        wrapped.code = error.code;
+        let obsidianRunning;
+        try { obsidianRunning = isAppRunning(); } catch { /* diagnostics only */ }
+        wrapped.diagnostics = { exitStatus: error.status ?? null, signal: error.signal ?? null, elapsedMs, attempts: launchRetries + 1, stderr: String(error.stderr || ''), obsidianRunning };
+        throw wrapped;
+      }
+    }
     if (String(output || '').trim() || attempt >= emptyRetries || Date.now() >= deadline) return parseEvalResult(output);
   }
 }
-function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync, emptyRetries = EMPTY_EVAL_RETRIES, chunkBytes = EVAL_CHUNK_BYTES } = {}) {
-  const options = { vaultName, command, deadline: Date.now() + timeoutMs, execute, emptyRetries };
+function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync, emptyRetries = EMPTY_EVAL_RETRIES, chunkBytes = EVAL_CHUNK_BYTES, retryBackoffMs = LAUNCH_RETRY_BACKOFF_MS, stats, isAppRunning = obsidianAppRunning } = {}) {
+  const options = { vaultName, command, deadline: Date.now() + timeoutMs, execute, emptyRetries, retryBackoffMs, stats, isAppRunning };
   if (Buffer.byteLength(code, 'utf8') <= chunkBytes) return evalOnce(code, options);
   const encoded = Buffer.from(code, 'utf8').toString('base64');
   const parts = encoded.match(new RegExp(`.{1,${chunkBytes}}`, 'g'));
@@ -100,6 +139,7 @@ function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI |
     try { evalOnce(`delete globalThis.${EVAL_STAGE}?.[${stageId}]; JSON.stringify(true)`, { ...options, deadline: Math.max(options.deadline, Date.now() + 2_500), emptyRetries: 1 }); } catch { /* best effort */ }
     const notStaged = new Error(error.message);
     notStaged.code = 'EVAL_NOT_STAGED';
+    notStaged.diagnostics = error.diagnostics;
     throw notStaged;
   }
   const runner = `(() => { const stage = globalThis.${EVAL_STAGE} || {}; const parts = stage[${stageId}]; delete stage[${stageId}]; if (!Array.isArray(parts) || parts.length !== ${parts.length} || parts.join('').length !== ${encoded.length}) throw new Error('staged eval is incomplete'); return (0, eval)(new TextDecoder().decode(Uint8Array.from(atob(parts.join('')), c => c.charCodeAt(0)))); })()`;
@@ -199,7 +239,9 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     read: () => mutationLedger.read(),
     filePath: mutationLedger.filePath,
   });
-  const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));
+  // Counts CLI relaunches since the last reset, so a write that needed one can be recorded.
+  const dispatchStats = { retries: 0 };
+  const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs, stats: dispatchStats }));
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
   function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); return classifyCapabilityResult(inspected, vaultName, vaultId); } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
@@ -246,7 +288,20 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   }
   function failureEvidence(errorClass, cause) {
     const errorMessage = sanitizeErrorMessage(cause, { vaultRoot });
-    return { errorClass, ...(errorMessage ? { errorMessage } : {}) };
+    const diagnostics = cause?.diagnostics;
+    const stderr = diagnostics ? sanitizeErrorMessage(diagnostics.stderr, { vaultRoot }) : undefined;
+    return {
+      errorClass,
+      ...(errorMessage ? { errorMessage } : {}),
+      ...(diagnostics ? {
+        exitStatus: Number.isInteger(diagnostics.exitStatus) ? diagnostics.exitStatus : null,
+        signal: typeof diagnostics.signal === 'string' ? diagnostics.signal : null,
+        elapsedMs: diagnostics.elapsedMs,
+        attempts: diagnostics.attempts,
+        ...(stderr ? { stderr } : {}),
+        ...(typeof diagnostics.obsidianRunning === 'boolean' ? { obsidianRunning: diagnostics.obsidianRunning } : {}),
+      } : {}),
+    };
   }
   function execute(input, { excludeOperationId } = {}) {
     const operation = validateOperation(input);
@@ -278,6 +333,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     }
     if (!claim.granted) return createInternalReceipt({ operation, status: 'blocked', lifecycleState: 'blocked', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { reason: claim.reason } });
     try {
+      dispatchStats.retries = 0;
       const deadline = Date.now() + pollTimeoutMs;
       const queued = run(buildObsidianMutationProgram(operation), Math.max(1, deadline - Date.now()));
       if (queued !== null && (queued?.queued !== true || queued.token !== operation.operationId)) throw new Error('invalid queued acknowledgement');
@@ -290,7 +346,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
         if (attempt + 1 < maxPollAttempts) sleepSync(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
       }
       if (result?.status === 'done' && result.invariant === true) {
-        mutationLedger.transition(operation.operationId, 'acknowledged', { ownerId, fence: claim.fence, evidence: { acknowledgedBy: 'app.vault.read' } });
+        mutationLedger.transition(operation.operationId, 'acknowledged', { ownerId, fence: claim.fence, evidence: { acknowledgedBy: 'app.vault.read', ...(dispatchStats.retries ? { attempts: dispatchStats.retries + 1 } : {}) } });
         try { run(cleanupProgram(operation.operationId)); } catch { /* acknowledgement is already durable */ }
         return createInternalReceipt({ operation, status: 'committed', persistence: 'durable', obsidian: 'acknowledged' });
       }

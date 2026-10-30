@@ -10,7 +10,7 @@ const vm = require('node:vm');
 const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
 const { createVaultMutationReconciler, ENSURE_EXISTS_RESOLUTION } = require('../adapters/obsidian/src/vault-mutation-reconciler');
 const { hashUtf8 } = require('../adapters/obsidian/src/vault-mutation-contract');
-const { ERROR_MESSAGE_MAX_CHARS, createVaultMutationAdapter, sanitizeErrorMessage } = require('../adapters/obsidian/src/vault-mutation-adapter');
+const { ERROR_MESSAGE_MAX_CHARS, createVaultMutationAdapter, runObsidianEval, sanitizeErrorMessage } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
 const { main: reconcileMain } = require('../scripts/vault-mutation-reconcile');
 // Assembled so the repository secret scan does not read test fixtures as credentials.
@@ -410,4 +410,185 @@ test('the resolver is opt-in: a plain drain never edits the ledger; --resolve-st
     assert.deepEqual(calls, ['drain', 'drain']);
     assert.equal(viaEnv.stuckEnsureCreates.resolved.length, 1);
   } finally { f.cleanup(); }
+});
+
+// ---- fast launch failures ----
+// A fake CLI that runs the program in an in-memory app, with scripted failures
+// first. The error shape matches what execFileSync throws for a dead process.
+// Failures skip the chunk-staging calls (a failed stage is eval_not_staged, a
+// separate path) so they land on the runner or the polls, as in production.
+function launchHarness(root, failures) {
+  const files = {};
+  const settled = (value) => ({ then(fn) { fn(value); return this; }, catch() { return this; } });
+  const vault = { getName: () => 'vault', getFileByPath: (target) => (target in files ? { path: target } : null), read: (file) => settled(files[file.path]), create(target, content) { files[target] = content; return settled({ path: target }); } };
+  const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON };
+  context.globalThis = context;
+  const calls = [];
+  const queue = [...failures];
+  const execute = (command, args) => {
+    const code = args.find((arg) => arg.startsWith('code=')).slice(5);
+    const staging = code.includes('||= {})[');
+    if (!staging) calls.push(command);
+    if (queue.length && !staging) {
+      const { during, ...fields } = queue.shift();
+      if (during) during();
+      throw Object.assign(new Error('Command failed: obsidian'), fields);
+    }
+    const raw = vm.runInNewContext(code, context);
+    return `=> ${typeof raw === 'string' ? raw : JSON.stringify(raw ?? null)}\n`;
+  };
+  const make = (extra = {}) => createVaultMutationAdapter({
+    vaultRoot: root, vaultName: 'vault', vaultId: VAULT_ID, ledgerPath: path.join(root, 'ledger.json'), probe: () => ({ state: 'available', vaultId: VAULT_ID }),
+    evaluate: (code, timeoutMs) => runObsidianEval(code, { vaultName: 'vault', timeoutMs, execute: extra.execute || execute, retryBackoffMs: [0, 0], isAppRunning: () => false, ...extra }),
+  });
+  return { files, calls, make };
+}
+const createOperation = (operationId, vaultRelativePath = 'Notes/retry.md') => ({ schemaVersion: 1, operationId, vaultId: VAULT_ID, vaultRelativePath, sequence: 1, operationKind: 'create', content: 'hello' });
+const fastCrash = { status: null, signal: 'SIGABRT', stderr: '' };
+
+test('a fast launch failure is retried and the write is acknowledged, recording attempts', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-retry-'));
+  const previous = process.env.OBSIDIAN_CLI;
+  try {
+    // The adapter's own CLI path (with real backoff) against a script that dies once.
+    const app = path.join(root, 'app.json');
+    fs.writeFileSync(app, JSON.stringify({ files: {}, store: {}, stage: {}, launches: 0 }));
+    const cli = path.join(root, 'obsidian');
+    fs.writeFileSync(cli, `#!${process.execPath}
+const fs = require('node:fs'); const vm = require('node:vm');
+const state = JSON.parse(fs.readFileSync(${JSON.stringify(app)}, 'utf8'));
+state.launches += 1;
+if (state.launches === 1) { fs.writeFileSync(${JSON.stringify(app)}, JSON.stringify(state)); process.stderr.write('launch aborted'); process.exit(1); }
+const code = process.argv.find((arg) => arg.startsWith('code=')).slice(5);
+const settled = (value) => ({ then(fn) { fn(value); return this; }, catch() { return this; } });
+const vault = { getName: () => 'vault', getFileByPath: (target) => (target in state.files ? { path: target } : null), process(file, transform) { state.files[file.path] = transform(state.files[file.path]); return settled(state.files[file.path]); }, read: (file) => settled(state.files[file.path]), create(target, content) { state.files[target] = content; return settled({ path: target }); } };
+const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON, __jarvosVaultMutationResults: state.store, __jarvosEvalStage: state.stage };
+context.globalThis = context;
+const raw = vm.runInNewContext(code, context);
+state.store = context.__jarvosVaultMutationResults; state.stage = context.__jarvosEvalStage;
+fs.writeFileSync(${JSON.stringify(app)}, JSON.stringify(state));
+process.stdout.write('=> ' + (typeof raw === 'string' ? raw : JSON.stringify(raw ?? null)) + '\\n');
+`, { mode: 0o755 });
+    process.env.OBSIDIAN_CLI = cli;
+    const adapter = createVaultMutationAdapter({ vaultRoot: root, vaultName: 'vault', vaultId: VAULT_ID, ledgerPath: path.join(root, 'ledger.json'), probe: () => ({ state: 'available', vaultId: VAULT_ID }) });
+    const receipt = adapter.execute(createOperation('op-20261028-retry01'));
+    assert.equal(receipt.status, 'committed');
+    assert.equal(JSON.parse(fs.readFileSync(app, 'utf8')).files['Notes/retry.md'], 'hello');
+    assert.deepEqual(adapter.ledger.get('op-20261028-retry01').evidence, { acknowledgedBy: 'app.vault.read', attempts: 2 });
+    assert.equal(adapter.ledger.get('op-20261028-retry01').status, 'acknowledged');
+  } finally {
+    if (previous === undefined) delete process.env.OBSIDIAN_CLI; else process.env.OBSIDIAN_CLI = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a write that needs no retry keeps the original acknowledgement evidence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-clean-'));
+  try {
+    const { make } = launchHarness(root, []);
+    const adapter = make();
+    assert.equal(adapter.execute(createOperation('op-20261028-clean001')).status, 'committed');
+    assert.deepEqual(adapter.ledger.get('op-20261028-clean001').evidence, { acknowledgedBy: 'app.vault.read' });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('three fast launch failures give up with dispatch_failed and launch diagnostics', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-fail-'));
+  try {
+    const { calls, make } = launchHarness(root, [
+      { status: null, signal: 'SIGABRT', stderr: 'abort' },
+      { status: 1, signal: null, stderr: 'abort' },
+      { status: 134, signal: null, stderr: 'abort' },
+    ]);
+    const adapter = make();
+    const receipt = adapter.execute(createOperation('op-20261028-fail0001'));
+    assert.equal(receipt.status, 'unknown_after_dispatch');
+    const evidence = receipt.adapterEvidence;
+    assert.equal(evidence.errorClass, 'dispatch_failed');
+    assert.equal(evidence.exitStatus, 134);
+    assert.equal(evidence.signal, null);
+    assert.equal(typeof evidence.elapsedMs, 'number');
+    assert.equal(evidence.attempts, 3);
+    assert.equal(evidence.stderr, 'abort');
+    assert.equal(evidence.obsidianRunning, false);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(adapter.ledger.get('op-20261028-fail0001').evidence, evidence);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a signal death is reported with its signal and a null exit status', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-signal-'));
+  try {
+    const { make } = launchHarness(root, [fastCrash, fastCrash, fastCrash]);
+    const { adapterEvidence } = make().execute(createOperation('op-20261028-signal01'));
+    assert.equal(adapterEvidence.exitStatus, null);
+    assert.equal(adapterEvidence.signal, 'SIGABRT');
+    assert.equal(adapterEvidence.attempts, 3);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a slow failure is not retried', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-slow-'));
+  const realNow = Date.now;
+  try {
+    let clock = realNow();
+    Date.now = () => clock;
+    // The clock moves inside the failing call, so it looks like it ran for 6 s.
+    const { calls, make } = launchHarness(root, [{ status: 1, signal: null, stderr: 'late', during: () => { clock += 6_000; } }]);
+    const receipt = make().execute(createOperation('op-20261028-slow0001'));
+    assert.equal(receipt.adapterEvidence.errorClass, 'dispatch_failed');
+    assert.equal(receipt.adapterEvidence.attempts, 1);
+    assert.ok(receipt.adapterEvidence.elapsedMs >= 6_000);
+    assert.equal(calls.length, 1);
+  } finally { Date.now = realNow; fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a timeout is not retried', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-timeout-'));
+  try {
+    const { calls, make } = launchHarness(root, [{ code: 'ETIMEDOUT', status: null, signal: 'SIGTERM', stderr: '' }]);
+    const receipt = make().execute(createOperation('op-20261028-timeout1'));
+    assert.equal(receipt.adapterEvidence.errorClass, 'dispatch_failed');
+    assert.equal(receipt.adapterEvidence.signal, 'SIGTERM');
+    assert.equal(receipt.adapterEvidence.attempts, 1);
+    assert.equal(calls.length, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a missing CLI is not retried and stays cli_missing', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-enoent-'));
+  try {
+    const { calls, make } = launchHarness(root, [{ code: 'ENOENT', status: null, signal: null, stderr: '' }]);
+    const receipt = make().execute(createOperation('op-20261028-enoent01'));
+    assert.equal(receipt.adapterEvidence.errorClass, 'cli_missing');
+    assert.equal(receipt.adapterEvidence.attempts, 1);
+    assert.equal(calls.length, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('launch stderr is sanitized and bounded in the evidence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-stderr-'));
+  try {
+    const stderr = `crash at ${root}/Journal/2026-10-28.md; see /Users/someone/Library/Logs/obsidian.log; ${'y '.repeat(400)}Authorization: Bearer abcdef0123456789`;
+    const { make } = launchHarness(root, [{ status: 1, signal: null, stderr }, { status: 1, signal: null, stderr }, { status: 1, signal: null, stderr }]);
+    const { adapterEvidence } = make().execute(createOperation('op-20261028-stderr01'));
+    assert.ok(adapterEvidence.stderr.length <= ERROR_MESSAGE_MAX_CHARS);
+    assert.ok(adapterEvidence.stderr.endsWith('…'));
+    assert.match(adapterEvidence.stderr, /^crash at <vault>\/Journal\/2026-10-28\.md; see <path>; /);
+    assert.doesNotMatch(adapterEvidence.stderr, /someone|abcdef0123456789|Users/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a failing Obsidian-running check does not break the write or the failure evidence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-launch-pgrep-'));
+  try {
+    const throwing = () => { throw new Error('pgrep unavailable'); };
+    const ok = launchHarness(root, []);
+    assert.equal(ok.make({ isAppRunning: throwing }).execute(createOperation('op-20261028-pgrep001', 'Notes/one.md')).status, 'committed');
+    const failing = launchHarness(root, [fastCrash, fastCrash, fastCrash]);
+    const receipt = failing.make({ isAppRunning: throwing }).execute(createOperation('op-20261028-pgrep002', 'Notes/two.md'));
+    assert.equal(receipt.adapterEvidence.errorClass, 'dispatch_failed');
+    assert.equal(receipt.adapterEvidence.attempts, 3);
+    assert.equal('obsidianRunning' in receipt.adapterEvidence, false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
