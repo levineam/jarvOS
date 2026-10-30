@@ -129,14 +129,17 @@ function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI |
   const parts = encoded.match(new RegExp(`.{1,${chunkBytes}}`, 'g'));
   const stageId = JSON.stringify(crypto.randomUUID());
   try {
+    // The last chunk also confirms the whole set is intact: a relaunched chunk can
+    // land after the app restarted and lost the earlier ones. Nothing has run yet,
+    // so that stays retryable rather than ambiguous.
     parts.forEach((part, index) => {
-      const staged = evalOnce(`((globalThis.${EVAL_STAGE} ||= {})[${stageId}] ||= [])[${index}] = '${part}'; JSON.stringify(${index})`, options);
+      const store = `((globalThis.${EVAL_STAGE} ||= {})[${stageId}] ||= [])`;
+      const code = index < parts.length - 1
+        ? `${store}[${index}] = '${part}'; JSON.stringify(${index})`
+        : `(() => { const stored = ${store}; stored[${index}] = '${part}'; return JSON.stringify(stored.length === ${parts.length} && stored.join('').length === ${encoded.length} ? ${index} : -1); })()`;
+      const staged = evalOnce(code, options);
       if (staged !== index) throw new Error(`Obsidian CLI did not stage eval chunk ${index + 1} of ${parts.length}`);
     });
-    // A relaunched chunk can land after the app restarted and lost the earlier
-    // ones. Nothing has run yet, so that is still retryable, not ambiguous.
-    const complete = evalOnce(`(() => { const parts = globalThis.${EVAL_STAGE}?.[${stageId}]; return JSON.stringify(Array.isArray(parts) && parts.length === ${parts.length} && parts.join('').length === ${encoded.length}); })()`, options);
-    if (complete !== true) throw new Error('Obsidian CLI lost staged eval chunks');
   } catch (error) {
     // The program never ran, so callers may treat this as retryable rather
     // than ambiguous. Drop any chunks that did arrive.

@@ -427,8 +427,7 @@ function launchHarness(root, failures) {
   const queue = [...failures];
   const execute = (command, args) => {
     const code = args.find((arg) => arg.startsWith('code=')).slice(5);
-    // Chunk staging and the completeness check that follows it; the failures under test hit the runner.
-    const staging = code.includes('||= {})[') || code.includes('Array.isArray(parts) && parts.length ===');
+    const staging = code.includes('||= {})[');
     if (!staging) calls.push(command);
     if (queue.length && !staging) {
       const { during, ...fields } = queue.shift();
