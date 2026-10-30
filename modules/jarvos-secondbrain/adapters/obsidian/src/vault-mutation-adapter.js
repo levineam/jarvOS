@@ -133,6 +133,10 @@ function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI |
       const staged = evalOnce(`((globalThis.${EVAL_STAGE} ||= {})[${stageId}] ||= [])[${index}] = '${part}'; JSON.stringify(${index})`, options);
       if (staged !== index) throw new Error(`Obsidian CLI did not stage eval chunk ${index + 1} of ${parts.length}`);
     });
+    // A relaunched chunk can land after the app restarted and lost the earlier
+    // ones. Nothing has run yet, so that is still retryable, not ambiguous.
+    const complete = evalOnce(`(() => { const parts = globalThis.${EVAL_STAGE}?.[${stageId}]; return JSON.stringify(Array.isArray(parts) && parts.length === ${parts.length} && parts.join('').length === ${encoded.length}); })()`, options);
+    if (complete !== true) throw new Error('Obsidian CLI lost staged eval chunks');
   } catch (error) {
     // The program never ran, so callers may treat this as retryable rather
     // than ambiguous. Drop any chunks that did arrive.

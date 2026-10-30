@@ -427,7 +427,8 @@ function launchHarness(root, failures) {
   const queue = [...failures];
   const execute = (command, args) => {
     const code = args.find((arg) => arg.startsWith('code=')).slice(5);
-    const staging = code.includes('||= {})[');
+    // Chunk staging and the completeness check that follows it; the failures under test hit the runner.
+    const staging = code.includes('||= {})[') || code.includes('Array.isArray(parts) && parts.length ===');
     if (!staging) calls.push(command);
     if (queue.length && !staging) {
       const { during, ...fields } = queue.shift();
@@ -577,6 +578,32 @@ test('launch stderr is sanitized and bounded in the evidence', () => {
     assert.match(adapterEvidence.stderr, /^crash at <vault>\/Journal\/2026-10-28\.md; see <path>; /);
     assert.doesNotMatch(adapterEvidence.stderr, /someone|abcdef0123456789|Users/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an app restart that loses staged chunks stays retryable: the program never ran', () => {
+  const vm = require('node:vm');
+  const context = { TextDecoder, Uint8Array, atob };
+  context.globalThis = context;
+  let ran = false;
+  context.markRan = () => { ran = true; };
+  let failed = false;
+  const execute = (command, args) => {
+    const code = args.find((arg) => arg.startsWith('code=')).slice(5);
+    // The second chunk's launch dies as the app restarts, wiping the first chunk.
+    if (!failed && code.includes('[1] = ')) {
+      failed = true;
+      vm.runInNewContext('delete globalThis.__jarvosEvalStage', context);
+      throw Object.assign(new Error('Command failed: obsidian'), { status: 1, stderr: 'launch died' });
+    }
+    const raw = vm.runInNewContext(code, context);
+    return `=> ${typeof raw === 'string' ? raw : JSON.stringify(raw ?? null)}\n`;
+  };
+  const program = `markRan(); JSON.stringify(${JSON.stringify('x'.repeat(200))})`;
+  assert.throws(
+    () => runObsidianEval(program, { vaultName: 'vault', timeoutMs: 5_000, execute, chunkBytes: 64, retryBackoffMs: [0, 0], isAppRunning: () => true }),
+    (error) => error.code === 'EVAL_NOT_STAGED',
+  );
+  assert.equal(ran, false);
 });
 
 test('a failing Obsidian-running check does not break the write or the failure evidence', () => {
