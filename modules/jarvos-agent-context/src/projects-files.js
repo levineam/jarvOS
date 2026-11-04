@@ -108,13 +108,22 @@ async function readProjectsFiles(directory, { project } = {}) {
     return { status: 'unavailable', code: 'PROJECTS_QUERY_UNAVAILABLE', reason: 'Projects query is unavailable', packet: null };
   }
   let root;
+  let rootStat;
   let entries;
   try {
     if (typeof directory !== 'string' || !path.isAbsolute(directory)) return unavailable();
     root = await fs.realpath(directory);
-    if (!(await fs.stat(root)).isDirectory()) return unavailable();
+    rootStat = await fs.stat(root);
+    if (!rootStat.isDirectory()) return unavailable();
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch { return unavailable(); }
+  // Node has no openat(), so containment is checked by identity: the opened
+  // file must be the one lstat saw inside root, and root must not have been
+  // swapped while reading.
+  const sameRoot = async () => {
+    const now = await fs.lstat(root).catch(() => null);
+    return !!now && now.isDirectory() && now.dev === rootStat.dev && now.ino === rootStat.ino;
+  };
 
   const records = [];
   const skipped = [];
@@ -132,11 +141,14 @@ async function readProjectsFiles(directory, { project } = {}) {
     try {
       const filename = path.join(root, entry.name);
       if (path.dirname(await fs.realpath(filename)) !== root) throw new Error('Outside project directory');
+      const before = await fs.lstat(filename);
       const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
-        if (!(await handle.stat()).isFile()) throw new Error('Not a regular file');
+        const opened = await handle.stat();
+        if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error('File changed while opening');
         source = await handle.readFile('utf8');
       } finally { await handle.close(); }
+      if (!(await sameRoot())) throw new Error('Project directory changed');
     } catch {
       skipped.push({ file: entry.name, reason: 'File unavailable or unsafe' });
       continue;
@@ -158,11 +170,23 @@ async function readProjectsFiles(directory, { project } = {}) {
       ok: false, status: 'not_found', code: 'PROJECT_NOT_FOUND',
       candidates: records.filter((item) => item.title.toLowerCase().includes(query)).slice(0, 5).map((item) => item.title),
     };
-    return {
+    // Only contract fields go out, each bounded, so frontmatter can't bypass
+    // the packet budget the way an unbounded custom field would.
+    const fields = {};
+    for (const key of ['id', 'title', 'parent', 'status', 'created', 'updated']) {
+      if (typeof record[key] === 'string') fields[key] = clip(record[key], 500);
+    }
+    const sessions = record.sessions.slice(0, 50).map((session) => clip(session, 200));
+    const result = {
       ok: true, status: 'ok', contract: CONTRACT, source: 'project-files',
-      project: { ...record, body: record.body.slice(0, 40_000) },
-      ...(record.body.length > 40_000 ? { truncated: true } : {}),
+      project: { ...fields, private: record.private, sessions, body: record.body.slice(0, 40_000) },
     };
+    if (record.body.length > 40_000 || record.sessions.length > 50) result.truncated = true;
+    while (Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PACKET_BYTES && result.project.body) {
+      result.truncated = true;
+      result.project.body = result.project.body.slice(0, Math.floor(result.project.body.length * 0.8));
+    }
+    return result;
   }
 
   records.sort((a, b) => b.updated.localeCompare(a.updated) || a.title.localeCompare(b.title));

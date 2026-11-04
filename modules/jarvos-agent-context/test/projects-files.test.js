@@ -135,7 +135,7 @@ test('full record matches id before title, matches title case-insensitively, and
     assert.equal(packet.source, 'project-files');
     assert.equal(packet.project.id, 'prj_000123');
     assert.equal(packet.project.title, 'Notes Editor');
-    assert.equal(packet.project.owner, 'Codex');
+    assert.equal(packet.project.owner, undefined);
     assert.equal(packet.project.private, true);
     assert.deepEqual(packet.project.sessions, ['abc', 'def # ghi']);
     assert.equal(packet.project.body, BODY);
@@ -149,6 +149,18 @@ test('full record body is capped at 40,000 characters', async (t) => {
   const packet = await readProjectsFiles(dir, { project: 'Notes Editor' });
   assert.equal(packet.project.body, 'x'.repeat(40_000));
   assert.equal(packet.truncated, true);
+});
+
+test('full record stays under 60KB even with oversized frontmatter', async (t) => {
+  const { dir, write } = fixture(t);
+  const sessions = JSON.stringify(Array.from({ length: 500 }, (_, i) => `s${i}-${'y'.repeat(300)}`));
+  write('big.md', `---\ntype: project\nid: prj_big\ntitle: Big\nstatus: active\ncreated: 2026-10-28\nupdated: 2026-10-28\nsessions: ${sessions}\nnotes: ${'z'.repeat(100_000)}\n---\n${'é'.repeat(39_000)}`);
+  const packet = await readProjectsFiles(dir, { project: 'prj_big' });
+  assert.equal(packet.ok, true);
+  assert.equal(packet.truncated, true);
+  assert.equal(packet.project.notes, undefined);
+  assert.equal(packet.project.sessions.length, 50);
+  assert.ok(Buffer.byteLength(JSON.stringify(packet), 'utf8') <= 60_000);
 });
 
 test('not_found offers at most five case-insensitive substring candidates', async (t) => {
