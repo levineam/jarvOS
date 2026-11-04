@@ -182,6 +182,8 @@ test('Grok policy rejects unknown, prototype and caller-config fields before chi
       ['jarvos_recall', { query: 'x', constructor: 'y' }],
       ['jarvos_startup_brief', { configPath: '/etc/passwd' }],
       ['jarvos_projects_context', { config: 'SECRET-VALUE-123' }],
+      ['jarvos_projects_context', { project: 'Notes Editor', unknown: true }],
+      ...['', 'x'.repeat(201), 'two\nlines', 'trailing\n', 'trailing\r', 'tab\there', 'line\u2028break', 123].map((project) => ['jarvos_projects_context', { project }]),
       ['jarvos_journal_health', { config: 'x' }],
       ['jarvos_journal_health', { journalDir: '/etc' }],
       ['jarvos_create_note', { title: 'ok', content: CONTENT, config: '/tmp/c.json' }],
@@ -210,6 +212,8 @@ test('Grok policy forwards allowed reads with only validated arguments', async (
       [33, 'jarvos_projects_context', { profile: 'orientation' }],
       [34, 'jarvos_journal_health', {}],
       [35, 'jarvos_session_thread_read', { threadId: 'grok-thread-0001' }],
+      [36, 'jarvos_projects_context', { project: 'Notes Editor' }],
+      [37, 'jarvos_projects_context', { profile: 'recent-activity', project: 'prj_000123' }],
     ]) {
       const res = await ctx.post(toolCall(id, name, args));
       assert.equal(res.status, 200, `${name} ${res.body}`);
@@ -217,6 +221,17 @@ test('Grok policy forwards allowed reads with only validated arguments', async (
       assert.deepEqual(ctx.bridge.sent.at(-1), { jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
     }
   });
+});
+
+test('project lookup is a Grok-only extension of the shared read-only schema', () => {
+  const grokSchema = grok.GROK_TOOL_POLICY.tools.jarvos_projects_context;
+  const shared = gateway.READ_ONLY_TOOLS.jarvos_projects_context;
+  assert.equal(shared.properties.project, undefined);
+  const { project, ...rest } = grokSchema.properties;
+  assert.deepEqual(rest, shared.properties);
+  assert.equal(project.maxLength, 200);
+  // The shared read-only gateway (used by Muse) still refuses it.
+  assert.equal(gateway.readOnlyDecision(toolCall(39, 'jarvos_projects_context', { project: 'Notes Editor' })).reject.body.error.code, -32602);
 });
 
 test('jarvos_create_note stamps source_personality after validation and defaults project to empty string', async () => {
@@ -398,6 +413,7 @@ test('grokChildEnv keeps a finite config allowlist and drops credentials and ser
   const keep = {
     JARVOS_CONFIG_PATH: '/host/jarvos.json', JARVOS_TIMEZONE: 'America/New_York', JARVOS_JOURNAL_DIR: '/host/journal',
     JARVOS_PROJECTS_CONTEXT_CONFIG: '/host/projects.json', PATH: '/usr/bin', HOME: '/Users/host', LANG: 'en_US.UTF-8',
+    JARVOS_PROJECTS_DIR: '/host/vault/projects',
     LC_ALL: 'en_US.UTF-8', JARVOS_VAULT_DIR: '/host/vault', JARVOS_NOTES_DIR: '/host/vault/Notes',
     XDG_CONFIG_HOME: '/Users/host/.config', XDG_STATE_HOME: '/Users/host/.local/state',
     // Enforcement flags, not credentials: forwarded so the child keeps failing closed.
