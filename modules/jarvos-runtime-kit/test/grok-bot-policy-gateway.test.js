@@ -223,18 +223,15 @@ test('Grok policy forwards allowed reads with only validated arguments', async (
   });
 });
 
-test('project lookup uses the shared closed policy schema without requiring a listener', () => {
-  assert.deepEqual(grok.GROK_TOOL_POLICY.tools.jarvos_projects_context, gateway.READ_ONLY_TOOLS.jarvos_projects_context);
-  for (const project of ['Notes Editor', 'prj_000123', 'x'.repeat(200)]) {
-    const decision = gateway.readOnlyDecision(toolCall(38, 'jarvos_projects_context', { project }));
-    assert.equal(decision.forward.params.arguments.project, project);
-  }
-  for (const args of [
-    { project: 'Notes Editor', unknown: true },
-    ...['', 'x'.repeat(201), 'trailing\n', 'two\r\nlines', 'bad\u0085line', 'bad\u2028line', 123].map((project) => ({ project })),
-  ]) {
-    assert.equal(gateway.readOnlyDecision(toolCall(39, 'jarvos_projects_context', args)).reject.body.error.code, -32602);
-  }
+test('project lookup is a Grok-only extension of the shared read-only schema', () => {
+  const grokSchema = grok.GROK_TOOL_POLICY.tools.jarvos_projects_context;
+  const shared = gateway.READ_ONLY_TOOLS.jarvos_projects_context;
+  assert.equal(shared.properties.project, undefined);
+  const { project, ...rest } = grokSchema.properties;
+  assert.deepEqual(rest, shared.properties);
+  assert.equal(project.maxLength, 200);
+  // The shared read-only gateway (used by Muse) still refuses it.
+  assert.equal(gateway.readOnlyDecision(toolCall(39, 'jarvos_projects_context', { project: 'Notes Editor' })).reject.body.error.code, -32602);
 });
 
 test('jarvos_create_note stamps source_personality after validation and defaults project to empty string', async () => {

@@ -49,6 +49,7 @@ const TITLE_ARG = {
 };
 const THREAD_ID_ARG = { type: 'string', minLength: 1, maxLength: 120, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]*$' };
 const MAX_CHARS_ARG = { type: 'integer', minimum: 1, maximum: 20000 };
+const PROJECT_ARG = { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\x00-\\x1f\\x7f\\u0085\\u2028\\u2029]+(?![\\s\\S])' };
 
 function stampNote(args) {
   const frontmatter = { ...(args.frontmatter || {}) };
@@ -67,7 +68,15 @@ const GROK_TOOL_POLICY = deepFreeze({
   tools: {
     jarvos_hydrate: clone(gateway.READ_ONLY_TOOLS.jarvos_hydrate),
     jarvos_startup_brief: clone(gateway.READ_ONLY_TOOLS.jarvos_startup_brief),
-    jarvos_projects_context: clone(gateway.READ_ONLY_TOOLS.jarvos_projects_context),
+    // Grok-only addition: one full project record when the host reads project
+    // files. Other read-only gateways (Muse) keep the shared schema unchanged.
+    jarvos_projects_context: {
+      ...clone(gateway.READ_ONLY_TOOLS.jarvos_projects_context),
+      properties: {
+        ...clone(gateway.READ_ONLY_TOOLS.jarvos_projects_context.properties),
+        project: PROJECT_ARG,
+      },
+    },
     jarvos_recall: clone(gateway.READ_ONLY_TOOLS.jarvos_recall),
     jarvos_journal_health: { properties: {} },
     jarvos_create_note: {
