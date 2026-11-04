@@ -101,6 +101,11 @@ secrets, caller capabilities and owner/module bindings are not. A host that
 requires a route capability may therefore **fail closed** until a proper
 adapter exists; do not disable enforcement to work around it.
 
+Set `JARVOS_PROJECTS_DIR` to the absolute path of the vault's project-files
+folder so Grok Bot reads current projects. Private projects are included and
+marked. An invalid directory returns unavailable; leaving the variable unset
+keeps the existing registry provider.
+
 Start (operator-supervised, manual):
 
 ```bash

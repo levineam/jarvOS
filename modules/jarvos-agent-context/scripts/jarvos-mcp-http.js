@@ -59,6 +59,7 @@ const READ_ONLY_TOOLS = Object.freeze({
   jarvos_projects_context: {
     properties: {
       profile: { type: 'string', enum: ['orientation', 'recent-activity'] },
+      project: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\x00-\\x1f\\x7f\\u0085\\u2028\\u2029]+(?![\\s\\S])' },
       date: { type: 'string', maxLength: 10, pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
       timeZone: { type: 'string', maxLength: 64, pattern: '^[A-Za-z0-9_+/-]+$' },
       from: UTC_INSTANT_ARG,

@@ -32,6 +32,7 @@ const {
   writeSessionThread,
 } = require('../src/index.js');
 const { createHostProjectsContextProvider } = require('../src/projects-context-bootstrap.js');
+const { readProjectsFiles } = require('../src/projects-files.js');
 const {
   COMMON_WORK_ACTIONS,
 } = require('../../jarvos-runtime-kit/src/harness-dispatch.js');
@@ -280,12 +281,13 @@ const TOOLS = [
   },
   {
     name: 'jarvos_projects_context',
-    description: 'Return the canonical bounded Projects packet through the host-bound provider. This is the sole project-orientation read model; unavailable or partial provider state is returned without raw-ledger fallback.',
+    description: 'Return bounded Projects context through the host-bound provider, or current project files when the host sets JARVOS_PROJECTS_DIR. In files mode, use project (exact id or case-insensitive title) for a full record; private projects are included and marked. Unavailable provider or file state is returned without fallback.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         profile: { type: 'string', enum: ['orientation', 'recent-activity'], description: 'Named bounded Projects read profile.' },
+        project: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\x00-\\x1f\\x7f\\u0085\\u2028\\u2029]+(?![\\s\\S])', description: 'Exact project id or title for a full record in project-files mode.' },
         date: { type: 'string', description: 'Local calendar date for recent-activity (YYYY-MM-DD).' },
         timeZone: { type: 'string', description: 'IANA timezone for recent-activity.' },
         from: { type: 'string', description: 'Optional bounded UTC activity-window start.' },
@@ -993,6 +995,10 @@ async function callTool(name, args = {}, lifecycle = {}) {
         reason: 'Projects query is unavailable',
         packet: null,
       }, null, 2), false);
+    }
+    if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+      const result = await readProjectsFiles(process.env.JARVOS_PROJECTS_DIR, { project: args.project });
+      return textResult(JSON.stringify(result), false);
     }
     const request = {
       profile: requestedProfile,
