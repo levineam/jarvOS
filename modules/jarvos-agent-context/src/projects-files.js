@@ -168,7 +168,7 @@ async function readProjectsFiles(directory, { project } = {}) {
     const record = records.find((item) => item.id === project) || records.find((item) => item.title.toLowerCase() === query);
     if (!record) return {
       ok: false, status: 'not_found', code: 'PROJECT_NOT_FOUND',
-      candidates: records.filter((item) => item.title.toLowerCase().includes(query)).slice(0, 5).map((item) => item.title),
+      candidates: records.filter((item) => item.title.toLowerCase().includes(query)).slice(0, 5).map((item) => clip(item.title, 200)),
     };
     // Only contract fields go out, each bounded, so frontmatter can't bypass
     // the packet budget the way an unbounded custom field would.

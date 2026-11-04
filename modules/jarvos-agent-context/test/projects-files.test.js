@@ -163,6 +163,14 @@ test('full record stays under 60KB even with oversized frontmatter', async (t) =
   assert.ok(Buffer.byteLength(JSON.stringify(packet), 'utf8') <= 60_000);
 });
 
+test('not_found candidate titles are bounded', async (t) => {
+  const { dir, write } = fixture(t);
+  write('long.md', source({ id: 'prj_long', title: `Needle ${'x'.repeat(100_000)}` }));
+  const packet = await readProjectsFiles(dir, { project: 'Needle' });
+  assert.equal(packet.status, 'not_found');
+  assert.equal(packet.candidates[0].length, 200);
+});
+
 test('not_found offers at most five case-insensitive substring candidates', async (t) => {
   const { dir, write } = fixture(t);
   for (let i = 0; i < 7; i++) write(`${i}.md`, source({ id: String(i), title: `Notes ${i}` }));
