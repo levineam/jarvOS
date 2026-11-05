@@ -5,6 +5,11 @@ on:
     branches:
       - main
   pull_request:
+  # Nightly full link check (and the rest of CI) on main, because pull
+  # requests only check the links in the markdown files they change.
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,16 +45,29 @@ jobs:
               --disable MD009 MD012 MD013 MD022 MD026 MD029 MD031 MD032 MD033 MD034 MD036 MD040 MD041 MD060
           fi
 
+  # Pull requests check only the markdown files they add, modify or rename,
+  # so a PR waits on its own docs instead of on all ~200 files (the full check
+  # took ~3 minutes, mostly external URLs). Pushes to main, the nightly
+  # schedule and manual runs still check every file. A guard step fails the
+  # job if any changed markdown file was not actually checked, so the
+  # narrowing can never silently skip a file. Broken links themselves stay
+  # non-blocking warnings, as before.
   link-check:
     name: Link check
     runs-on: ubuntu-latest
     outputs:
-      had_broken_links: ${{ steps.markdown_links.outcome == 'failure' }}
+      had_broken_links: ${{ steps.markdown_links.outcome == 'failure' || steps.changed_links.outcome == 'failure' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Full history (blobless, so still small) so the PR diff can find
+        # its merge base with the base branch.
+        with:
+          fetch-depth: 0
+          filter: blob:none
 
-      - name: Check markdown links
+      - name: Check markdown links (all files)
         id: markdown_links
+        if: github.event_name != 'pull_request'
         uses: gaurav-nelson/github-action-markdown-link-check@5c5dfc0ac2e225883c0e5f03a85311ec2830d368  # v1
         # Intentionally using action defaults (no repo-local markdown-link-check override).
         with:
@@ -60,8 +78,72 @@ jobs:
         # Treat broken links as warnings, not hard failures, for doc repos
         continue-on-error: true
 
+      - name: List markdown files changed by this pull request
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Added, copied, modified, renamed or type-changed .md files (not
+          # deleted ones), outside node_modules, matching the full check.
+          git diff --name-only -z --diff-filter=ACMRT "$BASE_SHA"...HEAD -- '*.md' ':(exclude,glob)**/node_modules/**' \
+            > "$RUNNER_TEMP/changed-md.z"
+          tr '\0' '\n' < "$RUNNER_TEMP/changed-md.z" > "$RUNNER_TEMP/changed-md.txt"
+          echo "Changed markdown files: $(grep -c . "$RUNNER_TEMP/changed-md.txt" || true)"
+          cat "$RUNNER_TEMP/changed-md.txt"
+
+      - name: Check markdown links (changed files)
+        id: changed_links
+        if: github.event_name == 'pull_request'
+        shell: bash
+        env:
+          # Plain output, so the guard below can match "FILE: <path>" lines.
+          FORCE_COLOR: '0'
+        # Same markdown-link-check version and default config as the action above.
+        run: |
+          set -uo pipefail
+          : > "$RUNNER_TEMP/link-check.log"
+          if [[ ! -s "$RUNNER_TEMP/changed-md.z" ]]; then
+            echo "No markdown files changed; nothing to check."
+            exit 0
+          fi
+          npm install -g --silent markdown-link-check@3.8.7
+          status=0
+          while IFS= read -r -d '' file; do
+            markdown-link-check -q -- "$file" 2>&1 | tee -a "$RUNNER_TEMP/link-check.log" || status=1
+          done < "$RUNNER_TEMP/changed-md.z"
+          if [[ "$status" != 0 ]]; then
+            echo "Broken markdown links detected in changed files (non-blocking)."
+          fi
+          exit "$status"
+        # Treat broken links as warnings, not hard failures, for doc repos
+        continue-on-error: true
+
+      # Not continue-on-error: this is the safety net for the narrowing above.
+      # Every changed markdown file must appear in markdown-link-check's own
+      # output ("FILE: <path>"), or the job fails.
+      - name: Guard - every changed markdown file was checked
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          checked=0
+          sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/link-check.log" > "$RUNNER_TEMP/link-check.plain.log"
+          while IFS= read -r -d '' file; do
+            if grep -Fxq -- "FILE: $file" "$RUNNER_TEMP/link-check.plain.log"; then
+              checked=$((checked + 1))
+            else
+              echo "::error::Changed markdown file was not link-checked: $file"
+              missing=$((missing + 1))
+            fi
+          done < "$RUNNER_TEMP/changed-md.z"
+          echo "Guard: $checked changed markdown file(s) checked, $missing missing."
+          [[ "$missing" == 0 ]]
+
       - name: Surface non-blocking link-check warning
-        if: steps.markdown_links.outcome == 'failure'
+        if: steps.markdown_links.outcome == 'failure' || steps.changed_links.outcome == 'failure'
         run: echo "Broken markdown links detected. See the link-check job logs."
 
   meta-hygiene:
