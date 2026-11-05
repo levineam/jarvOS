@@ -10,12 +10,15 @@ const fs = require('node:fs');
 const { loadConfig, normalizeSections, renderJournal } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 const { noteFilePath, writeNoteFile } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
 const { getTimeZone, getVaultDir, getVaultJournalDir } = require('../../../bridge/provenance/src/lib/provenance-config.js');
-const { cleanJournalEntryText, digestText } = require('../../../bridge/provenance/src/content-origin-contract.js');
+const { normalizeJournalEntry, digestText } = require('../../../bridge/provenance/src/content-origin-contract.js');
 const { vaultFileExists } = require('./vault-mutation-contract');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
 } = require('../../../src/artifact-receipt');
+
+const { createJarvosVaultTransforms } = require('../../../src/vault-transform-registry');
+const { resolveJournalLinkPolicy } = require('../../../bridge/provenance/src/link-to-journal');
 
 const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
@@ -86,26 +89,17 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         artifactReceipt: artifactReceiptFor([journalArtifact({ journalPath, vaultRoot, receipt })]),
       };
     },
-    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash, contentOrigin } = {}) {
+    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash, contentOrigin, journalPolicy, explicitBacklink, frontmatter } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
-      // An existing journal needs only the section operation's app-owned
-      // readback. Rechecking the original scaffold's exact bytes after the
-      // backlink was added would turn every successful retry into conflict, and
-      // an unidentified capture's redundant create can strand the day's FIFO.
-      const journalExists = (requestHash && fs.existsSync(path.join(journalDir, `${date}.md`))) || journalIsPresent(path.join(journalDir, `${date}.md`));
+      const linkTitle = String(line).trim().match(/^- \[\[([^\]]+)\]\]$/)?.[1];
+      if (linkTitle && resolveJournalLinkPolicy({ noteTitle: linkTitle, journalPolicy, explicitBacklink, frontmatter, vaultRoot, source }) === 'none') return { status: 'not_requested', linked: false, acknowledged: false };
+      const contentOriginPayload = contentOrigin ? { ...contentOrigin } : null;
+      const invalid = createJarvosVaultTransforms().quarantine({ transformName: 'journal-section-line', transformVersion: contentOriginPayload ? 2 : 1, replayPayload: { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) } });
+      if (contentOriginPayload && !invalid) contentOriginPayload.clean_text_digest = digestText(normalizeJournalEntry(line).text);
+      const journalExists = invalid || (requestHash && fs.existsSync(path.join(journalDir, `${date}.md`))) || journalIsPresent(path.join(journalDir, `${date}.md`));
       const ensured = journalExists ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash });
       if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
-      const cleanLine = cleanJournalEntryText(String(line).trim());
-      const canonicalCleanText = cleanLine.startsWith('- ')
-        ? cleanLine.slice(2).trim()
-        : cleanLine.replace(/^[-\s]+/, '').trim();
-      const contentOriginPayload = contentOrigin
-        ? {
-          ...contentOrigin,
-          clean_text_digest: digestText(canonicalCleanText),
-        }
-        : null;
       const outcome = executeTransform({
         date,
         transformName: 'journal-section-line',
@@ -131,7 +125,8 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const filePath = noteFilePath(title);
       return writeNoteFile({ title, content, frontmatter, resolveUserSource, resolveServedModel, ...contextFor(relativeToVault(vaultRoot, filePath), intentId, requestHash) });
     },
-    linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId } = {}) {
+    linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId, journalPolicy, explicitBacklink, frontmatter, notePath } = {}) {
+      if (resolveJournalLinkPolicy({ noteTitle, notePath, frontmatter, journalPolicy, explicitBacklink, vaultRoot, source }) === 'none') return { status: 'not_requested', linked: false, acknowledged: false };
       if (!noteTitle) throw new Error('noteTitle is required');
       const ensured = journalIsPresent(path.join(journalDir, `${date}.md`)) ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
       if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };

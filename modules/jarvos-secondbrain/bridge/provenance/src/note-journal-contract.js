@@ -283,6 +283,7 @@ function dispatchBacklink({ result, section = '📝 Notes', createIfMissing = tr
   try {
     return normalizeJournalResult(link({
       noteTitle: result.title,
+      journalPolicy: 'link',
       section,
       createIfMissing,
       noteId: result.noteId,

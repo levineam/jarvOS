@@ -1,11 +1,12 @@
 'use strict';
 
 const {
-  cleanJournalEntryText,
+  normalizeJournalEntry,
+  digestText,
+  journalOriginContractProgram,
   parseJournalEntry,
   parseJournalOriginMarker,
   renderJournalOriginMarker,
-  stripJournalOriginMarkers,
 } = require('../bridge/provenance/src/content-origin-contract');
 
 function payloadBytes(value) { return Buffer.byteLength(JSON.stringify(value), 'utf8'); }
@@ -91,29 +92,24 @@ function normalizedJournalOrigin(contentOrigin = {}) {
   };
 }
 
-function cleanJournalLine(line) {
-  const cleaned = stripJournalOriginMarkers(String(line || '')).trim();
-  return cleaned.startsWith('- ') ? cleaned : `- ${cleaned.replace(/^[-\s]+/, '')}`;
-}
-
 function journalOriginMarkerForLine(line, contentOrigin) {
-  const cleanLine = cleanJournalLine(line);
   return renderJournalOriginMarker({
-    cleanText: cleanLine.slice(2).trim(),
+    cleanText: parseJournalEntry(line.split('\n'), 0).clean_text,
     ...contentOrigin,
   });
 }
 
 function matchingJournalBullet(lines, range, canonicalLine) {
+  const text = parseJournalEntry(canonicalLine.split('\n'), 0).clean_text;
   for (let index = range.start + 1; index < range.end; index += 1) {
-    if (String(lines[index] || '').trim().startsWith('- ') && cleanJournalEntryText(lines[index]).trim() === canonicalLine) return index;
+    if (String(lines[index] || '').startsWith('- ') && parseJournalEntry(lines, index)?.clean_text === text) return index;
   }
   return -1;
 }
 
 function journalSectionLineOriginTransform(content, { heading, line, contentOrigin }) {
   const canonicalHeading = normalizeJournalHeading(heading);
-  const canonicalLine = cleanJournalLine(line);
+  const canonicalLine = normalizeJournalEntry(line).line;
   const origin = normalizedJournalOrigin(contentOrigin);
   const marker = journalOriginMarkerForLine(canonicalLine, origin);
   const source = String(content);
@@ -147,20 +143,21 @@ function journalSectionLineOriginTransform(content, { heading, line, contentOrig
 
     const next = [...lines];
     const markerCount = entry.marker_lines?.length || (entry.marker_line ? 1 : 0);
-    if (markerCount > 0) next.splice(matchingIndex + 1, markerCount, marker);
-    else next.splice(matchingIndex + 1, 0, marker);
+    if (markerCount > 0) next.splice(entry.marker_start, markerCount, marker);
+    else next.splice(entry.marker_start, 0, marker);
     return next.join('\n');
   }
 
-  const section = lines.slice(range.start + 1, range.end)
-    .filter((entry) => entry.trim() !== '-' && entry.trim() !== '');
-  section.push(canonicalLine, marker);
-  return [...lines.slice(0, range.start + 1), ...section, '', ...lines.slice(range.end)].join('\n');
+  let insertion = range.end;
+  while (insertion > range.start + 1 && lines[insertion - 1] === '') insertion -= 1;
+  const emptySection = lines.slice(range.start + 1, range.end).every(entry => !entry.trim() || entry.trim() === '-');
+  const before = lines.slice(0, insertion).filter((entry, index) => !emptySection || index <= range.start || entry.trim() !== '-');
+  return [...before, canonicalLine, marker, ...lines.slice(insertion)].join('\n');
 }
 
 function journalSectionLineOriginSatisfied(content, { heading, line, contentOrigin }) {
   const canonicalHeading = normalizeJournalHeading(heading);
-  const canonicalLine = cleanJournalLine(line);
+  const canonicalLine = normalizeJournalEntry(line).line;
   const expected = normalizedJournalOrigin(contentOrigin);
   const lines = String(content).split('\n');
   const range = journalSectionRange(lines, canonicalHeading);
@@ -175,6 +172,10 @@ function journalSectionLineOriginSatisfied(content, { heading, line, contentOrig
     && actual.content_origin === expected.content_origin
     && actual.content_origin_basis === expected.content_origin_basis
     && actual.human_evidence_eligible === expected.human_evidence_eligible);
+}
+
+function journalOriginTransformProgram() {
+  return journalOriginContractProgram() + '\n' + [normalizeJournalHeading, journalSectionRange, normalizedJournalOrigin, journalOriginMarkerForLine, matchingJournalBullet, journalSectionLineOriginTransform, journalSectionLineOriginSatisfied].join('\n');
 }
 
 function escapeRegex(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -253,14 +254,14 @@ function createJarvosVaultTransforms() {
       validatePayload: (p) => typeof p?.heading === 'string'
         && typeof p?.line === 'string'
         && p.line.trim().startsWith('- ')
-        && !/[\r\n]/.test(p.line)
         && p.contentOrigin
         && typeof p.contentOrigin === 'object',
-      normalizePayload: (p) => ({
-        heading: normalizeJournalHeading(p.heading),
-        line: cleanJournalLine(p.line),
-        contentOrigin: normalizedJournalOrigin(p.contentOrigin),
-      }),
+      normalizePayload: (p) => {
+        const entry = normalizeJournalEntry(p.line);
+        const contentOrigin = { ...normalizedJournalOrigin(p.contentOrigin), clean_text_digest: digestText(entry.text) };
+        journalOriginMarkerForLine(entry.line, contentOrigin);
+        return { heading: normalizeJournalHeading(p.heading), line: `- ${entry.text}`, contentOrigin };
+      },
       applyNode: (content, payload) => journalSectionLineOriginTransform(content, payload),
       invariant: (content, payload) => journalSectionLineOriginSatisfied(content, payload),
     },
@@ -309,6 +310,7 @@ function createVaultTransformRegistry(descriptors = []) {
 
 module.exports = {
   createJarvosVaultTransforms,
+  journalOriginTransformProgram,
   createVaultTransformRegistry,
   journalBacklinkSatisfied,
   journalBacklinkTransform,

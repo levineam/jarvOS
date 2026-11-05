@@ -87,7 +87,14 @@ function createInternalReceipt({ operation, status, lifecycleState, persistence,
   const state = lifecycleState || (status === 'committed' ? 'acknowledged' : status);
   if (!LIFECYCLE_STATES.has(state)) fail('Invalid lifecycle state');
   if (!SYNC_STATES.has(sync)) fail('Invalid sync state');
-  return { schemaVersion: 1, operation: validOperation, status, lifecycleState: state, persistence, obsidian, sync, hostIdentity, adapterEvidence, createdAt };
+  return { schemaVersion: 1, operation: validOperation, status, lifecycleState: state, persistence, obsidian, sync, hostIdentity, adapterEvidence, createdAt, ...publicValidationFailure(adapterEvidence?.validationReason) };
+}
+
+function publicValidationFailure(validationReason) {
+  return ['invalid_replay_payload', 'unknown_transform_version'].includes(validationReason) ? {
+    lifecycleState: 'planned', validationReason,
+    reason: 'Capture rejected before dispatch: invalid journal entry payload. Nothing was written; the retained intent needs correction.',
+  } : {};
 }
 
 function projectPublicResult(receipt) {
@@ -99,6 +106,7 @@ function projectPublicResult(receipt) {
     persistence: PUBLIC_PERSISTENCE.has(receipt.persistence) ? receipt.persistence : 'unknown',
     obsidian: PUBLIC_OBSIDIAN.has(receipt.obsidian) ? receipt.obsidian : 'unknown',
     sync: SYNC_STATES.has(receipt.sync) ? receipt.sync : 'unknown',
+    ...publicValidationFailure(receipt.adapterEvidence?.validationReason),
   };
 }
 
@@ -119,6 +127,7 @@ function projectPublicJournalResult(result) {
     deferred: status === 'deferred',
     alreadyPresent: result.alreadyPresent === true,
     failed: status === 'failed',
+    ...publicValidationFailure(result.receipt?.adapterEvidence?.validationReason || result.adapterEvidence?.validationReason || result.validationReason),
   };
 }
 

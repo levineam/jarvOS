@@ -22,6 +22,8 @@
 
 'use strict';
 
+const { resolveJournalLinkPolicy } = require('../../provenance/src/link-to-journal');
+
 const {
   createStorageAdapter,
 } = require('../../../adapters');
@@ -101,7 +103,9 @@ function applyPlan(capture, plan, options = {}) {
     result.plan = plan;
   }
 
-  if (plan.journalSection && plan.journalLine) {
+  const journalLinkAllowed = !/^- \[\[[^\]]+\]\]$/.test(String(plan.journalLine || '').trim())
+    || resolveJournalLinkPolicy({ ...capture, noteTitle: result.note?.title || plan.noteTitle }) === 'link';
+  if (plan.journalSection && plan.journalLine && journalLinkAllowed) {
     const actualNoteTitle = result.note?.title;
     const journalLine = actualNoteTitle && plan.noteTitle
       ? plan.journalLine.replace(`[[${plan.noteTitle}]]`, () => `[[${actualNoteTitle}]]`)
@@ -110,12 +114,14 @@ function applyPlan(capture, plan, options = {}) {
     result.journalEntry = adapter.appendLineToJournalSection({
       heading: plan.journalSection,
       line: journalLine,
+      ...(capture.journalPolicy ? { journalPolicy: capture.journalPolicy } : {}),
+      ...(capture.explicitBacklink === true ? { explicitBacklink: true } : {}),
       date,
       ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
       ...(contentOrigin ? { contentOrigin } : {}),
     });
     result.noteLink = result.journalEntry;
-  } else {
+  } else if (journalLinkAllowed) {
     result.journalEntry = adapter.ensureJournal({ date });
   }
 

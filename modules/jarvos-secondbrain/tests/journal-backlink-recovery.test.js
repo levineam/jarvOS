@@ -479,3 +479,30 @@ test('manual reconciliation adopts a legacy identity and reopens, rather than de
     fs.rmSync(state.root, { recursive: true, force: true });
   }
 });
+
+test('operational deferred links are neither enqueued nor replayed without an explicit link', () => {
+  const state = fixture();
+  try {
+    const notePath = note(state.root, 'Notes/Renamed operational note.md', 'operational-note');
+    fs.writeFileSync(notePath, '---\njarvos_note_id: operational-note\nsubtype: session-thread\n---\nCheckpoint\n');
+    const entry = { status: 'pending', journalPath: state.journalPath, noteTitle: 'Renamed operational note', notePath: 'Notes/Renamed operational note.md', noteId: 'operational-note', section: '📝 Notes', mutationSource: 'agent-context.session-thread' };
+    const queuePath = deferredQueuePathForJournalDir(state.journalDir);
+    assert.equal(recordDeferredBacklink({ ...entry, reason: 'fixture' }).status, 'not_requested');
+    assert.equal(fs.existsSync(queuePath), false);
+    fs.mkdirSync(path.dirname(queuePath), { recursive: true });
+    fs.writeFileSync(queuePath, JSON.stringify({ version: 2, entries: { legacy: entry, explicit: { ...entry, journalPolicy: 'link' } } }));
+    const before = fs.readFileSync(state.journalPath, 'utf8');
+    const dry = flushDeferredBacklinks({ ...state, vaultRoot: state.root, dryRun: true });
+    assert.equal(dry.superseded, 1);
+    assert.equal(dry.pending, 1);
+    assert.equal(fs.readFileSync(state.journalPath, 'utf8'), before);
+    const result = flushDeferredBacklinks({ ...state, vaultRoot: state.root, mutationService: fakeMutationService(state) });
+    assert.equal(result.superseded, 1);
+    assert.equal(result.linked, 1);
+    const queue = JSON.parse(fs.readFileSync(queuePath, 'utf8'));
+    assert.equal(queue.entries.legacy.status, 'superseded');
+    assert.equal(queue.entries.legacy.terminalReason, 'journal-policy-none');
+    assert.equal(queue.entries.explicit.status, 'linked');
+    assert.equal(fs.readFileSync(state.journalPath, 'utf8').split('[[Notes/Renamed operational note]]').length - 1, 1);
+  } finally { fs.rmSync(state.root, { recursive: true, force: true }); }
+});

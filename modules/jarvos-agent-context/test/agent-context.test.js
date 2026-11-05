@@ -402,6 +402,7 @@ test('session thread writes a note, links today journal, and reads across hosts'
     const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
     const write = writeSessionThread({
       threadId: 'SUP-2219',
+      journalPolicy: 'link',
       issueIdentifier: 'SUP-2219',
       artifact: 'SUP-2219',
       project: 'continuity',
@@ -571,6 +572,7 @@ test('MCP session thread tools round-trip through the shared note and journal pa
     const date = new Date().toLocaleDateString('en-CA', { timeZone: 'UTC' });
     const write = await callTool('jarvos_session_thread_write', {
       threadId: 'artifact-a',
+      journalPolicy: 'link',
       artifact: 'artifact-a',
       host: 'openclaw',
       actor: 'OpenClaw',
@@ -670,7 +672,7 @@ test('direct and MCP session threads preserve omitted and valid journal policies
       await withTempVault(async ({ notes, journal, mutationService }) => {
         const input = { threadId: 'valid-policy', summary: 'one valid checkpoint', mutationService, ...policy };
         const result = viaMcp ? await callTool('jarvos_session_thread_write', input) : writeSessionThread(input);
-        const unlinked = policy.journalPolicy === 'none';
+        const unlinked = policy.journalPolicy !== 'link';
         if (viaMcp) {
           assert.equal(result.isError, false);
           assert.match(result.content[0].text, unlinked ? /Journal backlink: not_requested/ : /Journal backlink: linked/);
@@ -698,13 +700,13 @@ test('MCP session thread preserves ambiguous operation identity and an unattempt
       }
       return fakeReceipt(operation, 'blocked');
     };
-    const first = await callTool('jarvos_session_thread_write', { threadId: 'lost-ack', summary: 'first checkpoint', mutationService });
+    const first = await callTool('jarvos_session_thread_write', { threadId: 'lost-ack', journalPolicy: 'link', summary: 'first checkpoint', mutationService });
     assert.equal(first.isError, true);
     assert.match(first.content[0].text, /Mutation status: unknown_after_dispatch/);
     assert.match(first.content[0].text, /Operation: test-operation-00000001/);
     assert.match(first.content[0].text, /Journal backlink: pending/);
     assert.match(first.content[0].text, /Do not repeat the checkpoint/);
-    const second = await callTool('jarvos_session_thread_write', { threadId: 'lost-ack', summary: 'second checkpoint', mutationService });
+    const second = await callTool('jarvos_session_thread_write', { threadId: 'lost-ack', journalPolicy: 'link', summary: 'second checkpoint', mutationService });
     assert.match(second.content[0].text, /Mutation status: blocked/);
     assert.match(second.content[0].text, /Operation: test-operation-00000002/);
     const read = await callTool('jarvos_session_thread_read', { threadId: 'lost-ack' });

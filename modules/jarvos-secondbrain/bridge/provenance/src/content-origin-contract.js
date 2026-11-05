@@ -286,36 +286,70 @@ function cleanJournalEntryText(line) {
   return stripJournalOriginMarkers(String(line || '')).trim();
 }
 
+function normalizeJournalEntry(line) {
+  if (typeof line !== 'string') throw new Error('Invalid journal entry');
+  const normalized = line.replace(/\r\n/g, '\n');
+  const text = normalized.trim();
+  if (!text.startsWith('- ') || /[\x00-\x09\x0b-\x1f\x7f-\x9f\u2028\u2029]/.test(normalized)
+    || /<!--|-->|jarvos-content-origin\//i.test(text)) throw new Error('Invalid journal entry');
+  const logical = text.slice(2);
+  for (const part of logical.split('\n')) {
+    if (/^\s*(?:#{1,6}(?:\s|$)|[-+*](?:\s|$)|\d+[.)](?:\s|$)|>|`{3,}|~{3,}|(?:[-*_]\s*){3,}$|=+\s*$)/.test(part)) throw new Error('Invalid journal entry');
+  }
+  if (!logical.trim()) throw new Error('Invalid journal entry');
+  return { text: logical, line: '- ' + logical.split('\n').map((part, index) => index && part ? '  ' + part : part).join('\n') };
+}
+
 function parseJournalEntry(lines, index) {
-  const source = Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/);
-  const line = String(source[index] || '').trim();
+  const source = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+  const at = position => String(source[position] || '').replace(/\r$/, '');
+  const line = at(index).trimStart();
   if (!line.startsWith('- ')) return null;
-  const cleanText = cleanJournalEntryText(line);
+  const parts = [stripJournalOriginMarkers(line).slice(2)];
+  let end = index + 1;
+  while (end < source.length) {
+    if (at(end).startsWith('  ')) { parts.push(at(end).slice(2)); end += 1; continue; }
+    if (at(end) === '') {
+      let next = end;
+      while (next < source.length && at(next) === '') next += 1;
+      if (at(next).startsWith('  ')) {
+        parts.push(...Array(next - end).fill(''), at(next).slice(2)); end = next + 1; continue;
+      }
+    }
+    break;
+  }
+  const text = parts.join('\n').trim();
+  const markerStart = end;
   const markerLines = [];
-  for (let markerIndex = index + 1; markerIndex < source.length; markerIndex += 1) {
-    const candidate = String(source[markerIndex] || '').trim();
-    if (!candidate.startsWith('<!-- jarvos-content-origin/')) break;
-    markerLines.push(candidate);
+  while (end < source.length && at(end).trim().startsWith('<!-- jarvos-content-origin/')) {
+    markerLines.push(at(end).trim()); end += 1;
   }
   const markerLine = markerLines[0] || null;
   const marker = markerLines.length === 1
-    ? parseJournalOriginMarker(markerLine, cleanText.slice(2).trim())
-    : markerLines.length > 1
-      ? unknownJournalOrigin('duplicate_marker')
-      : null;
+    ? parseJournalOriginMarker(markerLine, text)
+    : markerLines.length > 1 ? unknownJournalOrigin('duplicate_marker') : null;
   return {
-    line,
-    clean_text: cleanText.slice(2).trim(),
-    marker_line: markerLine,
-    marker_lines: markerLines,
-    marker,
+    line, start: index, end, marker_start: markerStart,
+    clean_text: text, marker_line: markerLine, marker_lines: markerLines, marker,
     origin: marker || (markerLines.length > 0 ? unknownJournalOrigin('malformed_or_duplicate_marker') : {
-      content_origin: 'human',
-      content_origin_basis: 'unknown',
-      human_evidence_eligible: true,
+      content_origin: 'human', content_origin_basis: 'unknown', human_evidence_eligible: true,
       normalization_reason: 'unmarked_manual_entry',
     }),
   };
+}
+
+function journalOriginContractProgram() {
+  return `const CONTENT_ORIGIN_SCHEMA_VERSION = ${JSON.stringify(CONTENT_ORIGIN_SCHEMA_VERSION)};
+const CONTENT_ORIGINS = ${JSON.stringify(CONTENT_ORIGINS)};
+const CONTENT_ORIGIN_BASES = ${JSON.stringify(CONTENT_ORIGIN_BASES)};
+const BASIS_ORIGIN = ${JSON.stringify(BASIS_ORIGIN)};
+const SHA256_RE = ${SHA256_RE}; const JOURNAL_MARKER_PREFIX = ${JSON.stringify(JOURNAL_MARKER_PREFIX)};
+const JOURNAL_MARKER_RE = ${JOURNAL_MARKER_RE};
+// Only the requested entry can match; its digest was computed before dispatch.
+const digestText = value => cleanText(value) === cleanText(input.replayPayload.line.slice(2)) ? input.replayPayload.contentOrigin.clean_text_digest : '';
+const encodeMarkerPayload = value => btoa(unescape(encodeURIComponent(JSON.stringify(value)))).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+const decodeMarkerPayload = value => { try { const token = String(value); const padded = token.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((token.length + 3) % 4); return JSON.parse(token.startsWith('%7') ? decodeURIComponent(token) : new TextDecoder().decode(Uint8Array.from(atob(padded), c => c.charCodeAt(0)))); } catch { return null; } };
+${[isPlainObject, cleanText, sourceReceipt, invalidReceipt, normalizedActorType, normalizedCaptureEventId, validateUserSourceReceipt, contentOriginPairIsValid, renderJournalOriginMarker, unknownJournalOrigin, parseJournalOriginMarker, stripJournalOriginMarkers, cleanJournalEntryText, normalizeJournalEntry, parseJournalEntry].join('\n')}`;
 }
 
 // content_origin_drafting is an append-only history of who drafted or edited
@@ -600,6 +634,8 @@ module.exports = {
   stripJournalOriginMarkers,
   cleanJournalEntryText,
   parseJournalEntry,
+  normalizeJournalEntry,
+  journalOriginContractProgram,
   normalizeContentOriginWithLegacy,
   normalizeContentOriginForRead,
   resolveLegacyOrigin,

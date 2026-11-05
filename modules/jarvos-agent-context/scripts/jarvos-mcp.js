@@ -425,7 +425,7 @@ const TOOLS = [
   },
   {
     name: 'jarvos_session_thread_write',
-    description: "Append a checkpoint to the rolling live session thread. Link from today's journal by default; internal checkpoints may explicitly request no journal link.",
+    description: "Append an operational checkpoint to the rolling live session thread without a journal backlink by default. Pass journalPolicy: link to request one.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -435,7 +435,7 @@ const TOOLS = [
         project: { type: 'string', description: 'Project tag for frontmatter.' },
         host: { type: 'string', description: 'Host writing the checkpoint, such as claude-code, openclaw, codex, or hermes.' },
         actor: { type: 'string', description: 'AI/persona writing the checkpoint.' },
-        journalPolicy: { type: 'string', enum: ['link', 'none'], description: 'Defaults to link. Use none only for an internal checkpoint that requests neither a journal backlink nor a deferred backlink intent.' },
+        journalPolicy: { type: 'string', enum: ['link', 'none'], description: 'Defaults to none for operational checkpoints; no journal backlink or deferred intent. Pass link to explicitly request a backlink.' },
         event: { type: 'string', description: 'Checkpoint event such as entry, decision, artifact-change, task-switch, or pre-compaction.' },
         summary: { type: 'string', description: 'What changed or what the next AI needs to know.' },
         decision: { type: 'string', description: 'Latest decision to preserve.' },

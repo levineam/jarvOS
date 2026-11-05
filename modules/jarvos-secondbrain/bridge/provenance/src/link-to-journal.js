@@ -27,7 +27,7 @@ const {
   getVaultNotesDir,
 } = require('./lib/provenance-config');
 const { createObsidianOwnedMutationService } = require('./obsidian-mutation');
-const { vaultFileExists } = require('../../../adapters/obsidian/src/vault-mutation-contract');
+const { vaultFileExists, resolveVaultTarget } = require('../../../adapters/obsidian/src/vault-mutation-contract');
 const {
   artifactFromMutationResult,
   createArtifactReceipt,
@@ -39,6 +39,31 @@ const {
 } = require('../../../packages/jarvos-secondbrain-journal/src/journal-maintenance.js');
 
 const DEFERRED_QUEUE_LOCK_MAX_AGE_MS = 30 * 1000;
+
+function resolveJournalLinkPolicy(input = {}) {
+  if (input.journalPolicy !== undefined) {
+    if (!['link', 'none'].includes(input.journalPolicy)) throw new Error('journalPolicy must be link or none');
+    return input.journalPolicy;
+  }
+  if (input.explicitBacklink === true) return 'link';
+  const metadata = input.frontmatter || {};
+  let stored = '';
+  if (input.vaultRoot) {
+    const root = path.resolve(input.vaultRoot);
+    const candidate = input.notePath
+      ? path.resolve(root, input.notePath)
+      : canonicalLegacyNotePath(path.join(root, 'Notes'), input.noteTitle);
+    if (candidate && isPathInside(root, candidate)) {
+      try { stored = readFileSync(resolveVaultTarget({ vaultRoot: root, vaultRelativePath: path.relative(root, candidate).split(path.sep).join('/') }), 'utf8').match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] || ''; } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+  }
+  const values = [input.subtype, input.type, input.purpose, input.artifactType, input.source, input.mutationSource,
+    metadata.subtype, metadata.type, metadata.purpose, metadata.source,
+    ...[...stored.matchAll(/^(?:subtype|type|purpose|artifact_type|source):\s*["']?([^\r\n"']+)/gm)].map(match => match[1])];
+  const operational = values.some(value => /(?:^|[. _-])(?:session[._-]thread|checkpoint|operational|test(?:[._-]artifact|[._-]fixture)?)(?:$|[. _-])/i.test(String(value || '')))
+    || /^JarvOS Session Thread - /i.test(input.noteTitle || '') || input.testArtifact === true || input.operational === true;
+  return operational ? 'none' : 'link';
+}
 
 function todayPath() {
   const today = new Date().toLocaleDateString('en-CA', { timeZone: getTimeZone() });
@@ -205,6 +230,7 @@ function classifyDeferredBacklink(entry, {
   journalDir,
 } = {}) {
   if (!isPlainObject(entry)) return { status: 'unresolved', reason: 'invalid-entry' };
+  if (resolveJournalLinkPolicy({ ...entry, vaultRoot }) === 'none') return { status: 'superseded', reason: 'journal-policy-none' };
   const journalPath = canonicalJournalPath(entry, journalDir);
   if (!journalPath) {
     return { status: 'unresolved', reason: 'journal-path-unsafe' };
@@ -329,7 +355,8 @@ function journalPathRelativeToVault(journalPath, vaultRoot = resolveVaultRootFor
 }
 
 function obsidianMutationScript() { throw new Error('Bespoke backlink mutation scripts are retired; use the canonical mutation service'); }
-function mutateJournalThroughObsidian({ journalPath, noteTitle, section = '📝 Notes', noteId, mutationService, vaultRoot } = {}) {
+function mutateJournalThroughObsidian({ journalPath, noteTitle, section = '📝 Notes', noteId, mutationService, vaultRoot, journalPolicy, explicitBacklink } = {}) {
+  if (resolveJournalLinkPolicy({ noteTitle, journalPolicy, explicitBacklink, vaultRoot: vaultRoot || mutationService?.vaultRoot, source: mutationService?.source }) === 'none') return { status: 'not_requested', linked: false };
   return submitBacklinkMutation({ journalPath, linkTarget: noteTitle, section, noteId, mutationService, vaultRoot });
 }
 
@@ -352,7 +379,11 @@ function recordDeferredBacklink({
   auditState,
   mutationIntentId,
   mutationSource,
+  journalPolicy,
+  explicitBacklink,
+  frontmatter,
 }) {
+  if (resolveJournalLinkPolicy({ journalPolicy, explicitBacklink, frontmatter, mutationSource, noteTitle, notePath, vaultRoot: path.dirname(path.dirname(journalPath)) }) === 'none') return { status: 'not_requested', linked: false };
   const deferredPath = deferredBacklinksPath(journalPath);
   const normalizedNotePath = normalizeQueuedNotePath(notePath, journalPath);
   const key = crypto.createHash('sha256')
@@ -368,6 +399,8 @@ function recordDeferredBacklink({
     data.entries[key] = {
       ...existing,
       status: 'pending',
+      ...(journalPolicy ? { journalPolicy } : {}),
+      ...(explicitBacklink === true ? { explicitBacklink: true } : {}),
       reason,
       noteTitle,
       section,
@@ -423,7 +456,14 @@ function flushDeferredBacklinks({
   for (const [entryKey, entry] of Object.entries(snapshot.entries)) {
     if (key && entryKey !== key) continue;
     if (!entry || entry.status !== 'pending') continue;
-    const classification = classifyDeferredBacklink(entry, { vaultRoot, notesDir, journalDir });
+    let classification;
+    try {
+      classification = classifyDeferredBacklink(entry, { vaultRoot, notesDir, journalDir });
+      if (classification.status === 'retry' && resolveJournalLinkPolicy({ ...entry, ...classification, vaultRoot }) === 'none') classification = { status: 'superseded', reason: 'journal-policy-none' };
+    } catch {
+      outcomes.set(entryKey, { key: entryKey, status: 'unresolved', reason: 'journal-policy-unreadable' });
+      continue;
+    }
     if (classification.status === 'linked' || classification.status === 'unresolved' || classification.status === 'superseded') {
       outcomes.set(entryKey, { key: entryKey, ...classification });
       continue;
@@ -447,9 +487,13 @@ function flushDeferredBacklinks({
         noteId: entry.noteId,
         notePath: classification.notePath,
         intentId: mutationIntentId,
+        journalPolicy: entry.journalPolicy,
+        explicitBacklink: entry.explicitBacklink,
         vaultRoot,
       });
-      outcomes.set(entryKey, { key: entryKey, status: 'linked', reason: result.alreadyPresent ? 'exact-link-present' : 'linked', result, mutationIntentId });
+      outcomes.set(entryKey, result.linked
+        ? { key: entryKey, status: 'linked', reason: result.alreadyPresent ? 'exact-link-present' : 'linked', result, mutationIntentId }
+        : { key: entryKey, status: 'superseded', reason: 'journal-policy-none' });
     } catch (error) {
       outcomes.set(entryKey, { key: entryKey, status: 'pending', reason: classification.reason, error: error.message, mutationIntentId });
     }
@@ -605,8 +649,8 @@ function reconcileDeferredBacklink({
   return { ...result, dryRun: false };
 }
 
-function linkNoteToTodayJournal(noteTitle, section = '📝 Notes') {
-  return linkNoteToJournal({ noteTitle, section, journalPath: todayPath() });
+function linkNoteToTodayJournal(noteTitle, section = '📝 Notes', { journalPolicy, explicitBacklink } = {}) {
+  return linkNoteToJournal({ noteTitle, section, journalPath: todayPath(), journalPolicy, explicitBacklink });
 }
 
 function receiptAcknowledged(receipt) { return ['committed', 'already_satisfied'].includes(receipt?.status); }
@@ -668,7 +712,11 @@ function linkNoteToJournal({
   deferOnFailure = true,
   intentId,
   vaultRoot,
+  journalPolicy,
+  explicitBacklink,
+  frontmatter,
 } = {}) {
+  if (resolveJournalLinkPolicy({ journalPolicy, explicitBacklink, frontmatter, noteTitle, notePath, source: mutationService?.source, vaultRoot: vaultRoot || mutationService?.vaultRoot || resolveVaultRootForJournal(journalPath) }) === 'none') return { status: 'not_requested', linked: false, deferred: false, failed: false };
   if (!noteTitle) throw new Error('noteTitle is required');
   const normalizedSection = normalizeSectionName(section);
   const stableIntent = intentId || `backlink-${crypto.randomUUID()}`;
@@ -707,6 +755,9 @@ function linkNoteToJournal({
       noteId,
       notePath,
       mutationIntentId: stableIntent,
+      journalPolicy,
+      explicitBacklink,
+      frontmatter,
       mutationSource: mutationService?.source || 'bridge.link-to-journal',
     });
     const wrapped = new Error(`${error.message}; backlink queued at ${deferred.deferredPath}`);
@@ -760,7 +811,7 @@ function main() {
 
     try {
       const { noteTitle, section = '📝 Notes' } = parsed;
-      console.log(JSON.stringify(linkNoteToTodayJournal(noteTitle, section)));
+      console.log(JSON.stringify(linkNoteToTodayJournal(noteTitle, section, parsed)));
     } catch (error) {
       console.error(JSON.stringify({ error: error.message }));
       process.exit(1);
@@ -838,6 +889,7 @@ function linkNoteInSection(journalMd, noteTitle, section = '📝 Notes') {
 }
 
 module.exports = {
+  resolveJournalLinkPolicy,
   main,
   todayPath,
   dateFromJournalPath,
