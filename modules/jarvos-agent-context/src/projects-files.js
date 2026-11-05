@@ -231,18 +231,24 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
   const titles = new Set(active.map((item) => item.title));
   const children = (parent) => active.filter((item) => (parent === null ? !titles.has(item.parent) : item.parent === parent))
     .sort((a, b) => b.updated.localeCompare(a.updated) || a.title.localeCompare(b.title));
-  const build = (withNext) => {
+  const descendants = (title, seen = new Set()) => children(title).reduce((n, item) => (seen.has(item.id) ? n
+    : (seen.add(item.id), n + 1 + descendants(item.title, seen))), 0);
+  // Tighter budgets drop next steps first, then fold child projects into a count, so every top-level
+  // project stays listed however large one subtree grows.
+  const build = (withNext, maxDepth = Infinity) => {
     const lines = [];
     const walk = (parent, depth, seen) => {
       for (const item of children(parent)) {
-        if (seen.has(item.title)) continue;
-        seen.add(item.title);
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
         const next = withNext && item.nextSteps?.[0] ? ` — next: ${oneLine(item.nextSteps[0], 140)}` : '';
-        lines.push(`${'  '.repeat(depth)}- ${oneLine(item.title, 120)} (updated ${item.updated})${next}`);
-        walk(item.title, depth + 1, seen);
+        const folded = depth >= maxDepth ? descendants(item.title) : 0;
+        lines.push(`${'  '.repeat(depth)}- ${oneLine(item.title, 120)} (updated ${item.updated})${next}${folded ? ` (+${folded} active child projects)` : ''}`);
+        if (depth < maxDepth) walk(item.title, depth + 1, seen);
       }
     };
     walk(null, 0, new Set());
+    const unread = (result.skipped || []).filter((item) => item.reason !== 'Reserved file');
     const named = (status) => projects.filter((item) => item.status === status).map((item) => oneLine(item.title, 120));
     const paused = named('paused');
     const done = named('done');
@@ -257,14 +263,16 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
       ...lines,
       ...(paused.length ? [`Paused (${paused.length}): ${paused.join('; ')}`] : []),
       ...(done.length ? [`Done (${done.length}): ${done.join('; ')}`] : []),
+      // File names are data too, so they stay inside the block.
+      ...(unread.length ? [`Not read: ${unread.map((item) => `${oneLine(item.file, 120)} (${item.reason})`).join('; ')}`] : []),
+      ...(result.truncated ? ['Some projects were left out to stay within the size limit; read the folder for the rest.'] : []),
       '</untrusted-project-data>',
-      ...(result.skipped?.some((item) => item.reason !== 'Reserved file')
-        ? ['', `Not read: ${result.skipped.filter((item) => item.reason !== 'Reserved file').map((item) => `${oneLine(item.file, 120)} (${item.reason})`).join('; ')}`]
-        : []),
     ].join('\n');
   };
   let markdown = build(true);
   if (markdown.length > maxChars) markdown = build(false);
+  if (markdown.length > maxChars) markdown = build(false, 1);
+  if (markdown.length > maxChars) markdown = build(false, 0);
   if (markdown.length > maxChars) {
     const cut = markdown.slice(0, Math.max(0, maxChars - 120));
     markdown = `${cut.slice(0, cut.lastIndexOf('\n'))}\n</untrusted-project-data>\n\n[Projects trimmed to fit; read the project folder for the rest.]`;
