@@ -87,7 +87,8 @@ async function main() {
       judgment = stewardshipContext({ env });
       // A single hard-timeout start call; invalid, timed out, nonzero, or
       // unavailable all fail open to the ordinary hydrate() Projects fallback.
-      const refresh = projectsContextStart({ env });
+      // When the host points at the project files, the packet reads them; the bridge's snapshot can lag them.
+      const refresh = process.env.JARVOS_PROJECTS_DIR === undefined ? projectsContextStart({ env }) : {};
       if (projectsContextRefreshHasContent(refresh.envelope)) {
         projectsContextMarkdown = refresh.envelope.markdown;
       }

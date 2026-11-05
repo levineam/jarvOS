@@ -120,7 +120,8 @@ async function main(hookInput = readHookInput()) {
     const judgment = stewardshipContext(bridgeOptions);
     // A single hard-timeout start call; invalid, timed out, nonzero, or
     // unavailable all fail open to the ordinary hydrate() Projects fallback.
-    const refresh = projectsContextStart(bridgeOptions);
+    // When the host points at the project files, the packet reads them; the bridge's snapshot can lag them.
+    const refresh = process.env.JARVOS_PROJECTS_DIR === undefined ? projectsContextStart(bridgeOptions) : {};
     const projectsContextMarkdown = projectsContextRefreshHasContent(refresh.envelope) ? refresh.envelope.markdown : '';
     let hydration = '';
     try {

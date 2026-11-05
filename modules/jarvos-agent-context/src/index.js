@@ -12,6 +12,7 @@ const os = require('os');
 const crypto = require('node:crypto');
 const { spawnSync } = require('child_process');
 const { createHostProjectsContextProvider } = require('./projects-context-bootstrap');
+const { readProjectsFiles, renderProjectsFilesMarkdown } = require('./projects-files');
 const { normalizeProposal, ProposalValidationError } = require('./projects-proposals');
 
 const {
@@ -2052,6 +2053,19 @@ async function hydrate(options = {}) {
     // build, no Projects markdown in this packet.
     report.projectsContext = { status: 'disabled', fingerprint: null, code: null };
     report.handles.push('Projects context: disabled for this hydration call');
+  } else if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+    // A host that points at the project files gets them read now, instead of a provider's snapshot,
+    // which can lag the files (paused projects shown as active). The host sets the folder, not the caller.
+    const directory = process.env.JARVOS_PROJECTS_DIR;
+    const files = await readProjectsFiles(directory);
+    report.projectsContext = { status: files.status, fingerprint: null, code: files.code || null, source: 'project-files' };
+    parts.push(renderProjectsFilesMarkdown(files, { directory, maxChars: Number(options.projectsContextMaxChars || 3600) }), '');
+    if (files.status === 'ok') {
+      report.sources.push(`jarvos.projects-files/v1 (${files.count} projects)`);
+      report.handles.push(`Projects: read from the project files in ${directory}`);
+    } else {
+      report.omissions.push('Projects unavailable: the project files could not be read');
+    }
   } else {
     // Hydration is an orientation consumer, not a generic Projects query
     // surface.  Its host-issued profile is fixed so startup, MCP hydration, and

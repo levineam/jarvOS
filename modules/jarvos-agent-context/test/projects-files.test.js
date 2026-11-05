@@ -96,7 +96,7 @@ test('ported parser preserves quotes, comments, custom fields and CRLF body', ()
   assert.equal(record.body, BODY.replace(/\n/g, '\r\n'));
   for (const invalid of [
     'no frontmatter', source({ extra: 'id: duplicate\n' }), source({ updated: '2026-02-30' }),
-    source({ updated: '2026-99-99' }), source().replace('["abc", "def # ghi"]', '[123]'),
+    source({ updated: '2026-99-99' }), source().replace('["abc", "def # ghi"]', '["unterminated]'),
     source().replace('["abc", "def # ghi"]', 'null'),
     source().replace('status: active', 'status: unknown'), source({ extra: "owner: 'bad\n" }),
   ]) assert.throws(() => parse(invalid));

@@ -325,6 +325,25 @@ test('native SessionStart injects one refreshed or partial Projects block and di
   }
 });
 
+test('when the host points at the project files, SessionStart skips the bridge snapshot and hydration reads the files', () => {
+  for (const runtime of ['codex', 'claude']) {
+    withBridge({
+      projectsContextStart: envelope('refreshed', { markdown: NATIVE_PROJECTS_MARKDOWN }),
+    }, ({ bin, temp }) => {
+      const { output, hydrationOptions } = runSessionStartHook(
+        runtime,
+        { ...sessionStartEnvironment(bin, temp, runtime), JARVOS_PROJECTS_DIR: path.join(temp, 'projects') },
+        sessionStartInput(runtime),
+        ORDINARY_PROJECTS_MARKDOWN,
+      );
+      const context = output.hookSpecificOutput.additionalContext;
+      assert.doesNotMatch(context, /Native bridge marker/, `${runtime} must not inject the bridge snapshot`);
+      assert.match(context, /Ordinary provider marker/);
+      assert.equal(hydrationOptions.projectsContext, undefined, `${runtime} must keep Projects hydration enabled`);
+    });
+  }
+});
+
 test('native SessionStart preserves ordinary Projects hydration for unchanged, unavailable, and invalid bridge envelopes', () => {
   const cases = [
     ['unchanged', envelope('unchanged')],

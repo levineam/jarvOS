@@ -218,7 +218,8 @@ function main(input = readHookInput()) {
     const bridgeOptions = { sessionId };
     // Exactly one refresh call per turn boundary; a timeout, invalid, or
     // unavailable result continues the turn with no injection and no retry.
-    const refresh = projectsContextRefresh(bridgeOptions);
+    // With the project files as the source, a snapshot refresh would contradict what the session read at start.
+    const refresh = process.env.JARVOS_PROJECTS_DIR === undefined ? projectsContextRefresh(bridgeOptions) : {};
     const nextInput = nextTurnInput(bridgeOptions);
     heartbeat(bridgeOptions);
     const contexts = [];
