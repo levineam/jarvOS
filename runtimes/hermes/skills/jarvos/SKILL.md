@@ -95,13 +95,13 @@ paths in this order:
 3. `~/.jarvos/config.json` `paths.journal` / `paths.notes`
 4. Vault root from `JARVOS_VAULT_DIR` or `jarvos.config.json` `paths.vault`,
    with `Journal` / `Notes` appended
-5. Default `~/Documents/Vault v3/Journal` and `~/Documents/Vault v3/Notes`
+5. Canonical default `~/Vaults/Vault v3/Journal` and `~/Vaults/Vault v3/Notes`
 
 **If the user already uses OpenClaw with jarvOS**, they have a secondbrain vault
 configured. Hermes should use the **same vault** — not a separate one.
 
 ### To confirm vault config (ask the user once, then remember):
-- Vault root:  `$JARVOS_VAULT_DIR` or `~/Documents/Vault v3`
+- Vault root:  `$JARVOS_VAULT_DIR` or `~/Vaults/Vault v3`
 - Journal dir: `$JARVOS_JOURNAL_DIR`, `$JOURNAL_DIR`, or `<vault>/Journal`
 - Notes dir:   `$JARVOS_NOTES_DIR`, `$VAULT_NOTES_DIR`, or `<vault>/Notes`
 
@@ -119,8 +119,8 @@ configured. Hermes should use the **same vault** — not a separate one.
 
 ### Pitfall: do NOT invent a new vault path or journal file
 The whole point of shared-vault onboarding is that every runtime (OpenClaw, Hermes,
-and any future runtime) uses one vault. If you're unsure, default to
-`~/Documents/Vault v3` and ask the user to confirm rather than creating a new path.
+and any future runtime) uses one vault. If you're unsure, run `detect-vault.js`
+and ask the user to confirm its validated path rather than creating a new path.
 Do not create guessed daily journal files under `Notes/`; canonical journals
 live at `Journal/YYYY-MM-DD.md`.
 

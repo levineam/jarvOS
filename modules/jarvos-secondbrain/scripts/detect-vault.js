@@ -20,60 +20,21 @@
 
 'use strict';
 
-const os = require('os');
 const path = require('path');
 const fs = require('fs');
+const {
+  discoverConfigPath,
+  resolveConfig,
+} = require('../bridge/config/src/resolve-config');
 
-// ── Path resolution (mirrors jarvos-paths.js without requiring it) ─────────
-
-const DEFAULT_CLAWD_DIR = path.join(os.homedir(), 'clawd');
-const DEFAULT_VAULT_DIR = path.join(os.homedir(), 'Documents', 'Vault v3');
-
-function expandTilde(p) {
-  if (typeof p === 'string' && p.startsWith('~/')) {
-    return path.join(os.homedir(), p.slice(2));
-  }
-  return p;
-}
-
-function loadJarvosConfig() {
-  const clawdDir = expandTilde(
-    process.env.JARVOS_CLAWD_DIR || process.env.CLAWD_DIR || DEFAULT_CLAWD_DIR
-  );
-  const configPath = path.join(clawdDir, 'jarvos.config.json');
-  let cfg = {};
-  let configExists = false;
-  if (fs.existsSync(configPath)) {
-    configExists = true;
-    try {
-      cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    } catch {
-      // unparseable — treat as empty
-    }
-  }
-  return { cfg, configPath, configExists };
-}
+// ── Path resolution ────────────────────────────────────────────
 
 function resolveVaultPaths() {
-  const { cfg, configPath, configExists } = loadJarvosConfig();
-
-  // Env vars take precedence over config file.
-  const vault =
-    expandTilde(process.env.JARVOS_VAULT_DIR) ||
-    expandTilde(cfg.paths?.vault) ||
-    DEFAULT_VAULT_DIR;
-
-  const journal =
-    expandTilde(process.env.JARVOS_JOURNAL_DIR) ||
-    expandTilde(process.env.JOURNAL_DIR) ||
-    expandTilde(cfg.paths?.journal) ||
-    path.join(vault, 'Journal');
-
-  const notes =
-    expandTilde(process.env.JARVOS_NOTES_DIR) ||
-    expandTilde(process.env.VAULT_NOTES_DIR) ||
-    expandTilde(cfg.paths?.notes) ||
-    path.join(vault, 'Notes');
+  // Keep onboarding on the same fail-closed resolver used by vault mutations.
+  // In particular, do not duplicate defaults or stale-vault guardrails here.
+  const configPath = discoverConfigPath();
+  const configExists = fs.existsSync(configPath);
+  const { paths: { vault, journal, notes } } = resolveConfig();
 
   return { vault, journal, notes, configPath, configExists };
 }
@@ -130,8 +91,13 @@ function main() {
   const jsonMode = args.includes('--json');
 
   const { vault, journal, notes, configPath, configExists } = resolveVaultPaths();
+  const vaultExists = fs.existsSync(vault);
 
   if (jsonMode) {
+    if (!vaultExists) {
+      console.error(`Resolved vault directory does not exist on disk: ${vault}`);
+      process.exit(2);
+    }
     process.stdout.write(
       JSON.stringify({ vault, journal, notes, configPath, configExists }, null, 2) + '\n'
     );
@@ -151,7 +117,6 @@ function main() {
   console.log('');
 
   // Vault existence check
-  const vaultExists = fs.existsSync(vault);
   if (!vaultExists) {
     console.log(`  ✗ Resolved vault directory does not exist on disk: ${vault}`);
     console.log('    Create it, or update jarvos.config.json / JARVOS_VAULT_DIR to point at your vault.');
