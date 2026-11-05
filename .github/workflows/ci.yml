@@ -59,9 +59,11 @@ jobs:
       had_broken_links: ${{ steps.markdown_links.outcome == 'failure' || steps.changed_links.outcome == 'failure' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # Full history (blobless, so still small) so the PR diff can find
+        # its merge base with the base branch.
         with:
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
-          filter: ${{ github.event_name == 'pull_request' && 'blob:none' || '' }}
+          fetch-depth: 0
+          filter: blob:none
 
       - name: Check markdown links (all files)
         id: markdown_links
