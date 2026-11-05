@@ -111,7 +111,6 @@ jobs:
           npm install -g --silent markdown-link-check@3.8.7
           status=0
           while IFS= read -r -d '' file; do
-            [[ "$file" == "README.md" ]] && continue  # DEMO: simulated skip-logic bug
             markdown-link-check -q -- "$file" 2>&1 | tee -a "$RUNNER_TEMP/link-check.log" || status=1
           done < "$RUNNER_TEMP/changed-md.z"
           if [[ "$status" != 0 ]]; then

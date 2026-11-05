@@ -72,4 +72,3 @@ jarvOS should stay a configuration consumer, not a permanent fork. Bugs,
 missing mapper support, inaccurate findings, and reusable config patterns found
 during jarvOS integration should be reported or contributed upstream to
 `openclaw/clawpatch` or `openclaw/clawsweeper`.
-
