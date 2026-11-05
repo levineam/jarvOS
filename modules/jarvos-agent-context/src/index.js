@@ -2066,6 +2066,13 @@ async function hydrate(options = {}) {
     } else {
       report.omissions.push('Projects unavailable: the project files could not be read');
     }
+    // The resume check compares a pin against a provider packet, which file mode doesn't build. Say so
+    // rather than skip it silently.
+    if (options[HYDRATION_ACCOUNTABILITY_PIN] !== undefined && options[HYDRATION_ACCOUNTABILITY_PIN] !== null) {
+      report.accountability = { status: 'unavailable', code: 'ACCOUNTABILITY_UNAVAILABLE_PROJECT_FILES', briefState: null };
+      parts.push('## Accountability resume\nUnavailable: the assignment check needs the Projects provider, and this host reads the project files instead. Confirm the assignment before resuming.', '');
+      report.handles.push('Accountability resume: unavailable');
+    }
   } else {
     // Hydration is an orientation consumer, not a generic Projects query
     // surface.  Its host-issued profile is fixed so startup, MCP hydration, and

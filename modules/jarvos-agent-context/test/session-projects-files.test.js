@@ -88,3 +88,11 @@ test('the real project folder, when present, agrees with the session packet for 
     }
   } finally { delete process.env.JARVOS_PROJECTS_DIR; }
 });
+
+test('an assignment pin in file mode is reported as unchecked, never silently skipped', async (t) => {
+  const { HYDRATION_ACCOUNTABILITY_PIN } = require('../src/index.js');
+  await freshSession(t, { 'A.md': project({ id: 'p_a', title: 'A' }) });
+  const result = await hydrate({ sessionThread: false, maxChars: 20000, [HYDRATION_ACCOUNTABILITY_PIN]: { projectId: 'p_a' } });
+  assert.equal(result.report.accountability.status, 'unavailable');
+  assert.match(result.markdown, /## Accountability resume\nUnavailable:/);
+});

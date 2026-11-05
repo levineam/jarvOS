@@ -249,7 +249,7 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
     return [
       '## Projects',
       '',
-      `Read just now from the project files${directory ? ` in ${oneLine(directory, 200)}` : ''}. They are the source of truth; README.md in that folder says how to change them. Statuses here are current.`,
+      `Read just now from the project files${directory ? ` in ${oneLine(directory, 200)}` : ''}. They are the source of truth; README.md in that folder says how to change them. Other sessions change them too, so read a project's file again before relying on its status.`,
       '',
       UNTRUSTED_NOTICE,
       '<untrusted-project-data>',
