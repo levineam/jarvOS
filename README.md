@@ -206,3 +206,4 @@ jarvOS should use strong existing software wherever possible, then build the mis
 jarvOS is your own personal superintelligence, accessible to all.
 
 It is a cross-AI digital twin built on a real second brain: Markdown at the foundation, useful tools connected around it, and jarvOS modules making the whole thing work as one mind across many harnesses.
+
