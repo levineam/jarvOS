@@ -288,7 +288,7 @@ test('managed-software catalog validates revisions and creates privacy-safe repo
 
   assert.equal(catalog.revision, 'managed-software.v1');
   assert.equal(catalog.entries.length, 1);
-  assert.deepEqual(catalog.publicReport.entries[0].checkoutSelectors, undefined);
+  assert.deepEqual(catalog.publicReport.entries, []);
   assert.throws(() => createManagedSoftwareCatalog({ revision: 'managed-software.v2', entries: [catalog.entries[0], catalog.entries[0]] }), /duplicate/i);
 });
 
@@ -311,10 +311,24 @@ test('managed-software catalog separates runtime capability, strategy evidence, 
     capabilities: { installedVersion: true, developmentCheckout: true, productionRuntime: true },
   });
 
-  const catalog = createManagedSoftwareCatalog({ revision: 'managed-software.v1', entries: [entry] });
+  const catalog = createManagedSoftwareCatalog({
+    revision: 'managed-software.v1',
+    entries: [{
+      ...entry,
+      tracker: { ...entry.tracker, credentials: 'not-for-publication' },
+      capabilities: { ...entry.capabilities, localPath: '/private/runtime' },
+    }],
+  });
   const report = JSON.stringify(catalog.publicReport);
+  const publicEntry = catalog.publicReport.entries[0];
   assert.equal(entry.strategyEvidence.authority, 'draft-unratified');
   assert.equal(entry.capabilities.productionRuntime, true);
+  assert.equal(publicEntry.id, 'jarvos');
+  assert.deepEqual(publicEntry.runtime, { serviceId: 'service:jarvos', mode: 'production' });
+  assert.equal(publicEntry.checkoutSelectors, undefined);
+  assert.equal(publicEntry.publicationAdapter, undefined);
+  assert.equal(publicEntry.tracker.credentials, undefined);
+  assert.equal(publicEntry.capabilities.localPath, undefined);
   assert.doesNotMatch(report, /credential:|principal:|preference:|staging:|activation:|policy:|identity:|state:|destination-scope:/);
   assert.throws(() => validateManagedSoftwareEntry({ ...entry, capabilities: { installedVersion: true, developmentCheckout: true } }), /productionRuntime/);
   assert.throws(() => validateManagedSoftwareEntry({ ...entry, runtime: { ...entry.runtime, stagingRootSelector: 'jarvos-public' } }), /distinct/i);
