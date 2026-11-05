@@ -130,8 +130,9 @@ jobs:
           set -euo pipefail
           missing=0
           checked=0
+          sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/link-check.log" > "$RUNNER_TEMP/link-check.plain.log"
           while IFS= read -r -d '' file; do
-            if sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/link-check.log" | grep -Fxq -- "FILE: $file"; then
+            if grep -Fxq -- "FILE: $file" "$RUNNER_TEMP/link-check.plain.log"; then
               checked=$((checked + 1))
             else
               echo "::error::Changed markdown file was not link-checked: $file"
