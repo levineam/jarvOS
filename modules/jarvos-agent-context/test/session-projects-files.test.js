@@ -113,3 +113,16 @@ test('a tight budget keeps every top-level project, and same-named projects both
   assert.equal((twins.match(/- Shared task/g) || []).length, 2);
   assert.match(twins, /Some projects were left out[\s\S]*<\/untrusted-project-data>/);
 });
+
+test('a short resume packet still lists every top-level project and closes the data block', async (t) => {
+  const files = {};
+  for (let r = 0; r < 7; r++) {
+    files[`Root ${r}.md`] = project({ id: `p_r${r}`, title: `Root project number ${r}` });
+    for (let c = 0; c < 4; c++) files[`Child ${r}-${c}.md`] = project({ id: `p_${r}_${c}`, title: `Child ${c} of root ${r} with a longer name`, parent: `Root project number ${r}` });
+  }
+  await freshSession(t, files);
+  const { markdown } = await hydrate({ sessionThread: false, maxChars: 4000 });
+  const section = markdown.slice(markdown.indexOf('## Projects'));
+  for (let r = 0; r < 7; r++) assert.match(section, new RegExp(`- Root project number ${r} `));
+  assert.match(section, /<\/untrusted-project-data>/);
+});

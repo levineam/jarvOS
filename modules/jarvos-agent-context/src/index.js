@@ -2059,7 +2059,9 @@ async function hydrate(options = {}) {
     const directory = process.env.JARVOS_PROJECTS_DIR;
     const files = await readProjectsFiles(directory);
     report.projectsContext = { status: files.status, fingerprint: null, code: files.code || null, source: 'project-files' };
-    parts.push(renderProjectsFilesMarkdown(files, { directory, maxChars: Number(options.projectsContextMaxChars || 3600) }), '');
+    // Sized to what the packet has room for, so the list folds itself rather than being cut mid-block.
+    const budget = Math.min(Number(options.projectsContextMaxChars || 3600), Math.max(800, Math.floor(maxChars / 2)));
+    parts.push(renderProjectsFilesMarkdown(files, { directory, maxChars: budget }), '');
     if (files.status === 'ok') {
       report.sources.push(`jarvos.projects-files/v1 (${files.count} projects)`);
       report.handles.push(`Projects: read from the project files in ${directory}`);
