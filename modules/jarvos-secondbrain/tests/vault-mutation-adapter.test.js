@@ -434,7 +434,7 @@ test('fixed Obsidian evaluator accepts the versioned journal origin transform', 
     transformName: 'journal-section-line',
     transformVersion: 2,
     replayPayload: {
-      heading: '## 💡 Ideas',
+      heading: '## 📝 Notes',
       line,
       contentOrigin: {
         content_origin: 'assistant',
@@ -444,7 +444,7 @@ test('fixed Obsidian evaluator accepts the versioned journal origin transform', 
       },
     },
   };
-  const actual = runInFakeObsidian(journalOperation, { initial: '## 💡 Ideas\n-\n' });
+  const actual = runInFakeObsidian(journalOperation, { initial: '## 📝 Notes\n-\n' });
   assert.equal(actual.result.status, 'done');
   const lines = actual.content.split('\n');
   const parsed = parseJournalEntry(lines, lines.indexOf(line));
@@ -733,4 +733,25 @@ test('payload rejection is public, planned and attempt-free before probe or drai
     }
     assert.equal(Object.hasOwn(projectPublicResult({ status: 'failed', adapterEvidence: { validationReason: '/private/secret', reason: 'secret' } }), 'validationReason'), false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Ideas mutation and inspection preserve existing markers and omit new markers in the app', () => {
+  const transforms = createJarvosVaultTransforms();
+  for (const line of ['- Single thought', '- First thought\n\nSecond paragraph']) {
+    const input = { ...operation(), operationKind: 'transform', transformName: 'journal-section-line', transformVersion: 2, replayPayload: {
+      heading: '💡 Ideas', line, contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+    } };
+    const first = transforms.applyNode('## 💡 Ideas\n-\n\n## Next\nKeep\n', input);
+    assert.doesNotMatch(first, /jarvos-content-origin/);
+    const oldMarker = first.replace('\n\n## Next', '\n<!-- jarvos-content-origin/v1 forged -->\n\n## Next');
+    for (const before of [first, oldMarker]) {
+      const actual = runInFakeObsidian(input, { initial: before });
+      assert.equal(actual.result.status, 'done');
+      assert.equal(actual.content, before);
+      assert.equal(runInFakeObsidian(input, { initial: before, inspect: true }).result.invariant, true);
+    }
+    const fresh = runInFakeObsidian(input, { initial: '' });
+    assert.equal(fresh.result.status, 'done');
+    assert.equal(fresh.content, transforms.applyNode('', input));
+  }
 });

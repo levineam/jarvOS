@@ -111,22 +111,22 @@ function journalSectionLineOriginTransform(content, { heading, line, contentOrig
   const canonicalHeading = normalizeJournalHeading(heading);
   const canonicalLine = normalizeJournalEntry(line).line;
   const origin = normalizedJournalOrigin(contentOrigin);
-  const marker = journalOriginMarkerForLine(canonicalLine, origin);
+  const marker = canonicalHeading === '## 💡 Ideas' ? null : journalOriginMarkerForLine(canonicalLine, origin);
+  const entryLines = marker ? [canonicalLine, marker] : [canonicalLine];
   const source = String(content);
   const lines = source.split('\n');
   const range = journalSectionRange(lines, canonicalHeading);
 
   if (range.start === -1) {
     const trimmed = source.trimEnd();
-    return `${trimmed}${trimmed ? '\n\n' : ''}${canonicalHeading}\n${canonicalLine}\n${marker}\n`;
+    return `${trimmed}${trimmed ? '\n\n' : ''}${canonicalHeading}\n${entryLines.join('\n')}\n`;
   }
 
   const matchingIndex = matchingJournalBullet(lines, range, canonicalLine);
   if (matchingIndex !== -1) {
+    if (canonicalHeading === '## 💡 Ideas') return source;
     const entry = parseJournalEntry(lines, matchingIndex);
-    // An existing unmarked bullet is the legacy/manual-human convention. It
-    // already represents stronger evidence than a new non-human echo, so keep
-    // it untouched and let the invariant treat the safe no-op as satisfied.
+    // Preserve existing unmarked entries without inferring their origin.
     if (!entry?.marker && !entry?.marker_line) return source;
 
     const existing = entry.origin;
@@ -152,7 +152,7 @@ function journalSectionLineOriginTransform(content, { heading, line, contentOrig
   while (insertion > range.start + 1 && lines[insertion - 1] === '') insertion -= 1;
   const emptySection = lines.slice(range.start + 1, range.end).every(entry => !entry.trim() || entry.trim() === '-');
   const before = lines.slice(0, insertion).filter((entry, index) => !emptySection || index <= range.start || entry.trim() !== '-');
-  return [...before, canonicalLine, marker, ...lines.slice(insertion)].join('\n');
+  return [...before, ...entryLines, ...lines.slice(insertion)].join('\n');
 }
 
 function journalSectionLineOriginSatisfied(content, { heading, line, contentOrigin }) {
@@ -164,6 +164,7 @@ function journalSectionLineOriginSatisfied(content, { heading, line, contentOrig
   if (range.start === -1) return false;
   const index = matchingJournalBullet(lines, range, canonicalLine);
   if (index === -1) return false;
+  if (canonicalHeading === '## 💡 Ideas') return true;
   const entry = parseJournalEntry(lines, index);
   if (entry && !entry.marker && !entry.marker_line) return true;
   const actual = entry?.marker ? parseJournalOriginMarker(entry.marker_line, entry.clean_text) : null;

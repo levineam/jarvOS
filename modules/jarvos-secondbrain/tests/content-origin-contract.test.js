@@ -280,7 +280,9 @@ test('public projections expose clean journal and note evidence without marker p
   });
   const journal = projectJournalEntriesFromMarkdown(`## 💡 Ideas\n- User thought\n- Assistant-generated context\n${marker}\n`, { date: '2026-08-14' });
   assert.equal(journal.length, 2);
-  assert.equal(journal[0].content_origin, 'human');
+  assert.equal(journal[0].content_origin, 'unknown');
+  assert.equal(journal[0].projection_reason, 'no_origin_recorded_in_file');
+  assert.equal(readEvidenceProjection(journal[0]).ok, true);
   assert.equal(journal[0].human_evidence_eligible, false);
   assert.equal(journal[1].content_origin, 'assistant');
   assert.equal(journal[1].human_evidence_eligible, false);
@@ -402,4 +404,19 @@ test('evidence projection rejects malformed records before private consumers see
     assert.equal(result.reason, reason);
     assert.equal(result.record.human_evidence_eligible, false);
   }
+});
+
+test('markerless Ideas have no file origin and remain readable without human eligibility', () => {
+  const markdown = '## 💡 Ideas\r\n- First thought\r\n\r\n  Second paragraph\r\n\r\n## 📝 Notes\r\n- Manual note\r\n';
+  const entry = parseJournalEntry(markdown.split('\n'), 1);
+  assert.equal(entry.clean_text, 'First thought\n\nSecond paragraph');
+  assert.equal(entry.marker_line, null);
+  assert.deepEqual(entry.origin, { content_origin: 'unknown', content_origin_basis: 'unknown', human_evidence_eligible: false, normalization_reason: 'no_origin_recorded_in_file' });
+  const projected = projectJournalEntriesFromMarkdown(markdown)[0];
+  assert.equal(projected.projection_reason, 'no_origin_recorded_in_file');
+  assert.equal(projected.human_evidence_eligible, false);
+  assert.equal(readEvidenceProjection(projected).ok, true);
+  assert.equal(parseJournalEntry(markdown.split('\n'), 6).origin.content_origin, 'human');
+  const desktop = require('../../../apps/desktop/server/adapters/journal');
+  assert.deepEqual(desktop.parseSections(markdown.replace(/\r\n/g, '\n'))[0].items, ['First thought']);
 });
