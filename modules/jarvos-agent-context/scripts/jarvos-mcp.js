@@ -414,11 +414,12 @@ const TOOLS = [
       required: ['kind', 'text', 'words', 'asked'],
       properties: {
         kind: { type: 'string', enum: ['idea', 'journal', 'note'] },
-        text: { type: 'string', minLength: 1 },
+        // Same limits as the Grok Bot gateway policy (runtimes/grok-bot/gateway.js), which tests keep identical.
+        text: { type: 'string', minLength: 1, maxLength: 200_000 },
         words: { type: 'string', enum: ['user', 'assistant', 'mixed'] },
         asked: { type: 'string', enum: ['explicit', 'accepted_offer'] },
-        title: { type: 'string', minLength: 1 },
-        model: { type: 'string', minLength: 1 },
+        title: { type: 'string', minLength: 1, maxLength: 200, pattern: '^(?!\\.)[^/\\\\\\u0000-\\u001f\\u007f\\u0085\\u2028\\u2029]+$' },
+        model: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\r\\n\\u0085\\u2028\\u2029]*$' },
         date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
       },
     },

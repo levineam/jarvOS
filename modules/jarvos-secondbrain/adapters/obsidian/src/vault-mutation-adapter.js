@@ -80,11 +80,20 @@ const EMPTY_EVAL_RETRIES = 4;
 function evalOnce(code, { vaultName, command, deadline, execute, emptyRetries }) {
   for (let attempt = 0; ; attempt += 1) {
     let output;
-    try { output = execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), stdio: ['ignore', 'pipe', 'pipe'] }); }
+    try { output = execute(command, [`vault=${vaultName}`, 'eval', `code=${code}`], { encoding: 'utf8', timeout: Math.max(1, deadline - Date.now()), stdio: ['ignore', 'pipe', 'pipe'], env: obsidianCliEnv() }); }
     catch (error) { const wrapped = new Error(String(error.stderr || error.stdout || error.message || 'Obsidian CLI failed')); wrapped.code = error.code; throw wrapped; }
     if (String(output || '').trim() || attempt >= emptyRetries || Date.now() >= deadline) return parseEvalResult(output);
   }
 }
+// A caller hosted in Electron (a desktop app) may run jarvOS with
+// ELECTRON_RUN_AS_NODE=1; an Electron-based Obsidian CLI would inherit it and
+// start as plain Node instead of Obsidian, so it never reaches the CLI.
+function obsidianCliEnv(env = process.env) {
+  const next = { ...env };
+  delete next.ELECTRON_RUN_AS_NODE;
+  return next;
+}
+
 function runObsidianEval(code, { vaultName, command = process.env.OBSIDIAN_CLI || 'obsidian', timeoutMs = 10_000, execute = execFileSync, emptyRetries = EMPTY_EVAL_RETRIES, chunkBytes = EVAL_CHUNK_BYTES } = {}) {
   const options = { vaultName, command, deadline: Date.now() + timeoutMs, execute, emptyRetries };
   if (Buffer.byteLength(code, 'utf8') <= chunkBytes) return evalOnce(code, options);
@@ -355,4 +364,5 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   publicAdapter = Object.freeze({ acknowledgeIfSatisfied, capability, createReconciler, execute, inspectFileExists, inspectInvariant, ledger: ledgerView, submit });
   return publicAdapter;
 }
-module.exports = { CAPABILITY_REASONS, CAPABILITY_STATES, ERROR_MESSAGE_MAX_CHARS, RESULT_STORE, sanitizeErrorMessage, buildObsidianInvariantProgram, buildObsidianMutationProgram, createVaultMutationAdapter, runObsidianEval };
+module.exports = {
+  obsidianCliEnv, CAPABILITY_REASONS, CAPABILITY_STATES, ERROR_MESSAGE_MAX_CHARS, RESULT_STORE, sanitizeErrorMessage, buildObsidianInvariantProgram, buildObsidianMutationProgram, createVaultMutationAdapter, runObsidianEval };

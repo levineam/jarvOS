@@ -305,7 +305,7 @@ test('Compound Engineering capability rejects traversal, symlink, and executable
   }
 });
 
-function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuardedPluginFlag = false, existingMcp = false, routeBinding = false } = {}) {
+function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuardedPluginFlag = false, existingMcp = false, routeBinding = false, existingAgents = null } = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-hermes-setup-'));
   const home = path.join(tmp, 'home');
   const hermesHome = isolatedHermesHome ? path.join(tmp, 'hermes-home') : path.join(home, '.hermes');
@@ -314,6 +314,10 @@ function runHermesSetup({ healthy = true, isolatedHermesHome = false, rejectGuar
   const logPath = path.join(tmp, 'hermes.log');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(binDir, { recursive: true });
+  if (existingAgents !== null) {
+    fs.mkdirSync(workspace, { recursive: true });
+    fs.writeFileSync(path.join(workspace, 'AGENTS.md'), existingAgents);
+  }
   if (existingMcp) {
     fs.mkdirSync(hermesHome, { recursive: true });
     fs.writeFileSync(path.join(hermesHome, 'config.yaml'), 'terminal:\n  cwd: /tmp\nmcp_servers:\n  jarvos:\n    command: node\n', 'utf8');
@@ -371,6 +375,23 @@ test('Hermes setup registers and verifies MCP for a fresh config', () => {
     assert.match(log, /mcp test jarvos/);
     assert.match(run.result.stdout, /Hermes MCP entry 'jarvos' is healthy/);
     assert.ok(fs.existsSync(path.join(run.tmp, 'home', '.hermes', 'plugins', 'jarvos-context', 'plugin.yaml')));
+  } finally {
+    run.cleanup();
+  }
+});
+
+test('Hermes setup only appends the managed capture block to existing workspace instructions', () => {
+  const prior = '# Invented local instructions\nPreserve this text.\n';
+  const run = runHermesSetup({ existingAgents: prior });
+  try {
+    assert.equal(run.result.status, 0, run.result.stderr || run.result.stdout);
+    const workspace = path.join(run.tmp, 'workspace');
+    const content = fs.readFileSync(path.join(workspace, 'AGENTS.md'), 'utf8');
+    assert.equal(content.slice(0, content.indexOf('<!-- jarvos:managed capture-guideline:start -->')), prior + '\n');
+    const { readCaptureGuideline } = require('../../jarvos-instruction-projection/src/capture-guideline');
+    assert.ok(content.includes(`## Keeping things\n\n${readCaptureGuideline()}`));
+    const backup = fs.readdirSync(workspace).find(name => name.startsWith('AGENTS.md.jarvos-backup-'));
+    assert.equal(fs.readFileSync(path.join(workspace, backup), 'utf8'), prior);
   } finally {
     run.cleanup();
   }

@@ -168,6 +168,7 @@ echo "→ Installing core behavioral layer..."
 for core_file in AGENTS.md SOUL.md IDENTITY.md; do
   copy_if_missing "$CORE_DIR/$core_file" "$WORKSPACE/$core_file"
 done
+node "$REPO_ROOT/scripts/lib/upsert-capture-guideline.js" "$WORKSPACE/AGENTS.md"
 copy_if_missing "$WORK_CONTEXT_SOURCE" "$WORKSPACE/WORK-CONTEXT.md"
 
 # ── PMS templates ──

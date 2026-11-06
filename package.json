@@ -101,6 +101,7 @@
     "scripts/release-status.js",
     "scripts/unreleased-drift-check.js",
     "scripts/lib/release-status.js",
+    "scripts/lib/upsert-capture-guideline.js",
     "scripts/active-assistant-nightly-synthesis.js",
     "scripts/active-assistant-provider.js",
     "scripts/active-assistant-provider-preference.js",

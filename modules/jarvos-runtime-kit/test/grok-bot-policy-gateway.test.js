@@ -14,7 +14,7 @@ const gateway = require(path.join(ROOT, 'modules/jarvos-agent-context/scripts/ja
 const grok = require(path.join(ROOT, 'runtimes/grok-bot/gateway.js'));
 
 const TOKEN = 'grok-policy-test-token-32chars-x';
-const ALLOWED = ['jarvos_create_note', 'jarvos_hydrate', 'jarvos_journal_health', 'jarvos_projects_context', 'jarvos_recall',
+const ALLOWED = ['jarvos_capture', 'jarvos_create_note', 'jarvos_hydrate', 'jarvos_journal_health', 'jarvos_projects_context', 'jarvos_recall',
   'jarvos_session_thread_read', 'jarvos_session_thread_write', 'jarvos_startup_brief'];
 const PRIVILEGED = ['jarvos_control_plane', 'jarvos_coding_task', 'jarvos_shared_skills', 'jarvos_todo_update',
   'jarvos_common_work', 'jarvos_projects_update'];
@@ -123,7 +123,7 @@ async function expectRejectedWithoutDispatch(ctx, cases) {
   assert.equal(ctx.bridge.sent.length, baseline, 'nothing denied may reach the child');
 }
 
-test('Grok policy initialize is tools-only and discovery exposes exactly eight closed gateway-owned schemas', async () => {
+test('Grok policy initialize is tools-only and discovery exposes exactly nine closed gateway-owned schemas', async () => {
   await withServer(GROK(), async (ctx) => {
     assert.deepEqual(ctx.init.json.result.capabilities, { tools: {} });
     assert.equal(ctx.init.json.result.instructions, undefined);
@@ -447,6 +447,8 @@ test('grokChildEnv keeps a finite config allowlist and drops credentials and ser
   for (const key of Object.keys(keep)) assert.ok(list.includes(key), key);
   for (const name of list) assert.doesNotMatch(name, /TOKEN|SECRET|API_KEY|CREDENTIAL|PASSWORD|PAPERCLIP|NODE_OPTIONS|SERVICE_MODULE|HARNESS/);
   for (const key of Object.keys(child)) assert.ok(list.includes(key), key);
+  assert.equal(child.JARVOS_CAPTURE_SOURCE, 'grok-bot');
+  assert.equal(grok.grokChildEnv({ JARVOS_CAPTURE_SOURCE: 'forged' }).JARVOS_CAPTURE_SOURCE, 'grok-bot');
 
   let captured = null;
   const bridge = gateway.startStdioBridge({ spawn: (_c, _a, options) => { captured = options.env; return fakeChild(); }, restart: false, env: source, childEnv: grok.grokChildEnv });
@@ -583,4 +585,53 @@ test('thread write stamp preserves the shared no-link default without a socket',
   assert.equal(stamped.host, 'grok-bot');
   assert.equal(Object.hasOwn(stamped, 'journalPolicy'), false);
   assert.deepEqual(THREAD_WRITE, { threadId: 'grok-thread-0001', summary: 'Grok checkpoint' });
+});
+
+
+test('Grok capture mirrors the MCP closed schema and rejects caller source or invalid consent before dispatch', async () => {
+  await withServer(GROK(), async (ctx) => {
+    const schemas = await listSchemas(ctx);
+    const { TOOLS } = require(path.join(ROOT, 'modules/jarvos-agent-context/scripts/jarvos-mcp.js'));
+    assert.deepEqual(schemas.jarvos_capture, TOOLS.find(tool => tool.name === 'jarvos_capture').inputSchema);
+    const base = { kind: 'idea', text: 'An invented tidal garden.', words: 'user', asked: 'explicit' };
+    for (const kind of ['idea', 'journal', 'note']) {
+      const args = { ...base, kind, model: 'test-model', date: '2030-02-03', ...(kind === 'note' ? { title: 'Invented garden' } : {}) };
+      assert.equal((await ctx.post(toolCall(90, 'jarvos_capture', args))).status, 200);
+      assert.deepEqual(callsTo(ctx.bridge, 'jarvos_capture').at(-1).params.arguments, args);
+    }
+    const rejected = [
+      { ...base, source: 'forged' }, { ...base, kind: 'other' },
+      { ...base, words: 'human' }, { ...base, asked: 'implicit' },
+      { ...base, date: 'tomorrow' }, { ...base, title: '' }, { ...base, model: '' },
+    ];
+    for (const field of ['kind', 'text', 'words', 'asked']) {
+      const args = { ...base }; delete args[field]; rejected.push(args);
+    }
+    await expectRejectedWithoutDispatch(ctx, rejected.map(args => ['jarvos_capture', args]));
+  });
+});
+
+
+test('capture policy matches MCP and stamps the source through MCP dispatch without a socket', async () => {
+  const context = require(path.join(ROOT, 'modules/jarvos-agent-context/src'));
+  const mcp = require(path.join(ROOT, 'modules/jarvos-agent-context/scripts/jarvos-mcp.js'));
+  const spec = grok.GROK_TOOL_POLICY.tools.jarvos_capture;
+  const canonical = mcp.TOOLS.find(tool => tool.name === 'jarvos_capture').inputSchema;
+  assert.deepEqual(spec.properties, canonical.properties);
+  assert.deepEqual(spec.required, canonical.required);
+  assert.equal(spec.writes, true);
+  const args = { kind: 'idea', text: 'An invented tidal garden.', words: 'user', asked: 'explicit' };
+  assert.equal(gateway.readOnlyDecision(toolCall(95, 'jarvos_capture', args)).reject.body.error.code, -32602);
+  const previousLoader = context.loadSimpleCapture;
+  const previousSource = process.env.JARVOS_CAPTURE_SOURCE;
+  context.loadSimpleCapture = () => ({ simpleCapture: input => ({ ok: true, message: JSON.stringify(input) }) });
+  process.env.JARVOS_CAPTURE_SOURCE = grok.grokChildEnv({ JARVOS_CAPTURE_SOURCE: 'forged' }).JARVOS_CAPTURE_SOURCE;
+  try {
+    const result = await mcp.callTool('jarvos_capture', args);
+    assert.deepEqual(JSON.parse(result.content[0].text), { ...args, source: 'grok-bot' });
+  } finally {
+    context.loadSimpleCapture = previousLoader;
+    if (previousSource === undefined) delete process.env.JARVOS_CAPTURE_SOURCE;
+    else process.env.JARVOS_CAPTURE_SOURCE = previousSource;
+  }
 });

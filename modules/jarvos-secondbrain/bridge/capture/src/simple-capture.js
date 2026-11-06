@@ -14,8 +14,8 @@ function buildSimpleCaptureEvent(input = {}) {
   if (!['explicit', 'accepted_offer'].includes(asked)) throw new Error('save only when the user asked or accepted an offer');
   if (typeof input.source !== 'string' || !input.source.trim()) throw new Error('source must be a non-empty string');
   for (const key of ['title', 'model']) {
-    if (input[key] !== undefined && (typeof input[key] !== 'string' || !input[key].trim())) {
-      throw new Error(`${key} must be a non-empty string`);
+    if (input[key] !== undefined && (typeof input[key] !== 'string' || !input[key].trim() || /[\r\n\u2028\u2029]/.test(input[key]))) {
+      throw new Error(`${key} must be a non-empty single line`);
     }
   }
   if (input.date !== undefined && (typeof input.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.date)
