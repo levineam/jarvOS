@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const { projectStatusChanges } = require('../../modules/jarvos-agent-context/src/projects-files.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
@@ -224,6 +225,10 @@ function main(input = readHookInput()) {
     heartbeat(bridgeOptions);
     const contexts = [];
     if (projectsContextRefreshHasContent(refresh.envelope)) contexts.push(refresh.envelope.markdown);
+    if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+      try { const changes = projectStatusChanges(process.env.JARVOS_PROJECTS_DIR, sessionId); if (changes) contexts.push(changes); }
+      catch { /* the turn continues without it */ }
+    }
     if (nextInput.pendingInSessionInput && nextInput.nextTurnInput) contexts.push(additionalContext(nextInput));
     if (contexts.length > 0) {
       writeJson({

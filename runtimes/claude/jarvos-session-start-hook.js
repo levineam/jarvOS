@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const { projectStatusChanges } = require('../../modules/jarvos-agent-context/src/projects-files.js');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -115,6 +116,10 @@ async function main(hookInput = readHookInput()) {
   try {
     persistBridgeEnvironment();
     const bridgeOptions = { sessionId: hookSessionId(hookInput) };
+    // Records where the projects stand now, so the turn hook can tell this session what changes later.
+    if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+      try { projectStatusChanges(process.env.JARVOS_PROJECTS_DIR, bridgeOptions.sessionId); } catch { /* optional */ }
+    }
     stewardshipAdapter.startOrResume(bridgeOptions);
     emitLocalChangeInvalidation();
     const judgment = stewardshipContext(bridgeOptions);
