@@ -12,6 +12,11 @@ function appendJournal(cfg, { date, section, bullet, words, asked }) {
   if (typeof cfg.jarvosRepo !== 'string' || !cfg.jarvosRepo.trim()) {
     return Promise.resolve({ available: false, reason: 'jarvOS capture is unavailable: jarvosRepo is not configured' });
   }
+  // Save only where Desktop itself reads the journal; never let capture fall
+  // back to an ambient or home-default journal Desktop cannot show.
+  if (typeof cfg.vault?.journalDir !== 'string' || !cfg.vault.journalDir.trim()) {
+    return Promise.resolve({ available: false, reason: 'jarvOS capture is unavailable: the journal folder is not configured' });
+  }
   if (!path.isAbsolute(cfg.jarvosRepo)) throw new Error('jarvosRepo must be an absolute path for capture');
   const args = [path.join(cfg.jarvosRepo, 'scripts', 'jarvos.js'), 'capture',
     '--kind', section === 'Ideas' ? 'idea' : 'journal', '--date', date,

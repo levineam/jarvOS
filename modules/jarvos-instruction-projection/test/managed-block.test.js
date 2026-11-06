@@ -83,3 +83,26 @@ test('setup helper invocation embeds the canonical guideline and preserves exist
     assert.ok(setup.includes('node "$REPO_ROOT/scripts/lib/upsert-capture-guideline.js" "$WORKSPACE/AGENTS.md"'));
   }
 });
+
+test('a symlinked instruction file is updated at its target and stays a symlink', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { upsertManagedBlock } = require('../src/managed-block');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'managed-block-link-'));
+  try {
+    const target = path.join(root, 'shared', 'AGENTS.md');
+    const link = path.join(root, 'harness', 'AGENTS.md');
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.mkdirSync(path.dirname(link), { recursive: true });
+    fs.writeFileSync(target, '# Shared test instructions\n');
+    fs.symlinkSync(target, link);
+    const result = upsertManagedBlock(link, 'capture-guideline', '## Keeping things\n\nA test guideline.');
+    assert.equal(result.changed, true);
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+    assert.match(fs.readFileSync(target, 'utf8'), /# Shared test instructions\n\n<!-- jarvos:managed capture-guideline:start -->\n## Keeping things\n\nA test guideline\.\n<!-- jarvos:managed capture-guideline:end -->\n$/);
+    assert.equal(path.dirname(result.backup), path.dirname(fs.realpathSync(target)));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

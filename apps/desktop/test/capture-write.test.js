@@ -69,7 +69,7 @@ test('agent refuses other sections, missing provenance and consent before any di
 
 test('capture failures preserve the receipt and never report success or fall back to raw writes', async t => {
   const root = fakeCapture(t, { ok: false, code: 3 });
-  const tool = (await createWriteTools({ jarvosRepo: root })).append_journal;
+  const tool = (await createWriteTools({ jarvosRepo: root, vault: { journalDir: path.join(root, 'journal') } })).append_journal;
   assert.deepEqual(await tool.execute(input), { ok: false, message: 'Not confirmed yet: check the invented journal.' });
   fs.unlinkSync(path.join(root, 'scripts/jarvos.js'));
   await assert.rejects(tool.execute(input), /outcome uncertain/);
@@ -82,5 +82,14 @@ test('an installed Desktop adapter calls capture without importing repo modules'
   fs.mkdirSync(installed);
   fs.copyFileSync(path.join(__dirname, '../server/adapters/capture.js'), path.join(installed, 'capture.js'));
   const { appendJournal } = require(path.join(installed, 'capture.js'));
-  assert.equal((await appendJournal({ jarvosRepo: root }, input)).ok, true);
+  assert.equal((await appendJournal({ jarvosRepo: root, vault: { journalDir: path.join(root, 'journal') } }, input)).ok, true);
+});
+
+test('capture is unavailable without a configured journal folder, so it never saves to a default location', async t => {
+  const root = fakeCapture(t);
+  const tool = (await createWriteTools({ jarvosRepo: root })).append_journal;
+  const result = await tool.execute(input);
+  assert.equal(result.available, false);
+  assert.match(result.reason, /journal folder is not configured/);
+  assert.equal(fs.existsSync(path.join(root, 'received.json')), false);
 });
