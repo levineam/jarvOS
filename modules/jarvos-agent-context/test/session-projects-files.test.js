@@ -192,3 +192,15 @@ test('the change record is private, ignores links and corrupt entries, and a fil
   fs.writeFileSync(path.join(dir, 'A.md'), project({ id: 'p_a', title: 'A', status: 'done' }));
   assert.match(projectStatusChanges(dir, 's', { stateDir }), /- A: active → done/);
 });
+
+test('acceptance criteria count under either heading', async () => {
+  const { readProjectsFiles } = require('../src/projects-files.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acceptance-alias-'));
+  try {
+    for (const [name, heading] of [['New.md', 'Acceptance criteria'], ['Old.md', 'Definition of Done']]) {
+      fs.writeFileSync(path.join(root, name), project({ id: `p_${name}`, title: name }).replace('## Definition of Done', `## ${heading}`).replace('- [ ] Done', '- [x] One\n- [ ] Two'));
+    }
+    const { projects } = await readProjectsFiles(root);
+    for (const item of projects) assert.deepEqual(item.done, { checked: 1, total: 2 }, item.title);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
