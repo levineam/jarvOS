@@ -206,7 +206,7 @@ value, and rollback removes only these two entries.
 - `jarvos_current_work` — diagnostic compatibility-only Paperclip work summary.
 - `jarvos_recall` — GBrain/QMD/graph recall.
 - `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
-- `jarvos_create_note` — Obsidian note creation, journal wikilink, and verification.
+- `jarvos_create_note` (deprecated; use jarvos_capture with kind note).
 - `jarvos_startup_brief` — bounded startup context for future Codex hooks/wrappers.
 - `jarvos_hydrate` — bounded Codex startup packet with a host-issued Projects
   orientation packet (or explicit unavailable/partial state), today's journal,
@@ -251,22 +251,11 @@ context, not task state and not raw memory. Codex must not directly mutate
 ontology source files or rewrite `ONTOLOGY.md`; secondbrain evidence can only
 create source-backed ontology candidates or inquiry items for review.
 
-## Secondbrain Capture Rule
+## Capture
 
-For intentional capture requests such as `note:`, `make a note`, `idea:`, or
-`save this`, Codex should call the jarvOS universal capture entrypoint instead
-of raw-writing Markdown. Resolve the trusted jarvOS installation outside the
-current workspace and use its absolute path:
+Save requested Ideas, Journal entries and notes with `jarvos_capture` (or `jarvos capture` when no jarvOS tool is available). Follow the single [capture guideline](../../modules/jarvos-instruction-projection/content/capture-guideline.md); provenance and safety are handled inside the tool.
 
-```bash
-node "/absolute/path/to/trusted/jarvOS/modules/jarvos-secondbrain/scripts/jarvos-capture.js"
-```
-
-The capture event source is `codex`. Successful note captures must end up under
-the configured `Notes/` directory, link exactly once from
-`Journal/YYYY-MM-DD.md`, record source-backed provenance, and leave QMD/search
-freshness as `pending-refresh`. Codex must not create guessed daily journal
-files under `Notes/`.
+The Codex adapter writes no instruction file; the guideline arrives through `jarvos_capture`’s description and the session-start packet.
 
 Native stewardship hooks require `JARVOS_STEWARDSHIP_BRIDGE_COMMAND` to name a
 canonical absolute executable with trusted ownership, safe ancestor permissions

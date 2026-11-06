@@ -5,8 +5,8 @@
  * Grok Bot policy MCP gateway. Runs on whichever host the existing connector
  * URL points at (Mac mini primary); no target routing happens here.
  *
- * Reuses jarvos-mcp-http.js with a fixed, host-owned tool policy: exactly eight
- * tools with gateway-owned closed schemas, two of which (jarvos_create_note,
+ * Reuses jarvos-mcp-http.js with a fixed, host-owned tool policy: exactly nine
+ * tools with gateway-owned closed schemas, three of which (jarvos_capture, jarvos_create_note,
  * jarvos_session_thread_write) mutate through the canonical child MCP tools.
  * Only Grok credentials are read. The policy is RPC authorization, and the
  * stripped child environment is configuration hygiene, not an OS sandbox.
@@ -79,6 +79,19 @@ const GROK_TOOL_POLICY = deepFreeze({
     },
     jarvos_recall: clone(gateway.READ_ONLY_TOOLS.jarvos_recall),
     jarvos_journal_health: { properties: {} },
+    jarvos_capture: {
+      required: ['kind', 'text', 'words', 'asked'],
+      properties: {
+        kind: { type: 'string', enum: ['idea', 'journal', 'note'] },
+        text: { type: 'string', minLength: 1 },
+        words: { type: 'string', enum: ['user', 'assistant', 'mixed'] },
+        asked: { type: 'string', enum: ['explicit', 'accepted_offer'] },
+        title: { type: 'string', minLength: 1 },
+        model: { type: 'string', minLength: 1 },
+        date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      },
+      writes: true,
+    },
     jarvos_create_note: {
       required: ['title', 'content'],
       properties: {
@@ -160,6 +173,7 @@ const GROK_CHILD_ENV_ALLOWLIST = Object.freeze([
   'JARVOS_RETRIEVAL_TIMEOUT_MS',
   'JARVOS_REQUIRE_ROUTE_CAPABILITY',
   'JARVOS_REQUIRE_CANONICAL_VAULT',
+  'JARVOS_CAPTURE_SOURCE',
 ]);
 
 function grokChildEnv(sourceEnv = process.env) {
@@ -167,6 +181,8 @@ function grokChildEnv(sourceEnv = process.env) {
   for (const key of GROK_CHILD_ENV_ALLOWLIST) {
     if (Object.prototype.hasOwnProperty.call(sourceEnv, key) && typeof sourceEnv[key] === 'string') next[key] = sourceEnv[key];
   }
+  // Host attribution cannot be selected by a remote caller or ambient env.
+  next.JARVOS_CAPTURE_SOURCE = GROK_SOURCE_PERSONALITY;
   return next;
 }
 

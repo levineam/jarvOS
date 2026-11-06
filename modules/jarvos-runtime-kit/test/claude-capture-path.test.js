@@ -21,6 +21,8 @@ test('Claude setup materializes a quoted capture path that ignores a hostile wor
       'runtimes/claude/templates/CLAUDE.md.template',
       'modules/jarvos-instruction-projection/content/durable-orientation.md',
       'modules/jarvos-runtime-kit/src/trusted-native-command.js',
+      'modules/jarvos-instruction-projection/src/capture-guideline.js',
+      'modules/jarvos-instruction-projection/content/capture-guideline.md',
     ]) {
       const destination = path.join(install, relative);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -56,8 +58,10 @@ test('Claude setup materializes a quoted capture path that ignores a hostile wor
     assert.equal(result.status, 0, result.stderr || result.stdout);
     const content = fs.readFileSync(markdown, 'utf8');
     assert.match(content, /Preserve my local extension\./);
-    assert.doesNotMatch(content, /\{\{JARVOS_CAPTURE_SCRIPT\}\}/);
-    const command = content.split('## Secondbrain Capture Rule')[1].match(/```bash\n(node [^\n]+)\n```/)[1];
+    assert.doesNotMatch(content, /\{\{JARVOS_CAPTURE_SCRIPT\}\}|\{\{JARVOS_CAPTURE_GUIDELINE\}\}/);
+    assert.match(content, /<!-- jarvos:managed capture-guideline:start -->\n## Keeping things\n\nWhen the user shares something worth keeping/);
+    assert.doesNotMatch(content, /Secondbrain Capture Rule/);
+    const command = content.split('## Keeping things')[1].match(/```bash\n(node [^\n]+)\n```/)[1];
     const executed = spawnSync('/bin/sh', ['-c', command], { cwd: workspace, env, encoding: 'utf8' });
     assert.equal(executed.status, 0, executed.stderr);
     assert.equal(fs.readFileSync(marker, 'utf8'), 'trusted');

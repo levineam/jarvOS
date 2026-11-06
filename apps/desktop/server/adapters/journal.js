@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { JOURNAL_HEADINGS } = require('../journal-headings');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
 
@@ -90,54 +89,4 @@ function today(journalDir, date) {
   return readDay(journalDir, date);
 }
 
-function appendBullet(journalDir, date, section, bullet) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) {
-    const err = new Error('date=YYYY-MM-DD required');
-    err.status = 400;
-    throw err;
-  }
-  const cleanSection = String(section || 'Agent Notes').replace(/\n/g, ' ').trim() || 'Agent Notes';
-  const cleanBullet = String(bullet || '').replace(/\r?\n/g, ' ').trim();
-  if (!cleanBullet) {
-    const err = new Error('bullet required');
-    err.status = 400;
-    throw err;
-  }
-  fs.mkdirSync(journalDir, { recursive: true });
-  const file = path.join(journalDir, `${date}.md`);
-  let raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : `---\ndate: ${date}\n---\n\n`;
-  const journalHeadings = JOURNAL_HEADINGS;
-  const isJournal = cleanSection === 'Journal' || journalHeadings.includes(`## ${cleanSection}`);
-  const heading = isJournal ? journalHeadings[0] : `## ${cleanSection}`;
-  // Find the real Journal heading: canonical first, never one inside
-  // frontmatter or shown as an example in a fenced code block.
-  const rawLines = raw.split('\n');
-  const hidden = [];
-  let fence = null;
-  let inFrontmatter = rawLines[0]?.trim() === '---';
-  rawLines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (inFrontmatter) { hidden.push(true); if (index > 0 && trimmed === '---') inFrontmatter = false; return; }
-    const delimiter = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
-    if (fence) { hidden.push(true); if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null; return; }
-    if (delimiter) { hidden.push(true); fence = delimiter[1]; return; }
-    hidden.push(false);
-  });
-  const headingIndex = (candidate) => rawLines.findIndex((line, index) => !hidden[index] && line.trim() === candidate);
-  const existingHeading = isJournal && journalHeadings.find((candidate) => headingIndex(candidate) !== -1);
-  const escapedHeading = cleanSection.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sectionRe = new RegExp(`(^##\\s+${escapedHeading}\\s*$)`, 'm');
-  const addition = `- ${cleanBullet}`;
-  if (existingHeading) {
-    rawLines.splice(headingIndex(existingHeading) + 1, 0, addition);
-    raw = rawLines.join('\n');
-  } else if (!isJournal && sectionRe.test(raw)) {
-    raw = raw.replace(sectionRe, `$1\n${addition}`);
-  } else {
-    raw = `${raw.trimEnd()}\n\n${heading}\n${addition}\n`;
-  }
-  fs.writeFileSync(file, raw.endsWith('\n') ? raw : `${raw}\n`);
-  return { date, section: cleanSection, appended: true, path: file };
-}
-
-module.exports = { stream, today, readDay, parseSections, appendBullet };
+module.exports = { stream, today, readDay, parseSections };

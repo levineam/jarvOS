@@ -41,7 +41,7 @@ function childReply(message) {
       jsonrpc: '2.0',
       id: message.id,
       result: {
-        tools: ['jarvos_hydrate', 'jarvos_create_note', 'jarvos_recall', 'jarvos_control_plane', 'jarvos_startup_brief',
+        tools: ['jarvos_hydrate', 'jarvos_capture', 'jarvos_create_note', 'jarvos_recall', 'jarvos_control_plane', 'jarvos_startup_brief',
           'jarvos_session_thread_write', 'jarvos_projects_context', 'jarvos_shared_skills']
           .map((name) => ({ name, description: `${name} description`, inputSchema: open })),
       },
@@ -258,7 +258,7 @@ test('read-only denies other methods, notifications, client responses and GET wi
     const batch = await httpRequest(port, { session, body: [toolCall(13, 'jarvos_hydrate', {})] });
     assert.equal(batch.status, 400);
 
-    for (const name of ['jarvos_create_note', 'jarvos_session_thread_write', 'jarvos_session_thread_read', 'jarvos_control_plane',
+    for (const name of ['jarvos_capture', 'jarvos_create_note', 'jarvos_session_thread_write', 'jarvos_session_thread_read', 'jarvos_control_plane',
       'jarvos_shared_skills', 'jarvos_synthesize', 'constructor', '__proto__']) {
       const denied = await httpRequest(port, { session, body: toolCall(14, name, {}) });
       assert.equal(denied.json.error.code, -32602, name);
@@ -400,7 +400,7 @@ test('default mode keeps legacy forwarding of prompts, client responses and GET 
     assert.equal(bridge.sent.at(-1).method, 'prompts/get');
 
     const list = await httpRequest(port, { session, body: { jsonrpc: '2.0', id: 3, method: 'tools/list' } });
-    assert.equal(list.json.result.tools.length, 8);
+    assert.equal(list.json.result.tools.length, 9);
 
     const write = await httpRequest(port, { session, body: toolCall(4, 'jarvos_create_note', { title: 't', config: 'c' }) });
     assert.equal(write.status, 200);

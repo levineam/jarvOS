@@ -4,7 +4,7 @@ async function createWriteTools(cfg) {
   const { tool } = await import('ai');
   const { z } = await import('zod');
   const notes = require('../../adapters/notes');
-  const journal = require('../../adapters/journal');
+  const capture = require('../../adapters/capture');
   const paperclip = require('../../adapters/paperclip');
   const unavailable = (name) => ({ available: false, reason: `${name} is not configured` });
   const has = (value) => typeof value === 'string' && value.trim() !== '';
@@ -19,13 +19,15 @@ async function createWriteTools(cfg) {
       execute: async ({ title, content }) => has(cfg.vault?.notesDir) ? notes.create(cfg.vault.notesDir, title, content) : unavailable('Notes vault'),
     }),
     append_journal: tool({
-      description: 'Append a bullet to a journal day. Additive only. Requires user approval.',
+      description: 'Save to Ideas or Journal through jarvOS capture after the user asks or accepts an offer. Requires user approval.',
       inputSchema: z.object({
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-        section: z.string().default('Agent Notes'),
+        section: z.enum(['Ideas', 'Journal']),
         bullet: z.string().min(1),
+        words: z.enum(['user', 'assistant', 'mixed']),
+        asked: z.enum(['explicit', 'accepted_offer']),
       }),
-      execute: async ({ date, section, bullet }) => has(cfg.vault?.journalDir) ? journal.appendBullet(cfg.vault.journalDir, date, section, bullet) : unavailable('Journal'),
+      execute: async (input) => capture.appendJournal(cfg, input),
     }),
     create_paperclip_issue: tool({
       description: 'Create a Paperclip issue. Requires user approval.',

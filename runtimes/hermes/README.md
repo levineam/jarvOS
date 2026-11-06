@@ -127,3 +127,7 @@ The shared MCP context, verified skill projection, and bounded first-turn
 hydration plugin are supported on Hermes versions that expose these plugin
 hooks. Manual `jarvos_hydrate` remains the fallback when the plugin is not
 installed or enabled.
+
+## Capture
+
+Save requested Ideas, Journal entries and notes with `jarvos_capture` (or `jarvos capture` when no jarvOS tool is available). Setup keeps the single [capture guideline](../../modules/jarvos-instruction-projection/content/capture-guideline.md) current in workspace `AGENTS.md` through a managed block, with a backup before changes; other files remain copy-if-missing.

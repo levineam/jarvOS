@@ -33,7 +33,7 @@
       "notes": {
         "create": {
           "status": "supported",
-          "transport": "jarvos_create_note MCP tool",
+          "transport": "jarvos_capture MCP tool (kind note)",
           "evidence": "sharedAgentContext required tools over HTTP/SSE"
         },
         "read": {
@@ -126,6 +126,7 @@
       "jarvos_startup_brief",
       "jarvos_projects_context",
       "jarvos_recall",
+      "jarvos_capture",
       "jarvos_create_note",
       "jarvos_session_thread_read",
       "jarvos_session_thread_write",
@@ -139,7 +140,7 @@
       "mcp": {
         "supported": true,
         "transport": "http",
-        "registration": "On the VAULT HOST run the scoped launcher runtimes/grok-bot/gateway.js (authenticated Streamable HTTP; fixed eight-tool policy with host-owned closed arguments; Mcp-Session-Id per initialize) with a Grok-only token from JARVOS_GROK_MCP_TOKEN_FILE. On Grok Bot register only the TLS or tunneled URL plus that bearer token. Do not register stdio MCP on the Grok Bot disk; that hydrates the wrong machine. Do not reuse the full-surface general gateway or its token. requiredTools is a declaration; enforcement lives in the launcher."
+        "registration": "On the VAULT HOST run the scoped launcher runtimes/grok-bot/gateway.js (authenticated Streamable HTTP; fixed nine-tool policy with host-owned closed arguments; Mcp-Session-Id per initialize) with a Grok-only token from JARVOS_GROK_MCP_TOKEN_FILE. On Grok Bot register only the TLS or tunneled URL plus that bearer token. Do not register stdio MCP on the Grok Bot disk; that hydrates the wrong machine. Do not reuse the full-surface general gateway or its token. requiredTools is a declaration; enforcement lives in the launcher."
       },
       "hydration": {
         "mode": "manual",
