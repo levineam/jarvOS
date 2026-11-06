@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const { projectStatusChanges } = require('../../modules/jarvos-agent-context/src/projects-files.js');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -115,12 +116,17 @@ async function main(hookInput = readHookInput()) {
   try {
     persistBridgeEnvironment();
     const bridgeOptions = { sessionId: hookSessionId(hookInput) };
+    // Records where the projects stand now, so the turn hook can tell this session what changes later.
+    if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+      try { projectStatusChanges(process.env.JARVOS_PROJECTS_DIR, bridgeOptions.sessionId); } catch { /* optional */ }
+    }
     stewardshipAdapter.startOrResume(bridgeOptions);
     emitLocalChangeInvalidation();
     const judgment = stewardshipContext(bridgeOptions);
     // A single hard-timeout start call; invalid, timed out, nonzero, or
     // unavailable all fail open to the ordinary hydrate() Projects fallback.
-    const refresh = projectsContextStart(bridgeOptions);
+    // When the host points at the project files, the packet reads them; the bridge's snapshot can lag them.
+    const refresh = process.env.JARVOS_PROJECTS_DIR === undefined ? projectsContextStart(bridgeOptions) : {};
     const projectsContextMarkdown = projectsContextRefreshHasContent(refresh.envelope) ? refresh.envelope.markdown : '';
     let hydration = '';
     try {

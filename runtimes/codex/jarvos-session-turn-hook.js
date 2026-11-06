@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const { projectStatusChanges } = require('../../modules/jarvos-agent-context/src/projects-files.js');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { trustedExecutable } = require('../../modules/jarvos-runtime-kit/src/trusted-native-command.js');
@@ -234,12 +235,17 @@ function main(sessionId = readHookInput('UserPromptSubmit')) {
     }
     // Exactly one refresh call per turn boundary; a timeout, invalid, or
     // unavailable result continues the turn with no injection and no retry.
-    const refresh = projectsContextRefresh({ env });
+    // With the project files as the source, a snapshot refresh would contradict what the session read at start.
+    const refresh = process.env.JARVOS_PROJECTS_DIR === undefined ? projectsContextRefresh({ env }) : {};
     const input = nextTurnInput({ env });
     const sessionWait = sessionWaitNextTurn({ env });
     heartbeat({ env });
     const contexts = [];
     if (projectsContextRefreshHasContent(refresh.envelope)) contexts.push(refresh.envelope.markdown);
+    if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+      try { const changes = projectStatusChanges(process.env.JARVOS_PROJECTS_DIR, sessionId); if (changes) contexts.push(changes); }
+      catch { /* the turn continues without it */ }
+    }
     if (input.pendingInSessionInput && input.nextTurnInput) contexts.push(additionalContext(input));
     const waitContext = sessionWaitContext(sessionWait);
     if (waitContext) contexts.push(waitContext);

@@ -12,6 +12,7 @@ const os = require('os');
 const crypto = require('node:crypto');
 const { spawnSync } = require('child_process');
 const { createHostProjectsContextProvider } = require('./projects-context-bootstrap');
+const { readProjectsFiles, renderProjectsFilesMarkdown } = require('./projects-files');
 const { normalizeProposal, ProposalValidationError } = require('./projects-proposals');
 
 const {
@@ -2052,6 +2053,29 @@ async function hydrate(options = {}) {
     // build, no Projects markdown in this packet.
     report.projectsContext = { status: 'disabled', fingerprint: null, code: null };
     report.handles.push('Projects context: disabled for this hydration call');
+  } else if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+    // A host that points at the project files gets them read now, instead of a provider's snapshot,
+    // which can lag the files (paused projects shown as active). The host sets the folder, not the caller.
+    const directory = process.env.JARVOS_PROJECTS_DIR;
+    const files = await readProjectsFiles(directory);
+    report.projectsContext = { status: files.status, fingerprint: null, code: files.code || null, source: 'project-files' };
+    // Sized to what the packet has room for, so the list folds itself rather than being cut mid-block.
+    // The body gets what's left after the report's reserve, so the list folds before the packet is cut.
+    const budget = Math.min(Number(options.projectsContextMaxChars || 3600), Math.max(600, maxChars - 1800 - 200 - parts.join('\n').length));
+    parts.push(renderProjectsFilesMarkdown(files, { directory, maxChars: budget }), '');
+    if (files.status === 'ok') {
+      report.sources.push(`jarvos.projects-files/v1 (${files.count} projects)`);
+      report.handles.push(`Projects: read from the project files in ${directory}`);
+    } else {
+      report.omissions.push('Projects unavailable: the project files could not be read');
+    }
+    // The resume check compares a pin against a provider packet, which file mode doesn't build. Say so
+    // rather than skip it silently.
+    if (options[HYDRATION_ACCOUNTABILITY_PIN] !== undefined && options[HYDRATION_ACCOUNTABILITY_PIN] !== null) {
+      report.accountability = { status: 'unavailable', code: 'ACCOUNTABILITY_UNAVAILABLE_PROJECT_FILES', briefState: null };
+      parts.push('## Accountability resume\nUnavailable: the assignment check needs the Projects provider, and this host reads the project files instead. Confirm the assignment before resuming.', '');
+      report.handles.push('Accountability resume: unavailable');
+    }
   } else {
     // Hydration is an orientation consumer, not a generic Projects query
     // surface.  Its host-issued profile is fixed so startup, MCP hydration, and
@@ -2149,7 +2173,10 @@ async function hydrate(options = {}) {
   const reservedReportChars = 1800;
   if (body.length > maxChars - reservedReportChars) {
     report.omissions.push(`body trimmed from ${body.length} to fit final budget`);
-    body = `${body.slice(0, Math.max(0, maxChars - reservedReportChars - 80)).trimEnd()}\n\n[hydration body trimmed to preserve report]`;
+    body = body.slice(0, Math.max(0, maxChars - reservedReportChars - 110)).trimEnd();
+    // A cut inside the project data block still closes it, so nothing after it reads as project data.
+    if (body.lastIndexOf('<untrusted-project-data>') > body.lastIndexOf('</untrusted-project-data>')) body += '\n</untrusted-project-data>';
+    body += '\n\n[hydration body trimmed to preserve report]';
   }
 
   let markdown = `${body}\n\n${renderHydrationReport(report, maxChars)}`;
