@@ -3,6 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { resolveConfig, resolveJournalConfig } = require('../bridge/config');
 const { headingsForSection } = require('../packages/jarvos-secondbrain-journal/src/section-config');
 const { hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
@@ -79,11 +80,16 @@ function run({ vaultRoot, journalDir, mode = '--dry-run', preimagePath } = {}, {
   const backup = mode === '--dry-run' ? null : externalPreimage(root, preimagePath);
   const output = [];
   let files;
+  // Each apply is its own run; its id lives in the backup so a restore (or a
+  // retried restore) uses the same identity, while a later apply gets a new one.
+  let runId = mode === '--apply' ? crypto.randomUUID() : null;
   let skipped = 0;
   let canonical = 0;
   if (mode === '--restore') {
     const bundle = JSON.parse(readText(backup));
-    if (bundle.schema !== BUNDLE_SCHEMA || bundle.vaultRoot !== root || !Array.isArray(bundle.files)) throw new Error('Invalid preimage bundle');
+    if (bundle.schema !== BUNDLE_SCHEMA || bundle.vaultRoot !== root || !Array.isArray(bundle.files)
+      || typeof bundle.runId !== 'string' || !bundle.runId) throw new Error('Invalid preimage bundle');
+    runId = bundle.runId;
     const seen = new Set();
     files = bundle.files.map((file) => {
       if (typeof file.content !== 'string' || file.hash !== hashUtf8(file.content) || seen.has(file.journalPath)) throw new Error('Invalid preimage content');
@@ -106,7 +112,7 @@ function run({ vaultRoot, journalDir, mode = '--dry-run', preimagePath } = {}, {
       files.push({ journalPath, target, content, hash: hashUtf8(content), writtenHash: hashUtf8(plan.nextContent), expectedContent: content, nextContent: plan.nextContent });
     }
     if (mode === '--apply' && files.length) {
-      const bundle = { schema: BUNDLE_SCHEMA, vaultRoot: root, files: files.map(({ journalPath, content, hash, writtenHash }) => ({ journalPath, content, hash, writtenHash })) };
+      const bundle = { schema: BUNDLE_SCHEMA, vaultRoot: root, runId, files: files.map(({ journalPath, content, hash, writtenHash }) => ({ journalPath, content, hash, writtenHash })) };
       const fd = fs.openSync(backup, 'wx', 0o600);
       try { fs.writeFileSync(fd, JSON.stringify(bundle, null, 2) + '\n', 'utf8'); fs.fsyncSync(fd); }
       finally { fs.closeSync(fd); }
@@ -121,7 +127,7 @@ function run({ vaultRoot, journalDir, mode = '--dry-run', preimagePath } = {}, {
         output.push(`${file.journalPath}: skipped (changed since ${mode === '--restore' ? 'rename; restore refused' : 'read; mutation refused'})`);
         continue;
       }
-      const intentId = `journal-heading-${hashUtf8(JSON.stringify([file.journalPath, mode, hashUtf8(file.expectedContent), hashUtf8(file.nextContent)]))}`;
+      const intentId = `journal-heading-${hashUtf8(JSON.stringify([runId, file.journalPath, mode, hashUtf8(file.expectedContent), hashUtf8(file.nextContent)]))}`;
       const receipt = service.applyMarkdownMutation({ vaultRelativePath: file.journalPath, expectedContent: file.expectedContent, nextContent: file.nextContent, intentId });
       if (!['committed', 'already_satisfied'].includes(receipt.status) || receipt.obsidian !== 'acknowledged') throw new Error('Mutation was not acknowledged');
       if (readText(file.target) !== file.nextContent) throw new Error('Journal readback does not match');

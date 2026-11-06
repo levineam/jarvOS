@@ -219,3 +219,20 @@ test('CLI uses the configured journal directory when path flags are omitted', t 
   assert.match(result.stdout, /Files to change: 1/);
   assert.equal(fs.readFileSync(f.filePath, 'utf8'), original);
 });
+
+test('apply, restore, then apply again works with a fresh backup; each run has its own id', t => {
+  const f = fixture(t);
+  let service;
+  const createService = () => (service ||= appService(f));
+  assert.equal(run({ ...f, mode: '--apply' }, { createService }).changed, 1);
+  const firstRun = JSON.parse(fs.readFileSync(f.preimagePath, 'utf8')).runId;
+  assert.equal(run({ ...f, mode: '--restore' }, { createService }).changed, 1);
+  assert.equal(fs.readFileSync(f.filePath, 'utf8'), original);
+  const secondPreimage = path.join(f.root, 'preimage-2.json');
+  assert.equal(run({ ...f, preimagePath: secondPreimage, mode: '--apply' }, { createService }).changed, 1);
+  assert.equal(fs.readFileSync(f.filePath, 'utf8'), renamed);
+  const secondRun = JSON.parse(fs.readFileSync(secondPreimage, 'utf8')).runId;
+  assert.ok(firstRun && secondRun && firstRun !== secondRun);
+  assert.equal(run({ ...f, preimagePath: secondPreimage, mode: '--restore' }, { createService }).changed, 1);
+  assert.equal(fs.readFileSync(f.filePath, 'utf8'), original);
+});
