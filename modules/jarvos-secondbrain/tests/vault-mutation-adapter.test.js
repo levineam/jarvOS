@@ -835,3 +835,21 @@ test('reconciler drains a valid journal transform after pre-dispatch quarantine 
     assert.equal(ledger.get(later.operationId).status, 'acknowledged');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('the Obsidian CLI never inherits ELECTRON_RUN_AS_NODE from an Electron-hosted caller', () => {
+  const { runObsidianEval, obsidianCliEnv } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  assert.equal(obsidianCliEnv({ ELECTRON_RUN_AS_NODE: '1', KEEP: 'yes' }).ELECTRON_RUN_AS_NODE, undefined);
+  assert.equal(obsidianCliEnv({ ELECTRON_RUN_AS_NODE: '1', KEEP: 'yes' }).KEEP, 'yes');
+  const previous = process.env.ELECTRON_RUN_AS_NODE;
+  process.env.ELECTRON_RUN_AS_NODE = '1';
+  let seen = null;
+  try {
+    try {
+      runObsidianEval('1', { vaultName: 'test-vault', emptyRetries: 0, execute: (command, args, options) => { seen = options.env; return '=> "ok"'; } });
+    } catch { /* output parsing is not under test */ }
+  } finally {
+    if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE; else process.env.ELECTRON_RUN_AS_NODE = previous;
+  }
+  assert.ok(seen, 'execute received an env');
+  assert.equal(seen.ELECTRON_RUN_AS_NODE, undefined);
+});

@@ -32,6 +32,11 @@ function appendJournal(cfg, { date, section, bullet, words, asked }, { appDir } 
   if (typeof cfg.vault?.journalDir !== 'string' || !cfg.vault.journalDir.trim()) {
     return Promise.resolve({ available: false, reason: 'jarvOS capture is unavailable: the journal folder is not configured' });
   }
+  // The guarded writer needs the real vault; guessing it from the journal
+  // folder could target the wrong Obsidian vault.
+  if (typeof cfg.vault?.root !== 'string' || !cfg.vault.root.trim()) {
+    return Promise.resolve({ available: false, reason: 'jarvOS capture is unavailable: set vault.root in the Desktop configuration' });
+  }
   if (!path.isAbsolute(jarvosRoot)) throw new Error('jarvosRepo must be an absolute path for capture');
   const args = [path.join(jarvosRoot, 'scripts', 'jarvos.js'), 'capture',
     '--kind', section === 'Ideas' ? 'idea' : 'journal', '--date', date,

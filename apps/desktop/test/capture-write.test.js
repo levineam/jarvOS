@@ -71,7 +71,7 @@ test('agent refuses other sections, missing provenance and consent before any di
 
 test('capture failures preserve the receipt and never report success or fall back to raw writes', async t => {
   const root = fakeCapture(t, { ok: false, code: 3 });
-  const tool = (await createWriteTools({ jarvosRepo: root, vault: { journalDir: path.join(root, 'journal') } })).append_journal;
+  const tool = (await createWriteTools({ jarvosRepo: root, vault: { root, journalDir: path.join(root, 'journal') } })).append_journal;
   assert.deepEqual(await tool.execute(input), { ok: false, message: 'Not confirmed yet: check the invented journal.' });
   fs.unlinkSync(path.join(root, 'scripts/jarvos.js'));
   await assert.rejects(tool.execute(input), /outcome uncertain/);
@@ -84,7 +84,7 @@ test('an installed Desktop adapter calls capture without importing repo modules'
   fs.mkdirSync(installed);
   fs.copyFileSync(path.join(__dirname, '../server/adapters/capture.js'), path.join(installed, 'capture.js'));
   const { appendJournal } = require(path.join(installed, 'capture.js'));
-  assert.equal((await appendJournal({ jarvosRepo: root, vault: { journalDir: path.join(root, 'journal') } }, input)).ok, true);
+  assert.equal((await appendJournal({ jarvosRepo: root, vault: { root, journalDir: path.join(root, 'journal') } }, input)).ok, true);
 });
 
 test('capture is unavailable without a configured journal folder, so it never saves to a default location', async t => {
@@ -101,7 +101,15 @@ test('an installed copy finds jarvOS through the location the installer recorded
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-installed-source-'));
   t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
   fs.writeFileSync(path.join(appDir, 'install-source.json'), JSON.stringify({ jarvosRoot: root }));
-  const result = await appendJournal({ vault: { journalDir: path.join(root, 'journal') } }, input, { appDir });
+  const result = await appendJournal({ vault: { root, journalDir: path.join(root, 'journal') } }, input, { appDir });
   assert.equal(result.ok, true);
   assert.equal(resolveJarvosRoot({ jarvosRepo: '/an/explicit/test/repo' }, appDir), '/an/explicit/test/repo');
+});
+
+test('capture asks for vault.root rather than guessing the vault from the journal folder', async t => {
+  const root = fakeCapture(t);
+  const result = await appendJournal({ jarvosRepo: root, vault: { journalDir: path.join(root, 'journal') } }, input);
+  assert.equal(result.available, false);
+  assert.match(result.reason, /set vault\.root/);
+  assert.equal(fs.existsSync(path.join(root, 'received.json')), false);
 });
