@@ -196,3 +196,8 @@ test('the router never adds a backlink for a note whose write failed', () => {
   assert.equal(journalCalls, 0);
   assert.match(response.message, /^Not saved: /);
 });
+
+test('title and model must be single lines', () => {
+  assert.throws(() => buildSimpleCaptureEvent({ ...base, kind: 'note', title: 'A test\ntitle' }), /single line/);
+  assert.throws(() => buildSimpleCaptureEvent({ ...base, model: 'test\rmodel' }), /single line/);
+});
