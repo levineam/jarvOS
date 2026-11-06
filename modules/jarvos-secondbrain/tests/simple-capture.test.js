@@ -69,10 +69,14 @@ test('simple capture passes options and reports plain acknowledged or failed mes
     assert.equal(response.ok, false);
     assert.match(response.message, /^Not confirmed yet: .*Check whether it is there before saving it again\.$/);
   }
-  for (const outcomes of [['failed'], ['deferred', 'failed']]) {
+  for (const outcomes of [['deferred', 'failed'], ['saved_locally_sync_pending', 'failed']]) {
     const response = simpleCapture(base, { capture: () => receipt(...outcomes) });
+    assert.match(response.message, /^Not confirmed yet: /);
+  }
+  for (const outcome of ['failed', 'conflict']) {
+    const response = simpleCapture(base, { capture: () => receipt(outcome) });
     assert.equal(response.ok, false);
-    assert.match(response.message, /^Not saved: .*failed/);
+    assert.match(response.message, new RegExp(`^Not saved: .*${outcome}`));
   }
   assert.equal(simpleCapture(base, { capture: () => ({ ok: false, error: 'A test failure\nwith detail' }) }).message, 'Not saved: A test failure with detail');
 });
