@@ -100,15 +100,28 @@ function appendBullet(journalDir, date, section, bullet) {
   const journalHeadings = JOURNAL_HEADINGS;
   const isJournal = cleanSection === 'Journal' || journalHeadings.includes(`## ${cleanSection}`);
   const heading = isJournal ? journalHeadings[0] : `## ${cleanSection}`;
-  const existingHeading = isJournal && journalHeadings.find((candidate) => raw.split('\n').some((line) => line.trimEnd() === candidate));
+  // Find the real Journal heading: canonical first, never one inside
+  // frontmatter or shown as an example in a fenced code block.
+  const rawLines = raw.split('\n');
+  const hidden = [];
+  let fence = null;
+  let inFrontmatter = rawLines[0]?.trim() === '---';
+  rawLines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (inFrontmatter) { hidden.push(true); if (index > 0 && trimmed === '---') inFrontmatter = false; return; }
+    const delimiter = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
+    if (fence) { hidden.push(true); if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null; return; }
+    if (delimiter) { hidden.push(true); fence = delimiter[1]; return; }
+    hidden.push(false);
+  });
+  const headingIndex = (candidate) => rawLines.findIndex((line, index) => !hidden[index] && line.trim() === candidate);
+  const existingHeading = isJournal && journalHeadings.find((candidate) => headingIndex(candidate) !== -1);
   const escapedHeading = cleanSection.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const sectionRe = new RegExp(`(^##\\s+${escapedHeading}\\s*$)`, 'm');
   const addition = `- ${cleanBullet}`;
   if (existingHeading) {
-    const lines = raw.split('\n');
-    const index = lines.findIndex((line) => line.trimEnd() === existingHeading);
-    lines.splice(index + 1, 0, addition);
-    raw = lines.join('\n');
+    rawLines.splice(headingIndex(existingHeading) + 1, 0, addition);
+    raw = rawLines.join('\n');
   } else if (!isJournal && sectionRe.test(raw)) {
     raw = raw.replace(sectionRe, `$1\n${addition}`);
   } else {
