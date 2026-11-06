@@ -29,8 +29,11 @@ function buildSimpleCaptureEvent(input = {}) {
   }
   // A journal bullet cannot hold block Markdown (lists, headings, quotes,
   // code fences) or tabs; say so up front instead of failing after dispatch.
-  if (kind !== 'note' && !command.matched) {
-    try { normalizeJournalEntry(`- ${input.text.trim()}`); } catch {
+  // Check the words that will actually be written: after a matching
+  // "Journal:"/"Idea:" prefix is removed, the rest must still be a valid bullet.
+  if (command.matched && !command.content) throw new Error('text has a command prefix but nothing to save');
+  if (kind !== 'note') {
+    try { normalizeJournalEntry(`- ${command.matched ? command.content : input.text.trim()}`); } catch {
       throw new Error('this text has lists, headings, quotes, code or tabs, which a journal bullet cannot hold; save it with kind "note" to keep the formatting, or as plain sentences');
     }
   }

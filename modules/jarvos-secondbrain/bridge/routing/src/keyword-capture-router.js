@@ -93,7 +93,11 @@ function applyPlan(capture, plan, options = {}) {
     });
   }
 
-  if (intentId && !result.note?.written) {
+  // Never link a note whose write failed or conflicted: the backlink would
+  // point at nothing. A queued (locally pending) note may still be linked.
+  const noteWriteFailed = plan.createNote
+    && (result.note?.artifactReceipt?.artifacts || []).some((a) => a.outcome === 'failed' || a.outcome === 'conflict');
+  if ((intentId && !result.note?.written) || noteWriteFailed) {
     result.artifactReceipt = createArtifactReceipt({ artifacts: result.note?.artifactReceipt?.artifacts || [] });
     return result;
   }

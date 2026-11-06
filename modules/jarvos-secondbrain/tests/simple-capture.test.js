@@ -172,3 +172,23 @@ test('a saved note is not described as linked when no journal link was acknowled
   }) });
   assert.equal(response.message, 'Saved as the note "Tidal gardens".');
 });
+
+test('a matching command prefix does not let invalid text past the bullet check', () => {
+  for (const [kind, text] of [['journal', 'Journal: ## A test heading'], ['idea', 'Idea: - A test item'], ['journal', 'Journal:   ']]) {
+    assert.throws(() => simpleCapture({ ...base, kind, text }, { capture: () => assert.fail('must reject before capture') }));
+  }
+});
+
+test('the router never adds a backlink for a note whose write failed', () => {
+  const { artifactFromMutationResult } = require('../src/artifact-receipt');
+  let journalCalls = 0;
+  const adapter = {
+    writeNote: () => ({ written: false, title: 'Tidal gardens', artifactReceipt: { schemaVersion: 'jarvos.artifact-receipt.v1', artifacts: [artifactFromMutationResult({ kind: 'note', vaultRelativePath: 'Notes/Tidal gardens.md', outcome: 'failed' })] } }),
+    appendLineToJournalSection: () => { journalCalls += 1; return { ok: true }; },
+    ensureJournal: () => { journalCalls += 1; return { ok: true }; },
+  };
+  const response = simpleCapture({ ...base, kind: 'note', title: 'Tidal gardens', date: '2026-06-22' }, { adapter });
+  assert.equal(response.ok, false);
+  assert.equal(journalCalls, 0);
+  assert.match(response.message, /^Not saved: /);
+});
