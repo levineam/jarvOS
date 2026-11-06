@@ -300,6 +300,8 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ### Bug Fixes
 
+* **secondbrain:** reject invalid mutations before ledger planning and let journal writes proceed past pre-dispatch quarantine while preserving ambiguous-operation guards.
+
 * **secondbrain:** omit origin markers from journal Ideas while retaining ledger provenance; add guarded marker cleanup and restore.
 
 * **secondbrain:** preserve multiline journal captures and reject invalid entries before dispatch; keep operational artifacts out of automatic journal backlinks.
