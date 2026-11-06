@@ -235,7 +235,7 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
     : (seen.add(item.id), n + 1 + descendants(item.title, seen))), 0);
   // Tighter budgets drop next steps first, then fold child projects into a count, so every top-level
   // project stays listed however large one subtree grows.
-  const build = (withNext, maxDepth = Infinity) => {
+  const build = (withNext, maxDepth = Infinity, compact = false) => {
     const lines = [];
     const walk = (parent, depth, seen) => {
       for (const item of children(parent)) {
@@ -248,6 +248,11 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
       }
     };
     walk(null, 0, new Set());
+    // The tightest form: top-level projects by name on one line, each with its count of child projects.
+    if (compact) lines.splice(0, lines.length, children(null).map((item) => {
+      const folded = descendants(item.title);
+      return `${oneLine(item.title, 80)}${folded ? ` (+${folded})` : ''}`;
+    }).join('; '));
     const unread = (result.skipped || []).filter((item) => item.reason !== 'Reserved file');
     const named = (status) => projects.filter((item) => item.status === status).map((item) => oneLine(item.title, 120));
     const paused = named('paused');
@@ -273,6 +278,7 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
   if (markdown.length > maxChars) markdown = build(false);
   if (markdown.length > maxChars) markdown = build(false, 1);
   if (markdown.length > maxChars) markdown = build(false, 0);
+  if (markdown.length > maxChars) markdown = build(false, 0, true);
   if (markdown.length > maxChars) {
     const cut = markdown.slice(0, Math.max(0, maxChars - 120));
     markdown = `${cut.slice(0, cut.lastIndexOf('\n'))}\n</untrusted-project-data>\n\n[Projects trimmed to fit; read the project folder for the rest.]`;

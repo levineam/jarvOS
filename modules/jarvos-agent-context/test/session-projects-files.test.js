@@ -126,3 +126,14 @@ test('a short resume packet still lists every top-level project and closes the d
   for (let r = 0; r < 7; r++) assert.match(section, new RegExp(`- Root project number ${r} `));
   assert.match(section, /<\/untrusted-project-data>/);
 });
+
+test('eighteen top-level projects in a short resume packet are all listed and the block closes', async (t) => {
+  const files = {};
+  for (let r = 0; r < 18; r++) files[`Project ${r}.md`] = project({ id: `p_${r}`, title: `Ordinary project title ${r}` });
+  await freshSession(t, files);
+  const { markdown } = await hydrate({ sessionThread: false, maxChars: 4000 });
+  for (let r = 0; r < 18; r++) assert.match(markdown, new RegExp(`Ordinary project title ${r}(?:[ ;\n])`));
+  assert.match(markdown, /<\/untrusted-project-data>/);
+  const tiny = await hydrate({ sessionThread: false, maxChars: 2200 });
+  assert.equal((tiny.markdown.match(/<untrusted-project-data>/g) || []).length, (tiny.markdown.match(/<\/untrusted-project-data>/g) || []).length);
+});

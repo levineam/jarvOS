@@ -2060,7 +2060,8 @@ async function hydrate(options = {}) {
     const files = await readProjectsFiles(directory);
     report.projectsContext = { status: files.status, fingerprint: null, code: files.code || null, source: 'project-files' };
     // Sized to what the packet has room for, so the list folds itself rather than being cut mid-block.
-    const budget = Math.min(Number(options.projectsContextMaxChars || 3600), Math.max(800, Math.floor(maxChars / 2)));
+    // The body gets what's left after the report's reserve, so the list folds before the packet is cut.
+    const budget = Math.min(Number(options.projectsContextMaxChars || 3600), Math.max(600, maxChars - 1800 - 200 - parts.join('\n').length));
     parts.push(renderProjectsFilesMarkdown(files, { directory, maxChars: budget }), '');
     if (files.status === 'ok') {
       report.sources.push(`jarvos.projects-files/v1 (${files.count} projects)`);
@@ -2172,7 +2173,10 @@ async function hydrate(options = {}) {
   const reservedReportChars = 1800;
   if (body.length > maxChars - reservedReportChars) {
     report.omissions.push(`body trimmed from ${body.length} to fit final budget`);
-    body = `${body.slice(0, Math.max(0, maxChars - reservedReportChars - 80)).trimEnd()}\n\n[hydration body trimmed to preserve report]`;
+    body = body.slice(0, Math.max(0, maxChars - reservedReportChars - 110)).trimEnd();
+    // A cut inside the project data block still closes it, so nothing after it reads as project data.
+    if (body.lastIndexOf('<untrusted-project-data>') > body.lastIndexOf('</untrusted-project-data>')) body += '\n</untrusted-project-data>';
+    body += '\n\n[hydration body trimmed to preserve report]';
   }
 
   let markdown = `${body}\n\n${renderHydrationReport(report, maxChars)}`;
