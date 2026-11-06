@@ -1,7 +1,7 @@
 'use strict';
 
 const journal = require('./adapters/journal');
-const { headingsForSection } = require('../../../modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/section-config');
+const { JOURNAL_HEADINGS } = require('./journal-headings');
 const notes = require('./adapters/notes');
 const paperclip = require('./adapters/paperclip');
 
@@ -17,7 +17,7 @@ function localDate() {
 function sectionItems(day, title) {
   if (!day) return [];
   if (title === 'Journal') {
-    for (const heading of headingsForSection('journal-entry')) {
+    for (const heading of JOURNAL_HEADINGS) {
       const name = heading.replace(/^##\s+(?:\p{Extended_Pictographic}️?\s*)?/u, '');
       const section = day.sections.find((s) => s.title === name);
       if (section) return section.empty ? [] : section.items;

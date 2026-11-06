@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { headingsForSection } = require('../../../../modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/section-config');
+const { JOURNAL_HEADINGS } = require('../journal-headings');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
 
@@ -97,7 +97,7 @@ function appendBullet(journalDir, date, section, bullet) {
   fs.mkdirSync(journalDir, { recursive: true });
   const file = path.join(journalDir, `${date}.md`);
   let raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : `---\ndate: ${date}\n---\n\n`;
-  const journalHeadings = headingsForSection('journal-entry');
+  const journalHeadings = JOURNAL_HEADINGS;
   const isJournal = cleanSection === 'Journal' || journalHeadings.includes(`## ${cleanSection}`);
   const heading = isJournal ? journalHeadings[0] : `## ${cleanSection}`;
   const existingHeading = isJournal && journalHeadings.find((candidate) => raw.split('\n').some((line) => line.trimEnd() === candidate));
