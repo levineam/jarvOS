@@ -156,7 +156,7 @@ test('versioned journal transform stores hidden origin metadata adjacent to the 
     transformName: 'journal-section-line',
     transformVersion: 2,
     replayPayload: {
-      heading: '## 💡 Ideas',
+      heading: '## 📝 Notes',
       line: '- Generated architecture idea',
       contentOrigin: {
         content_origin: 'assistant',
@@ -165,7 +165,7 @@ test('versioned journal transform stores hidden origin metadata adjacent to the 
       },
     },
   };
-  const first = transforms.applyNode('## 💡 Ideas\n-\n', operation);
+  const first = transforms.applyNode('## 📝 Notes\n-\n', operation);
   const lines = first.split('\n');
   const entry = parseJournalEntry(lines, lines.indexOf('- Generated architecture idea'));
   assert.equal(entry.origin.content_origin, 'assistant');
@@ -188,7 +188,8 @@ test('storage adapter routes declared provenance through the v2 journal transfor
     });
     assert.equal(result.acknowledged, true);
     assert.equal(service.operations[1].transformVersion, 2);
-    assert.match(fs.readFileSync(result.journalPath, 'utf8'), /- Routed assistant idea\n<!-- jarvos-content-origin\/v1 /);
+    assert.doesNotMatch(fs.readFileSync(result.journalPath, 'utf8'), /jarvos-content-origin/);
+    assert.equal(service.operations[1].replayPayload.contentOrigin.content_origin, 'assistant');
   });
 });
 
@@ -214,12 +215,12 @@ test('journal transform replaces malformed or duplicate markers instead of treat
     transformName: 'journal-section-line',
     transformVersion: 2,
     replayPayload: {
-      heading: '## 💡 Ideas',
+      heading: '## 📝 Notes',
       line: '- Recover marker',
       contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
     },
   };
-  const malformed = '## 💡 Ideas\n- Recover marker\n<!-- jarvos-content-origin/v1 forged -->\n<!-- jarvos-content-origin/v1 forged -->\n';
+  const malformed = '## 📝 Notes\n- Recover marker\n<!-- jarvos-content-origin/v1 forged -->\n<!-- jarvos-content-origin/v1 forged -->\n';
   const result = transforms.applyNode(malformed, operation);
   assert.equal(transforms.isSatisfied(result, operation), true);
   assert.equal(result.split('jarvos-content-origin/v1').length - 1, 1);
@@ -239,7 +240,8 @@ test('multiline v2 preserves the exact draft, whole-entry identity and neighbour
   const entry = parseJournalEntry(lines, lines.indexOf('- Tides, lamps, and ledgers'));
   assert.equal(entry.clean_text, draft);
   assert.equal(entry.marker_start - entry.start, draft.split('\n').length);
-  assert.equal(entry.origin.clean_text_digest, digestText(draft));
+  assert.equal(entry.marker_line, null);
+  assert.equal(transforms.prepare(operation).replayPayload.contentOrigin.clean_text_digest, digestText(draft));
   assert.equal(entry.origin.content_origin, 'unknown');
   assert.equal(entry.origin.human_evidence_eligible, false);
   assert.equal(Object.hasOwn(entry.origin, 'content_origin_drafting'), false);
@@ -278,7 +280,8 @@ test('storage adapter and parser digest the same CRLF-normalized logical text', 
     const entry = parseJournalEntry(lines, lines.indexOf('- First  '));
     assert.equal(entry.clean_text, 'First  \n\nSecond\ncontinued');
     assert.equal(operation.replayPayload.contentOrigin.clean_text_digest, digestText(entry.clean_text));
-    assert.equal(entry.origin.clean_text_digest, operation.replayPayload.contentOrigin.clean_text_digest);
+    assert.equal(entry.marker_line, null);
+    assert.equal(entry.origin.human_evidence_eligible, false);
   });
 });
 
@@ -294,4 +297,30 @@ test('invalid capture rejects before journal creation or app probing', () => {
     assert.equal(result.receipt.validationReason, 'invalid_replay_payload');
     assert.equal(fs.existsSync(journalDir), false);
   });
+});
+
+test('only the exact normalized Ideas heading omits markers and preserves old entries', () => {
+  const { renderJournalOriginMarker } = require('../bridge/provenance/src/content-origin-contract');
+  const transforms = createJarvosVaultTransforms();
+  for (const heading of ['💡 Ideas', '## 💡 Ideas', ' 📝 Notes ', 'Ideas', '💡 Ideas extra', '📓 Journal Entry']) {
+    for (const line of ['- Single thought', '- First thought\n\nSecond paragraph']) {
+      const operation = { transformName: 'journal-section-line', transformVersion: 2, replayPayload: {
+        heading, line, contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+      } };
+      const isIdeas = heading.includes('💡 Ideas') && !heading.includes('extra');
+      const first = transforms.applyNode('', operation);
+      assert.equal(first.includes('<!-- jarvos-content-origin/v1'), !isIdeas, heading);
+      assert.equal(transforms.isSatisfied(first, operation), true);
+      assert.equal(transforms.applyNode(first, operation), first);
+    }
+  }
+  const operation = { transformName: 'journal-section-line', transformVersion: 2, replayPayload: {
+    heading: '💡 Ideas', line: '- Old thought', contentOrigin: { content_origin: 'unknown', content_origin_basis: 'unknown' },
+  } };
+  const marker = renderJournalOriginMarker({ cleanText: 'Old thought', content_origin: 'assistant', content_origin_basis: 'assistant_generated' });
+  for (const suffix of ['', marker + '\n', '<!-- jarvos-content-origin/v1 forged -->\n']) {
+    const old = `## 💡 Ideas\n- Old thought\n${suffix}\n## 📝 Notes\n- Keep\n`;
+    assert.equal(transforms.isSatisfied(old, operation), true);
+    assert.equal(transforms.applyNode(old, operation), old);
+  }
 });

@@ -91,6 +91,8 @@ function projectJournalEntriesFromMarkdown(markdown, { date = null, section = 'i
     }, { resolveUserSource });
     entries.push({
       ...projected,
+      ...(!entry.marker_line && entry.origin.normalization_reason === 'no_origin_recorded_in_file'
+        ? { projection_reason: 'no_origin_recorded_in_file' } : {}),
       date: date || null,
       source_id: `journal:${date || 'unknown'}:${index}`,
       // Boolean only: a read-only audit needs to count declared versus

@@ -4,11 +4,9 @@
 //
 // The invariant this module protects is narrow and load-bearing: a durable note
 // must persist explicit `jarvos-content-origin/v1` frontmatter, and a material
-// journal bullet must be written with the adjacent hidden, digest-bound marker.
-// An unmarked material bullet is not neutral — `parseJournalEntry` reads it as
-// an unmarked manual entry, i.e. as Andrew's own words. So a newly added writer
-// that never declares how it emits the contract has to fail the suite rather
-// than quietly inherit human attribution.
+// journal bullet uses an adjacent digest-bound marker except in Ideas.
+// Ideas retain supplied provenance in the mutation ledger; unmarked Ideas
+// parse as unknown and never establish human evidence.
 //
 // Enforcement has two halves:
 //
@@ -17,7 +15,7 @@
 //      A new caller (undeclared) and a removed caller (stale) both fail.
 //   2. Transform inventory. Every registered vault transform must appear in
 //      `JOURNAL_BULLET_TRANSFORMS`, and new material journal bullets must be
-//      written through the marker-emitting transform.
+//      written through the provenance-aware transform.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -78,7 +76,7 @@ const CANONICAL_WRITERS = Object.freeze([
     declaration: 'journal_marker',
     note: 'writeNote delegates to the canonical note writer. appendLineToJournalSection '
       + 'binds a supplied contentOrigin to the clean bullet digest and selects the '
-      + 'marker-emitting journal-section-line@2 transform.',
+      + 'journal-section-line@2 transform (Ideas omit file markers).',
   },
   {
     id: 'provenance.note-journal-contract',
@@ -163,7 +161,7 @@ const JOURNAL_BULLET_TRANSFORMS = Object.freeze([
     declaration: 'journal_marker',
     writesMaterialBullet: true,
     note: 'The supported path for new material journal bullets. Requires a '
-      + 'contentOrigin payload and writes the adjacent digest-bound marker.',
+      + 'contentOrigin payload; Ideas omit file markers and retain ledger provenance.',
   },
   {
     name: 'journal-backlink',

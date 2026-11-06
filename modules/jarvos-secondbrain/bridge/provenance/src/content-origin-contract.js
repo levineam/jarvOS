@@ -324,6 +324,10 @@ function parseJournalEntry(lines, index) {
   while (end < source.length && at(end).trim().startsWith('<!-- jarvos-content-origin/')) {
     markerLines.push(at(end).trim()); end += 1;
   }
+  let heading = '';
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    if (/^##\s/.test(at(cursor).trimStart())) { heading = at(cursor).trim(); break; }
+  }
   const markerLine = markerLines[0] || null;
   const marker = markerLines.length === 1
     ? parseJournalOriginMarker(markerLine, text)
@@ -331,7 +335,7 @@ function parseJournalEntry(lines, index) {
   return {
     line, start: index, end, marker_start: markerStart,
     clean_text: text, marker_line: markerLine, marker_lines: markerLines, marker,
-    origin: marker || (markerLines.length > 0 ? unknownJournalOrigin('malformed_or_duplicate_marker') : {
+    origin: marker || (heading === '## 💡 Ideas' ? unknownJournalOrigin('no_origin_recorded_in_file') : {
       content_origin: 'human', content_origin_basis: 'unknown', human_evidence_eligible: true,
       normalization_reason: 'unmarked_manual_entry',
     }),
