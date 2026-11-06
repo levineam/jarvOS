@@ -30,6 +30,32 @@ it never creates, rebuilds, reorders, or edits an index containing
 human-authored prose. Health remains read-only, and active index edits are
 deferred.
 
+## Journal section headings
+
+New daily files use `## 📓 Journal`, with the unchanged logical id
+`journal-entry`. Readers and writers also recognize `## 📓 Journal Entry`,
+`## Journal Entry`, and `## 📋 Journal Entry` (including trailing whitespace).
+Appending preserves the existing heading; when both canonical and legacy
+headings exist, captures use the canonical section.
+
+The optional heading migration defaults to a dry run over dated files only:
+
+```bash
+node modules/jarvos-secondbrain/scripts/rename-journal-heading.js --vault /path/to/vault --journal Journal
+node modules/jarvos-secondbrain/scripts/rename-journal-heading.js --vault /path/to/vault --journal Journal --apply --preimage /path/outside-vault/journal-headings.json
+node modules/jarvos-secondbrain/scripts/rename-journal-heading.js --vault /path/to/vault --journal Journal --restore --preimage /path/outside-vault/journal-headings.json
+```
+
+Without path flags it uses the configured vault and journal directory. Apply
+requires an unused preimage path outside the vault (including symlink targets).
+The bundle stores every original file and its hashes before the first guarded
+Obsidian mutation. Only heading text changes; whitespace, line endings and body
+bytes remain intact. Files with both canonical and legacy headings, or multiple
+legacy sections, are reported and skipped without merging. A second apply is a
+no-op. Restore skips files edited after migration and restores unaffected files
+through the same guarded mutation service. The original bundle remains intact
+if a write fails partway through; restore recovers files that were renamed.
+
 ## Configuration boundary
 
 Journal mutation requires explicit configuration. The supported precedence is:

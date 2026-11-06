@@ -260,13 +260,13 @@ test('all populated strict commands use the expected canonical writer route', ()
 
     const journal = applyStrictCommandPlan({ text: 'Journal: paid rent: $2,400', date: TEST_DATE }, options);
     assert.equal(journal.route, 'journal');
-    assert.equal(journal.noteLink.heading, '## 📓 Journal Entry');
+    assert.equal(journal.noteLink.heading, '## 📓 Journal');
     assert.equal(journal.noteLink.line, '- paid rent: $2,400');
     assert.equal(receiptIsAcknowledged(journal.artifactReceipt), true);
 
     const add = applyStrictCommandPlan({ text: 'Add to Journal: closed SUP-1: filed follow-up', date: TEST_DATE }, options);
     assert.equal(add.route, 'journal');
-    assert.equal(add.noteLink.heading, '## 📓 Journal Entry');
+    assert.equal(add.noteLink.heading, '## 📓 Journal');
     assert.equal(receiptIsAcknowledged(add.artifactReceipt), true);
   });
 });

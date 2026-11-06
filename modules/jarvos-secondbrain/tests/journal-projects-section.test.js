@@ -119,7 +119,7 @@ test('dropped content is discarded rather than folded into Notes', () => {
 test('content the user actually wrote is preserved', () => {
   const output = render(legacyEntry());
   assert.match(sectionBody(output, '## 💡 Ideas'), /an idea worth keeping/);
-  assert.match(sectionBody(output, '## 📓 Journal Entry'), /Today I did things\./);
+  assert.match(sectionBody(output, '## 📓 Journal'), /Today I did things\./);
 });
 
 test('the Projects section renders ongoing projects as wiki-links', () => {

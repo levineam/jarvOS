@@ -818,3 +818,20 @@ test('create-if-missing dry-run reports a missing journal without writing it', (
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('maintenance and health recognize legacy Journal content without moving it to Notes', () => {
+  const config = loadConfig();
+  for (const heading of ['## 📓 Journal Entry', '## Journal Entry', '## 📋 Journal Entry', '## 📓 Journal']) {
+    const original = `## 📝 Notes\n-\n\n## 💡 Ideas\n-\n\n${heading}  \n- Invented reflection\n`;
+    const health = classifyJournalHealth({ existed: true, markdown: original, config });
+    assert.equal(health.status, 'healthy');
+    assert.equal(health.metrics.meaningfulBodyChars, '- Invented reflection'.length);
+    const normalized = normalizeSections(original, TEST_DATE, config, { fetchers: { projects: () => '-' } });
+    const journal = normalized.sections.find((s) => s.id === 'journal-entry');
+    assert.equal(journal.heading, '## 📓 Journal');
+    assert.equal(journal.content, '- Invented reflection');
+    assert.equal(normalized.sections.find((s) => s.id === 'notes').content, '-');
+    const stub = classifyJournalHealth({ existed: true, markdown: `${heading}\n-\n`, config });
+    assert.equal(stub.metrics.meaningfulBodyChars, 0);
+  }
+});

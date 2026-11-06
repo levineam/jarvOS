@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { JOURNAL_HEADINGS } = require('../journal-headings');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
 
@@ -23,8 +24,17 @@ function parseFrontmatter(text) {
 function parseSections(body) {
   const sections = [];
   let current = null;
+  let fence = null;
   for (const line of body.split('\n')) {
-    const h = line.match(/^##\s+(.*)$/);
+    // A heading shown inside a fenced code block is an example, not a section.
+    const delimiter = line.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      if (current) current.lines.push(line);
+      continue;
+    }
+    if (delimiter) fence = delimiter[1];
+    const h = !delimiter && line.match(/^##\s+(.*)$/);
     if (h) {
       if (current) sections.push(current);
       const title = h[1].trim();
@@ -96,11 +106,32 @@ function appendBullet(journalDir, date, section, bullet) {
   fs.mkdirSync(journalDir, { recursive: true });
   const file = path.join(journalDir, `${date}.md`);
   let raw = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : `---\ndate: ${date}\n---\n\n`;
-  const heading = `## ${cleanSection}`;
+  const journalHeadings = JOURNAL_HEADINGS;
+  const isJournal = cleanSection === 'Journal' || journalHeadings.includes(`## ${cleanSection}`);
+  const heading = isJournal ? journalHeadings[0] : `## ${cleanSection}`;
+  // Find the real Journal heading: canonical first, never one inside
+  // frontmatter or shown as an example in a fenced code block.
+  const rawLines = raw.split('\n');
+  const hidden = [];
+  let fence = null;
+  let inFrontmatter = rawLines[0]?.trim() === '---';
+  rawLines.forEach((line, index) => {
+    const trimmed = line.trim();
+    if (inFrontmatter) { hidden.push(true); if (index > 0 && trimmed === '---') inFrontmatter = false; return; }
+    const delimiter = trimmed.match(/^(`{3,}|~{3,})(.*)$/);
+    if (fence) { hidden.push(true); if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null; return; }
+    if (delimiter) { hidden.push(true); fence = delimiter[1]; return; }
+    hidden.push(false);
+  });
+  const headingIndex = (candidate) => rawLines.findIndex((line, index) => !hidden[index] && line.trim() === candidate);
+  const existingHeading = isJournal && journalHeadings.find((candidate) => headingIndex(candidate) !== -1);
   const escapedHeading = cleanSection.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const sectionRe = new RegExp(`(^##\\s+${escapedHeading}\\s*$)`, 'm');
   const addition = `- ${cleanBullet}`;
-  if (sectionRe.test(raw)) {
+  if (existingHeading) {
+    rawLines.splice(headingIndex(existingHeading) + 1, 0, addition);
+    raw = rawLines.join('\n');
+  } else if (!isJournal && sectionRe.test(raw)) {
     raw = raw.replace(sectionRe, `$1\n${addition}`);
   } else {
     raw = `${raw.trimEnd()}\n\n${heading}\n${addition}\n`;

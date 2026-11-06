@@ -344,7 +344,7 @@ test('strict journal commands use the public hard-command route', () => {
     assert.equal(result.hardCommand.command, 'add-to-journal');
     assert.equal(result.routing.plan.route, 'journal');
     assert.equal(result.routing.note, null);
-    assert.equal(result.routing.noteLink.heading, '## 📓 Journal Entry');
+    assert.equal(result.routing.noteLink.heading, '## 📓 Journal');
     assert.equal(result.routing.noteLink.line, '- reviewed the capture bug: no model needed');
   });
 });

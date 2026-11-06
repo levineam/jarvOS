@@ -101,7 +101,7 @@ test('simple capture integrates all three kinds through temporary acknowledged v
     const entry = capture('journal', { text: 'A test journal about lunar orchards' });
     assert.equal(entry.ok, true, entry.message);
     content = fs.readFileSync(path.join(journal, '2026-06-22.md'), 'utf8');
-    assert.match(content, /## 📓 Journal Entry\n- A test journal about lunar orchards/);
+    assert.match(content, /## 📓 Journal\n- A test journal about lunar orchards/);
     const note = capture('note', { title: 'Tidal gardens', words: 'assistant', model: 'test-model' });
     assert.equal(note.ok, true, note.message);
     assert.equal(fs.existsSync(note.result.note.path), true);

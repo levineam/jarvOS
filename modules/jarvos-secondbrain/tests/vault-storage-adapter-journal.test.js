@@ -77,6 +77,8 @@ test('missing journal creates before its acknowledged section transform', () => 
     const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
     const result = adapter.appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- New idea', intentId: 'idea-intent' });
     assert.equal(result.acknowledged, true);
+    assert.match(fs.readFileSync(result.journalPath, 'utf8'), /^## 📓 Journal$/m);
+    assert.doesNotMatch(fs.readFileSync(result.journalPath, 'utf8'), /## 📓 Journal Entry/);
     assert.deepEqual(result.artifactReceipt.artifacts, [{
       schemaVersion: 'jarvos.artifact-receipt.v1',
       kind: 'journal',
@@ -322,5 +324,28 @@ test('only the exact normalized Ideas heading omits markers and preserves old en
     const old = `## 💡 Ideas\n- Old thought\n${suffix}\n## 📝 Notes\n- Keep\n`;
     assert.equal(transforms.isSatisfied(old, operation), true);
     assert.equal(transforms.applyNode(old, operation), old);
+  }
+});
+
+test('Journal appends recognize each legacy heading and prefer canonical when both exist', () => {
+  const headings = ['## 📓 Journal Entry', '## Journal Entry', '## 📋 Journal Entry', '## 📓 Journal'];
+  for (const existing of [...headings, null, 'both']) {
+    for (const heading of headings) {
+      withVault(({ root, journalDir }) => {
+        fs.mkdirSync(journalDir, { recursive: true });
+        const target = path.join(journalDir, '2030-02-03.md');
+        const before = existing === 'both' ? '## Journal Entry\n- Old sample\n\n## 📓 Journal\n- Current sample\n' : existing ? `${existing}  \n- Earlier sample\n` : '## 📝 Notes\n- Other sample\n';
+        fs.writeFileSync(target, before);
+        const service = fakeService(root);
+        const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+        const result = adapter.appendLineToJournalSection({ date: '2030-02-03', heading, line: '- New sample', contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' } });
+        assert.equal(result.acknowledged, true);
+        const after = fs.readFileSync(target, 'utf8');
+        assert.equal((after.match(/^## (?:📓 Journal(?: Entry)?|Journal Entry|📋 Journal Entry) *$/gm) || []).length, existing === 'both' ? 2 : 1);
+        const expected = existing === 'both' || !existing ? '## 📓 Journal' : existing;
+        assert.ok(after.slice(after.indexOf(expected + (existing && existing !== 'both' ? '  ' : '') + '\n')).includes('- New sample'));
+        if (existing === 'both') assert.equal(after.slice(0, after.indexOf('## 📓 Journal')), before.slice(0, before.indexOf('## 📓 Journal')));
+      });
+    }
   }
 });
