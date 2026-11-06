@@ -39,6 +39,7 @@ function advertisedRuntimeAssets() {
     'modules/jarvos-coding/src/features/work-actions.js',
     'modules/jarvos-secondbrain/packages/jarvos-secondbrain-projects/src/execution-link-store.js',
     'modules/jarvos-secondbrain/scripts/journal-health.js',
+    'modules/jarvos-secondbrain/scripts/rename-journal-heading.js',
     'modules/jarvos-secondbrain/scripts/journal-health-alarm.js',
     'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/config/journal-module.json',
     'modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/journal-lifecycle.js',

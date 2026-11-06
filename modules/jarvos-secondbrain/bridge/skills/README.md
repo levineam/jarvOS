@@ -24,7 +24,8 @@ the same small contract without depending on local implementation details.
 ## Contracts
 
 - `journal-entry` captures `idea` and high-confidence thought intents into the
-  daily journal.
+  daily Ideas or `## 📓 Journal` section. The `journal-entry` id is unchanged;
+  legacy Journal headings remain writable, with canonical preference when both exist.
 - `note-creation` captures note intents into an Obsidian markdown note and adds
   a `[[wikilink]]` under the journal Notes section.
 - `idea-parking` remains available for explicit caller-owned review queues, but

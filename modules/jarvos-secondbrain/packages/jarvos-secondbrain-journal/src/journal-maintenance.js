@@ -20,6 +20,7 @@
 
 'use strict';
 
+const { isSectionHeading } = require('./section-config');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -212,7 +213,7 @@ function writeJournalState(journalDir, state) {
  * still intact, so they are excluded wholesale from `meaningfulBodyChars`.
  * Excluding only their empty-state placeholder is not enough: a populated
  * Projects list would otherwise make a journal whose Notes, Ideas, and
- * Journal Entry had been wiped still look populated, and suppress the
+ * Journal had been wiped still look populated, and suppress the
  * known-good restore that exists to catch exactly that.
  */
 const GENERATED_SECTION_HEADINGS = new Set([
@@ -371,7 +372,7 @@ function structureMatchesContract(sections, config) {
   let haveIndex = 0;
   for (const section of desired) {
     const heading = String(section.heading).trim();
-    if (have[haveIndex] === heading) {
+    if (have[haveIndex] === heading || (section.id === 'journal-entry' && isSectionHeading('journal-entry', have[haveIndex]))) {
       haveIndex += 1;
       continue;
     }
@@ -394,7 +395,7 @@ function structureMatchesContract(sections, config) {
  * Content is what actually distinguishes the two cases. A contract migration
  * drops machine-rendered sections, which `authoredBodyLines` already ignores,
  * so every authored line survives. Real damage — a bad mobile sync gutting
- * Notes and Journal Entry — loses authored lines, and must leave the old
+ * Notes and Journal — loses authored lines, and must leave the old
  * snapshot untouched so the restore path can still recover it.
  */
 function authoredContentPreserved(currentMarkdown, priorMarkdown, config) {
@@ -973,6 +974,9 @@ function normalizeSections(original, date, config, opts = {}) {
   }
 
   for (const section of sections) {
+    if (isSectionHeading('journal-entry', section.heading) && configuredById.has('journal-entry')) {
+      section.heading = configuredById.get('journal-entry').heading;
+    }
     const existing = contentByHeading.get(section.heading);
     if (desiredByHeading.has(section.heading)) {
       contentByHeading.set(section.heading, appendBlock(existing, section.content));

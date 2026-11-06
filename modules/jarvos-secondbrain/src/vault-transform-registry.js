@@ -1,5 +1,8 @@
 'use strict';
 
+const { headingsForSection } = require('../packages/jarvos-secondbrain-journal/src/section-config');
+const JOURNAL_HEADINGS = headingsForSection('journal-entry');
+
 const {
   normalizeJournalEntry,
   digestText,
@@ -43,11 +46,37 @@ function sessionThreadAppendTransform(content, { noteId, entry }) {
 function normalizeJournalHeading(heading) {
   const value = String(heading || '').trim().replace(/^##\s*/, '').trim();
   if (!value || /[\r\n]/.test(value)) throw new Error('Invalid journal section heading');
-  return `## ${value === '🗂️ Notes Created' ? '📝 Notes' : value}`;
+  const normalized = `## ${value === '🗂️ Notes Created' ? '📝 Notes' : value}`;
+  return JOURNAL_HEADINGS.includes(normalized) ? JOURNAL_HEADINGS[0] : normalized;
 }
 
 function journalSectionRange(lines, heading) {
-  const start = lines.findIndex((line) => line.trim() === heading);
+  // Self-contained: this source is also serialized into the Obsidian evaluator.
+  let start = -1;
+  if (!JOURNAL_HEADINGS.includes(heading)) {
+    start = lines.findIndex((line) => line.trim() === heading);
+  } else {
+    // Prefer the canonical heading over legacy ones, but never match a heading
+    // shown as an example inside a fenced code block.
+    const fenced = [];
+    let fence = null;
+    for (const line of lines) {
+      const delimiter = String(line).trim().match(/^(`{3,}|~{3,})(.*)$/);
+      if (fence) {
+        fenced.push(true);
+        if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      } else if (delimiter) {
+        fenced.push(true);
+        fence = delimiter[1];
+      } else {
+        fenced.push(false);
+      }
+    }
+    for (const candidate of JOURNAL_HEADINGS) {
+      start = lines.findIndex((line, index) => !fenced[index] && line.trim() === candidate);
+      if (start !== -1) break;
+    }
+  }
   if (start === -1) return { start: -1, end: -1 };
   let end = lines.length;
   for (let index = start + 1; index < lines.length; index += 1) {
@@ -175,8 +204,12 @@ function journalSectionLineOriginSatisfied(content, { heading, line, contentOrig
     && actual.human_evidence_eligible === expected.human_evidence_eligible);
 }
 
-function journalOriginTransformProgram() {
-  return journalOriginContractProgram() + '\n' + [normalizeJournalHeading, journalSectionRange, normalizedJournalOrigin, journalOriginMarkerForLine, matchingJournalBullet, journalSectionLineOriginTransform, journalSectionLineOriginSatisfied].join('\n');
+function journalHeadingTransformProgram() {
+  return `const JOURNAL_HEADINGS = ${JSON.stringify(JOURNAL_HEADINGS)};\n` + [normalizeJournalHeading, journalSectionRange].join('\n');
+}
+
+function journalOriginTransformProgram({ includeHeadings = true } = {}) {
+  return (includeHeadings ? journalHeadingTransformProgram() : '') + '\n' + journalOriginContractProgram() + '\n' + [normalizedJournalOrigin, journalOriginMarkerForLine, matchingJournalBullet, journalSectionLineOriginTransform, journalSectionLineOriginSatisfied].join('\n');
 }
 
 function escapeRegex(value) { return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
@@ -312,6 +345,7 @@ function createVaultTransformRegistry(descriptors = []) {
 module.exports = {
   createJarvosVaultTransforms,
   journalOriginTransformProgram,
+  journalHeadingTransformProgram,
   createVaultTransformRegistry,
   journalBacklinkSatisfied,
   journalBacklinkTransform,

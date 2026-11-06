@@ -46,7 +46,8 @@
       },
       {
         "id": "journal-entry",
-        "heading": "## 📓 Journal Entry",
+        "heading": "## 📓 Journal",
+        "aliases": ["## 📓 Journal Entry", "## Journal Entry", "## 📋 Journal Entry"],
         "source": "manual",
         "description": "End-of-day reflection or narrative entry"
       }

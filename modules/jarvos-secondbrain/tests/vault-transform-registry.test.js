@@ -79,3 +79,18 @@ test('U4 authored-content transforms have deterministic Node behavior', () => {
   assert.equal((linked.match(/\[\[Notes\/C\+\+ \(Draft\)\]\]/g) || []).length, 1);
   assert.equal(transforms.isSatisfied(linked, cases[4].operation), true);
 });
+
+test('Journal section lookup ignores fenced examples and accepts indented headings, in Node and in the app evaluator', () => {
+  const vm = require('node:vm');
+  const registry = require('../src/vault-transform-registry');
+  const fencedExample = ['## 📝 Notes', '```', '## 📓 Journal', '```', '', '## 📓 Journal Entry', '- A test reflection', ''].join('\n');
+  const indented = ['## 📝 Notes', '', '  ## 📓 Journal Entry', '- A test reflection', ''].join('\n');
+  const appRange = vm.runInNewContext(`${registry.journalHeadingTransformProgram()}; journalSectionRange`);
+  assert.equal(appRange(fencedExample.split('\n'), '## 📓 Journal').start, 5);
+  assert.equal(appRange(indented.split('\n'), '## 📓 Journal').start, 2);
+  const added = registry.journalSectionLineTransform(fencedExample, { heading: '## 📓 Journal', line: '- A second test reflection' });
+  assert.match(added, /## 📓 Journal Entry\n- A test reflection\n- A second test reflection/);
+  assert.match(added, /```\n## 📓 Journal\n```/);
+  const addedIndented = registry.journalSectionLineTransform(indented, { heading: '## 📓 Journal Entry', line: '- A second test reflection' });
+  assert.equal(addedIndented.split('📓 Journal').length - 1, 1);
+});

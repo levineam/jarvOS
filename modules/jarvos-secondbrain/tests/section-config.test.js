@@ -6,6 +6,9 @@ const path = require('path');
 
 const {
   getJournalSections,
+  DEFAULT_HEADING_TO_ID,
+  headingsForSection,
+  isSectionHeading,
   getSectionHeading,
   isSectionEnabled,
   resolveConfiguredHeading,
@@ -50,4 +53,15 @@ test('getJournalSections returns the ordered section list', () => {
   const sections = getJournalSections();
   assert.ok(sections.find((s) => s.id === 'notes'));
   assert.ok(sections.every((s) => s.heading && typeof s.enabled === 'boolean'));
+});
+
+test('Journal canonical and exact legacy aliases resolve to the unchanged logical id', () => {
+  assert.equal(getSectionHeading('journal-entry'), '## 📓 Journal');
+  assert.deepEqual(headingsForSection('journal-entry'), ['## 📓 Journal', '## 📓 Journal Entry', '## Journal Entry', '## 📋 Journal Entry']);
+  for (const heading of headingsForSection('journal-entry')) {
+    assert.equal(DEFAULT_HEADING_TO_ID[heading], 'journal-entry');
+    assert.equal(resolveConfiguredHeading(heading + '  '), '## 📓 Journal');
+    assert.equal(isSectionHeading('journal-entry', heading + ' \t'), true);
+    assert.equal(isSectionHeading('journal-entry', heading + ' extra'), false);
+  }
 });

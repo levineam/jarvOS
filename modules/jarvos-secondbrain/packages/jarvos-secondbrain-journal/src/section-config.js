@@ -20,7 +20,7 @@ const DEFAULT_SECTIONS = [
   { id: 'projects', heading: '## 🚀 Projects' },
   { id: 'notes', heading: '## 📝 Notes' },
   { id: 'ideas', heading: '## 💡 Ideas' },
-  { id: 'journal-entry', heading: '## 📓 Journal Entry' },
+  { id: 'journal-entry', heading: '## 📓 Journal', aliases: ['## 📓 Journal Entry', '## Journal Entry', '## 📋 Journal Entry'] },
   { id: 'decisions', heading: '## ✅ Decisions' },
 ];
 
@@ -36,7 +36,7 @@ const RETIRED_SECTIONS = [
 // Well-known default heading -> logical id, so writers that still hold a hardcoded
 // default heading can be mapped onto the currently-configured heading.
 const DEFAULT_HEADING_TO_ID = [...DEFAULT_SECTIONS, ...RETIRED_SECTIONS].reduce((acc, s) => {
-  acc[s.heading] = s.id;
+  for (const heading of [s.heading, ...(s.aliases || [])]) acc[heading] = s.id;
   return acc;
 }, {});
 
@@ -51,7 +51,7 @@ function loadSections({ configFile } = {}) {
     if (Array.isArray(required) && required.length) {
       return required
         .filter((s) => s && s.id && s.heading)
-        .map((s) => ({ id: s.id, heading: String(s.heading).trim(), enabled: s.enabled !== false }));
+        .map((s) => ({ id: s.id, heading: String(s.heading).trim(), enabled: s.enabled !== false, ...(Array.isArray(s.aliases) ? { aliases: s.aliases.map((h) => String(h).trim()) } : {}) }));
     }
   } catch {
     /* fall through to defaults */
@@ -66,6 +66,16 @@ function getJournalSections(opts = {}) {
 function getSectionHeading(id, { fallback = null, ...opts } = {}) {
   const found = loadSections(opts).find((s) => s.id === id);
   return found ? found.heading : fallback;
+}
+
+function headingsForSection(id, opts = {}) {
+  const section = loadSections(opts).find((s) => s.id === id);
+  const defaults = DEFAULT_SECTIONS.find((s) => s.id === id);
+  return [...new Set([section?.heading, ...(section?.aliases || []), defaults?.heading, ...(defaults?.aliases || [])].filter(Boolean))];
+}
+
+function isSectionHeading(id, line, opts = {}) {
+  return headingsForSection(id, opts).includes(String(line).trimEnd());
 }
 
 function isSectionEnabled(id, opts = {}) {
@@ -87,6 +97,8 @@ module.exports = {
   DEFAULT_SECTIONS,
   DEFAULT_HEADING_TO_ID,
   getJournalSections,
+  headingsForSection,
+  isSectionHeading,
   getSectionHeading,
   isSectionEnabled,
   resolveConfiguredHeading,

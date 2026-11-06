@@ -146,3 +146,18 @@ test('journal-health-alarm reads one date-addressable receipt and reports its re
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('journal health reads canonical and legacy Journal headings without modifying bytes', t => {
+  const journalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'journal-heading-health-'));
+  t.after(() => fs.rmSync(journalDir, { recursive: true, force: true }));
+  const { healthToday } = require('../packages/jarvos-secondbrain-journal/src/journal-lifecycle');
+  const config = { paths: { journal: journalDir }, user: { timezone: 'UTC' } };
+  const journalPath = path.join(journalDir, '2030-02-03.md');
+  for (const heading of ['## 📓 Journal Entry', '## Journal Entry', '## 📋 Journal Entry', '## 📓 Journal']) {
+    const content = `${heading}  \n- Invented reflection\n`;
+    fs.writeFileSync(journalPath, content);
+    const result = healthToday({ config, now: new Date('2030-02-03T12:00:00Z') });
+    assert.equal(result.canonical.status, 'healthy');
+    assert.equal(fs.readFileSync(journalPath, 'utf8'), content);
+  }
+});

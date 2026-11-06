@@ -1,5 +1,7 @@
 'use strict';
 
+const { getSectionHeading } = require('../../../packages/jarvos-secondbrain-journal/src/section-config');
+
 module.exports = {
   name: 'journal-entry',
   version: '0.3.0',
@@ -18,7 +20,7 @@ module.exports = {
       when: {
         trigger: 'journal',
       },
-      action: 'append captured text to the journal Journal Entry section',
+      action: 'append captured text to the Journal section',
       reason: 'Explicit journal commands are terminal journal-first captures.',
     },
     {
@@ -92,7 +94,7 @@ module.exports = {
         {
           adapter: 'obsidian',
           operation: 'appendLineToJournalSection',
-          target: '## 📓 Journal Entry',
+          target: getSectionHeading('journal-entry'),
         },
       ],
     },

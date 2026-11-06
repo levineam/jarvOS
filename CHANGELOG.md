@@ -294,6 +294,10 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ## [Unreleased]
 
+### ⚠ BREAKING CHANGES
+
+* **journal (prj_unified_capture):** the daily journal section "📓 Journal Entry" is now "📓 Journal". Both headings are still read and written into, so nothing breaks; `scripts/rename-journal-heading.js` renames the heading in existing daily files with a dry run, a backup outside the vault, and restore. Anything that matches the old heading text directly must accept the new one.
+
 ### Features
 
 * **capture (prj_unified_capture):** add `jarvos_capture` (MCP) and `jarvos capture` (CLI), one way for every harness to save to Ideas, Journal or a linked note, with provenance filled in by the tool; the shared capture guideline ships in `jarvos_capture`'s description and the session-start packet. `jarvos_create_note` is deprecated and kept for one release.
