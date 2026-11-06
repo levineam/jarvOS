@@ -128,3 +128,35 @@ test('a saved note whose journal link failed is reported as saved, not as a fail
   assert.equal(response.ok, false);
   assert.match(response.message, /^Saved the note "Tidal gardens", but its link from today's Notes is not confirmed .*Do not save the note again\.$/);
 });
+
+test('an explicit kind keeps the words exactly as given', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-simple-verbatim-'));
+  const notes = path.join(root, 'Notes');
+  const journal = path.join(root, 'Journal');
+  fs.mkdirSync(notes); fs.mkdirSync(journal);
+  const overrides = { JARVOS_VAULT_DIR: root, JARVOS_NOTES_DIR: notes, VAULT_NOTES_DIR: notes, JARVOS_JOURNAL_DIR: journal, JOURNAL_DIR: journal, JARVOS_KNOWLEDGE_DIR: path.join(root, '.jarvos/knowledge'), XDG_STATE_HOME: path.join(root, '.state') };
+  const previous = Object.fromEntries(Object.keys(overrides).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, overrides);
+  try {
+    const options = { vaultRoot: root, journalDir: journal, mutationService: createAcknowledgedVaultMutationService(root) };
+    for (const kind of ['journal', 'idea']) {
+      const text = `I have an idea about a test ${kind} on lunar orchards.`;
+      const response = simpleCapture({ ...base, kind, text, date: '2026-06-22' }, options);
+      assert.equal(response.ok, true, response.message);
+      assert.match(fs.readFileSync(path.join(journal, '2026-06-22.md'), 'utf8'), new RegExp(`- ${text.replace(/\./g, '\\.')}`));
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('formatted text is refused for Ideas and Journal with a pointer to notes, before anything is written', () => {
+  for (const kind of ['idea', 'journal']) {
+    for (const text of ['Today I finished:\n- A test review\n- A test plan', '## A test heading', 'A test\ttab']) {
+      assert.throws(() => simpleCapture({ ...base, kind, text }, { capture: () => assert.fail('must reject before capture') }), /save it with kind "note"/);
+    }
+  }
+  assert.doesNotThrow(() => buildSimpleCaptureEvent({ ...base, kind: 'note', title: 'Test list', text: 'Today I finished:\n- A test review' }));
+  assert.doesNotThrow(() => buildSimpleCaptureEvent({ ...base, kind: 'journal', text: 'A test first paragraph.\n\nA test second paragraph.' }));
+});

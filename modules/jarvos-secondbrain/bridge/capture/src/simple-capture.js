@@ -3,6 +3,7 @@
 const { captureWithJarvos, captureFailureMessage } = require('./universal-capture');
 const { parseHardCaptureCommand } = require('../../routing/src/keyword-capture-router');
 const { SOURCE_TOOLS } = require('../../../packages/jarvos-ambient/src/intent/capture-contract');
+const { normalizeJournalEntry } = require('../../provenance/src/content-origin-contract');
 
 function buildSimpleCaptureEvent(input = {}) {
   const { kind, words, asked } = input;
@@ -26,6 +27,13 @@ function buildSimpleCaptureEvent(input = {}) {
   if (command.matched && command.route !== kind) {
     throw new Error(`text starts with a ${command.route} command; remove that prefix or use kind "${command.route}"`);
   }
+  // A journal bullet cannot hold block Markdown (lists, headings, quotes,
+  // code fences) or tabs; say so up front instead of failing after dispatch.
+  if (kind !== 'note' && !command.matched) {
+    try { normalizeJournalEntry(`- ${input.text.trim()}`); } catch {
+      throw new Error('this text has lists, headings, quotes, code or tabs, which a journal bullet cannot hold; save it with kind "note" to keep the formatting, or as plain sentences');
+    }
+  }
   const source = input.source.trim();
   const model = input.model?.trim() || 'unknown';
   return {
@@ -34,6 +42,7 @@ function buildSimpleCaptureEvent(input = {}) {
     source: SOURCE_TOOLS.includes(source) || /^custom:[a-z0-9][a-z0-9-]*$/i.test(source)
       ? source : { tool: 'other', label: source },
     captureMode: 'prompted',
+    verbatim: true,
     frontmatter: { capture_asked: asked },
     ...(kind === 'idea' ? { substantive: false } : {}),
     ...(input.title !== undefined ? { title: input.title.trim() } : {}),

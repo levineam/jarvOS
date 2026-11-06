@@ -162,6 +162,7 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
     human_evidence_eligible: contentOrigin.human_evidence_eligible,
     content_origin_drafting: drafting.entries.length ? drafting.entries : undefined,
     substantive: raw.substantive,
+    verbatim: raw.verbatim === true ? true : undefined,
     createNote: raw.createNote,
     createDurableNote: raw.createDurableNote,
     durable: raw.durable,

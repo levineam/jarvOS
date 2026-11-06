@@ -112,6 +112,9 @@ function stripLeadingKeyword(text) {
 
 function primaryText(capture = {}) {
   const source = capture.content ?? capture.text ?? capture.body ?? '';
+  // A caller that already chose the destination (jarvos_capture) sends the
+  // user's words as they are; only free-form captures strip lead-in phrases.
+  if (capture.verbatim === true) return String(source).trim();
   return stripLeadingKeyword(source);
 }
 
