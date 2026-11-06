@@ -67,7 +67,7 @@ test('simple capture passes options and reports plain acknowledged or failed mes
   for (const outcomes of [['saved_locally_sync_pending'], ['deferred'], ['committed', 'deferred']]) {
     const response = simpleCapture(base, { capture: () => receipt(...outcomes) });
     assert.equal(response.ok, false);
-    assert.match(response.message, /^Not confirmed yet: .*Check before saving it again\.$/);
+    assert.match(response.message, /^Not confirmed yet: .*Check whether it is there before saving it again\.$/);
   }
   for (const outcomes of [['failed'], ['deferred', 'failed']]) {
     const response = simpleCapture(base, { capture: () => receipt(...outcomes) });

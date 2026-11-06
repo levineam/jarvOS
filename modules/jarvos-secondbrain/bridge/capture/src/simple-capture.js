@@ -66,8 +66,9 @@ function buildSimpleCaptureEvent(input = {}) {
 const ACKNOWLEDGED = new Set(['committed', 'already_satisfied']);
 const PENDING = new Set(['saved_locally_sync_pending', 'deferred']);
 
-// A queued or locally saved write may still land, so it is neither "saved" nor
-// "not saved": telling the user it failed invites a duplicate retry.
+// A queued or locally saved write may still land, or (when only the journal
+// file's creation was queued) may not: it is neither "saved" nor "not saved".
+// Promise nothing; ask for a check, which avoids both loss and duplicates.
 function isPendingOnly(result) {
   const artifacts = result?.artifactReceipt?.artifacts || [];
   const open = artifacts.filter((artifact) => !ACKNOWLEDGED.has(artifact.outcome));
@@ -89,7 +90,7 @@ function simpleCapture(input, options = {}) {
     // saved" would invite a duplicate note.
     const notesWhere = input.date ? `Notes for ${input.date}` : "today's Notes";
     message = `Saved the note "${result.note?.title || input.title || 'untitled'}", but its link from ${notesWhere} is not confirmed (${captureFailureMessage(result)}). Do not save the note again.`;
-  } else if (!ok && isPendingOnly(result)) message = 'Not confirmed yet: it is queued to save once the vault syncs. Check before saving it again.';
+  } else if (!ok && isPendingOnly(result)) message = 'Not confirmed yet: the vault has not confirmed this save, and it may still be waiting. Check whether it is there before saving it again.';
   else if (!ok) message = `Not saved: ${captureFailureMessage(result)}`;
   else if (kind === 'note') {
     // Claim the journal link only when a journal write was acknowledged; link
