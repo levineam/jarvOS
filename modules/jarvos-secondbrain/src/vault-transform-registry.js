@@ -51,11 +51,31 @@ function normalizeJournalHeading(heading) {
 }
 
 function journalSectionRange(lines, heading) {
-  const headings = JOURNAL_HEADINGS.includes(heading) ? JOURNAL_HEADINGS : [heading];
+  // Self-contained: this source is also serialized into the Obsidian evaluator.
   let start = -1;
-  for (const candidate of headings) {
-    start = lines.findIndex((line) => (JOURNAL_HEADINGS.includes(heading) ? line.trimEnd() : line.trim()) === candidate);
-    if (start !== -1) break;
+  if (!JOURNAL_HEADINGS.includes(heading)) {
+    start = lines.findIndex((line) => line.trim() === heading);
+  } else {
+    // Prefer the canonical heading over legacy ones, but never match a heading
+    // shown as an example inside a fenced code block.
+    const fenced = [];
+    let fence = null;
+    for (const line of lines) {
+      const delimiter = String(line).trim().match(/^(`{3,}|~{3,})(.*)$/);
+      if (fence) {
+        fenced.push(true);
+        if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      } else if (delimiter) {
+        fenced.push(true);
+        fence = delimiter[1];
+      } else {
+        fenced.push(false);
+      }
+    }
+    for (const candidate of JOURNAL_HEADINGS) {
+      start = lines.findIndex((line, index) => !fenced[index] && line.trim() === candidate);
+      if (start !== -1) break;
+    }
   }
   if (start === -1) return { start: -1, end: -1 };
   let end = lines.length;
