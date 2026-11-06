@@ -331,6 +331,7 @@ try {
   if (
     toolNames.includes('jarvos_recall')
     && toolNames.includes('jarvos_synthesize')
+    && toolNames.includes('jarvos_capture')
     && toolNames.includes('jarvos_create_note')
     && toolNames.includes('jarvos_journal_health')
     && toolNames.includes('jarvos_ensure_today_journal')

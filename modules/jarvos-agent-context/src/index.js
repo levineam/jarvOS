@@ -211,6 +211,11 @@ function loadJarvosPaths() {
   );
 }
 
+// jarvos_capture goes through the same configured Second Brain as note writes.
+function loadSimpleCapture() {
+  return require(path.join(secondbrainDir(), 'bridge', 'capture', 'src', 'simple-capture.js'));
+}
+
 function loadNoteWriter() {
   return require(path.join(
     secondbrainDir(),
@@ -2030,6 +2035,15 @@ async function hydrate(options = {}) {
   };
   const jarvosPaths = loadJarvosPaths();
   const parts = ['# jarvOS Working Context Packet', ''];
+  try {
+    const { readCaptureGuideline } = loadTrustedModule('@jarvos/instruction-projection',
+      path.join(JARVOS_ROOT, 'modules/jarvos-instruction-projection/src/index.js'));
+    parts.push('', '# Keeping things', '', readCaptureGuideline());
+    report.sources.push('capture-guideline.md');
+  } catch (error) {
+    report.omissions.push(`capture guideline unavailable: ${error.message}`);
+  }
+
   const projectsCutover = projectsContextCutoverEnabled();
 
   if (options.projectsContext === false) {
@@ -2472,6 +2486,7 @@ async function startupBrief(options = {}) {
 }
 
 module.exports = {
+  loadSimpleCapture,
   setMeaningProvider,
   readRipenessContext,
   assessActiveAssistant,

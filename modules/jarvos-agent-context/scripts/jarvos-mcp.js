@@ -4,6 +4,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const readline = require('readline');
+let clientName = null;
+// Loaded defensively: a missing guideline file must never take the whole MCP
+// server (and every other jarvOS tool) down with it.
+function captureToolDescription() {
+  const purpose = "Save something for the user to today's Ideas, Journal, or a linked note, through the jarvOS capture path.";
+  try {
+    return `${purpose} ${require('../../jarvos-instruction-projection/src').readCaptureGuideline()}`;
+  } catch {
+    return purpose;
+  }
+}
 const {
   setMeaningProvider,
   readRipenessContext,
@@ -394,8 +405,27 @@ const TOOLS = [
     },
   },
   {
+    name: 'jarvos_capture',
+    description: captureToolDescription(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['kind', 'text', 'words', 'asked'],
+      properties: {
+        kind: { type: 'string', enum: ['idea', 'journal', 'note'] },
+        text: { type: 'string', minLength: 1 },
+        words: { type: 'string', enum: ['user', 'assistant', 'mixed'] },
+        asked: { type: 'string', enum: ['explicit', 'accepted_offer'] },
+        title: { type: 'string', minLength: 1 },
+        model: { type: 'string', minLength: 1 },
+        date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      },
+    },
+  },
+  {
     name: 'jarvos_create_note',
-    description: "Create an Obsidian note, link it from today's journal, and verify the jarvOS note-capture contract.",
+    description: `Deprecated: use jarvos_capture with kind "note"; kept for one release. Create an Obsidian note, link it from today's journal, and verify the jarvOS note-capture contract.`,
     inputSchema: {
       type: 'object',
       required: ['title', 'content'],
@@ -1073,6 +1103,19 @@ async function callTool(name, args = {}, lifecycle = {}) {
     const result = synthesizeRecall(args);
     return textResult(result.markdown, !result.ok);
   }
+  if (name === 'jarvos_capture') {
+    const allowed = new Set(['kind', 'text', 'words', 'asked', 'title', 'model', 'date']);
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some((key) => !allowed.has(key))) {
+      throw new Error('jarvos_capture accepts only kind, text, words, asked, title, model, and date');
+    }
+    const harness = process.env[COMMON_WORK_HARNESS_ENV];
+    const source = process.env.JARVOS_CAPTURE_SOURCE
+      || (harness === 'claude' ? 'claude-code' : harness)
+      || clientName || 'mcp';
+    const { simpleCapture } = require('../src').loadSimpleCapture();
+    const result = simpleCapture({ ...args, source });
+    return textResult(result.message, !result.ok);
+  }
   if (name === 'jarvos_create_note') {
     const result = await createNote(noteCaptureArgs(args));
     return textResult(result.markdown, !result.ok);
@@ -1131,6 +1174,7 @@ async function handle(message) {
 
   try {
     if (method === 'initialize') {
+      clientName = typeof params?.clientInfo?.name === 'string' ? params.clientInfo.name.trim().toLowerCase() : null;
       write({
         jsonrpc: '2.0',
         id,

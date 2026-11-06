@@ -1345,7 +1345,7 @@ function scaffoldRuntime(runtimeId, outDir) {
     displayName: runtimeId,
     sharedAgentContext: {
       mcpServer: DEFAULT_AGENT_CONTEXT_MCP,
-      requiredTools: ['jarvos_current_work', 'jarvos_recall', 'jarvos_create_note', 'jarvos_startup_brief', REQUIRED_MCP_TOOL],
+      requiredTools: ['jarvos_current_work', 'jarvos_recall', 'jarvos_capture', 'jarvos_create_note', 'jarvos_startup_brief', REQUIRED_MCP_TOOL],
     },
     targets: [
       {
