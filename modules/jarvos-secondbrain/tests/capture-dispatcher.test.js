@@ -195,7 +195,7 @@ test('dispatcher treats strict journal aliases as journal-entry captures', () =>
     assert.equal(result.hardCommand.disposition, 'capture');
     assert.deepEqual(mock.calls, [[
       'appendLineToJournalSection',
-      '## 📓 Journal Entry',
+      '## 📓 Journal',
       '- reviewed the capture bug',
       '2026-01-02',
     ]]);

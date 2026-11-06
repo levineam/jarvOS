@@ -36,7 +36,8 @@ const WORK_INTAKE_CONFIDENCE_THRESHOLD = 0.8;
 
 const IDEAS_HEADING = '## 💡 Ideas';
 const NOTES_HEADING = '## 📝 Notes';
-const JOURNAL_ENTRY_HEADING = '## 📓 Journal Entry';
+const { getSectionHeading } = require('../../../jarvos-secondbrain-journal/src/section-config');
+const JOURNAL_ENTRY_HEADING = getSectionHeading('journal-entry');
 const DECISIONS_HEADING = '## ✅ Decisions';
 const REMEMBERED_HEADING = '## 🧠 Remembered';
 
@@ -370,7 +371,7 @@ function buildSkillInvocations(plan) {
       'journal-entry',
       actionsByKind.get('journal'),
       { text: primaryText(plan.capture), trigger: JOURNAL, date: plan.date },
-      'Explicit journal routing appends captured text to the Journal Entry section.',
+      'Explicit journal routing appends captured text to the Journal section.',
     ));
   }
 

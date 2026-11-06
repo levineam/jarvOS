@@ -114,6 +114,6 @@ test('journal-entry contract declares strict idea and journal routes', () => {
   const targets = contract.capabilities.flatMap((capability) => capability.writes.map((write) => write.target));
 
   assert.deepEqual(keywordTriggers, ['idea', 'journal']);
-  assert.deepEqual(targets, ['## 💡 Ideas', '## 📓 Journal Entry']);
+  assert.deepEqual(targets, ['## 💡 Ideas', '## 📓 Journal']);
   assert.deepEqual(contract.input.properties.trigger.enum, ['idea', 'journal']);
 });

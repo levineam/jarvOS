@@ -1,6 +1,7 @@
 'use strict';
 
 const journal = require('./adapters/journal');
+const { headingsForSection } = require('../../../modules/jarvos-secondbrain/packages/jarvos-secondbrain-journal/src/section-config');
 const notes = require('./adapters/notes');
 const paperclip = require('./adapters/paperclip');
 
@@ -15,6 +16,14 @@ function localDate() {
 
 function sectionItems(day, title) {
   if (!day) return [];
+  if (title === 'Journal') {
+    for (const heading of headingsForSection('journal-entry')) {
+      const name = heading.replace(/^##\s+(?:\p{Extended_Pictographic}️?\s*)?/u, '');
+      const section = day.sections.find((s) => s.title === name);
+      if (section) return section.empty ? [] : section.items;
+    }
+    return [];
+  }
   const s = day.sections.find((x) => x.title.toLowerCase().includes(title.toLowerCase()));
   return s && !s.empty ? s.items : [];
 }
@@ -58,7 +67,7 @@ async function brief(cfg) {
     reminders: sectionItems(day, 'Reminders'),
     flagged: sectionItems(day, 'Flagged'),
     ideas: sectionItems(day, 'Ideas'),
-    journalEntry: sectionItems(day, 'Journal Entry'),
+    journalEntry: sectionItems(day, 'Journal'),
     inbox: sectionItems(day, 'Paperclip Inbox'),
     moving,
     needsYou,

@@ -11,7 +11,9 @@ The bridge stays generic:
 
 Current capture skills:
 
-- `journal-entry` writes idea captures to the journal package.
+- `journal-entry` writes idea captures to Ideas and journal captures to `## 📓 Journal`.
+  The logical id stays `journal-entry`; legacy Journal headings are accepted without
+  adding another section, and the canonical heading wins when both exist.
 - `note-creation` creates durable notes through the storage adapter and links them from the journal.
 - Medium-confidence captures are ignored by default; they no longer create a journal review section.
 - `memory-promotion` promotes high-confidence durable salience through a memory adapter.

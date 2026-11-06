@@ -267,3 +267,11 @@ The public stack is source-backed and rebuildable:
 - The watch surface reports artifacts, private skips, qmd freshness, generated wiki state, queue counts, eval status, and stale/failure signals.
 
 See `docs/architecture/automatic-secondbrain-public-boundary.md` for the public/private packaging boundary and local-to-public release path. See [the public-safe inventory of active, optional, dogfood, and deferred external integrations](https://github.com/levineam/jarvOS/blob/main/docs/architecture/secondbrain-external-integrations.md).
+
+### Daily Journal section compatibility
+
+The daily reflection section is `## 📓 Journal` (logical id `journal-entry`).
+Legacy `## 📓 Journal Entry`, `## Journal Entry`, and `## 📋 Journal Entry`
+headings remain readable and writable without adding a duplicate section.
+See the [journal package](packages/jarvos-secondbrain-journal/README.md#journal-section-headings)
+for the dry-run heading migration, external preimage backup, and guarded restore.
