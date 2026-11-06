@@ -71,3 +71,19 @@ test('capture CLI decodes stdin as one UTF-8 stream across chunk boundaries', as
   assert.equal(code, 0);
   assert.equal(seen, 'A test thought about a café garden');
 });
+
+test('capture CLI loads capture through the configured JARVOS_SECONDBRAIN_DIR', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-cli-sb-'));
+  const file = path.join(dir, 'bridge', 'capture', 'src', 'simple-capture.js');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "module.exports = { simpleCapture: () => ({ ok: true, message: 'Saved by the configured test copy.', result: { ok: true } }) };\n");
+  try {
+    const result = spawnSync(process.execPath, [path.join(__dirname, '../scripts/jarvos.js'), 'capture', ...flags, 'A test thought about tidal gardens'], { encoding: 'utf8', env: { ...process.env, JARVOS_SECONDBRAIN_DIR: dir } });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), 'Saved by the configured test copy.');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
