@@ -70,7 +70,14 @@ function simpleCapture(input, options = {}) {
   const kind = input.kind;
   const when = input.date ? `for ${input.date}` : "today's";
   let message;
-  if (!ok && isPendingOnly(result)) message = 'Not confirmed yet: it is queued to save once the vault syncs. Check before saving it again.';
+  const artifacts = result?.artifactReceipt?.artifacts || [];
+  const noteSaved = kind === 'note' && artifacts.some((a) => a.kind === 'note' && ACKNOWLEDGED.has(a.outcome));
+  if (!ok && noteSaved) {
+    // The note exists; only its journal link is unconfirmed. Saying "not
+    // saved" would invite a duplicate note.
+    const notesWhere = input.date ? `Notes for ${input.date}` : "today's Notes";
+    message = `Saved the note "${result.note?.title || input.title || 'untitled'}", but its link from ${notesWhere} is not confirmed (${captureFailureMessage(result)}). Do not save the note again.`;
+  } else if (!ok && isPendingOnly(result)) message = 'Not confirmed yet: it is queued to save once the vault syncs. Check before saving it again.';
   else if (!ok) message = `Not saved: ${captureFailureMessage(result)}`;
   else if (kind === 'note') message = `Saved as the note "${result.note.title}", linked from ${input.date ? `Notes for ${input.date}` : "today's Notes"}.`;
   else message = input.date

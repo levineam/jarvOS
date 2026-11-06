@@ -115,3 +115,16 @@ test('conflicting leading commands cannot override the requested capture kind', 
     assert.throws(() => simpleCapture({ ...base, kind, text }, { capture: () => assert.fail('must reject before capture') }), /remove that prefix or use kind/);
   }
 });
+
+test('a saved note whose journal link failed is reported as saved, not as a failure', () => {
+  const response = simpleCapture({ ...base, kind: 'note', title: 'Tidal gardens' }, { capture: () => ({
+    ok: false,
+    note: { title: 'Tidal gardens' },
+    artifactReceipt: { artifacts: [
+      { kind: 'note', vaultRelativePath: 'Notes/Tidal gardens.md', outcome: 'committed' },
+      { kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'failed' },
+    ] },
+  }) });
+  assert.equal(response.ok, false);
+  assert.match(response.message, /^Saved the note "Tidal gardens", but its link from today's Notes is not confirmed .*Do not save the note again\.$/);
+});

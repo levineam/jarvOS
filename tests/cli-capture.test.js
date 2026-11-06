@@ -57,3 +57,17 @@ test('jarvos executable dispatches capture and reports invalid input without acc
   assert.equal(result.status, 1);
   assert.match(result.stderr, /kind must be/);
 });
+
+test('capture CLI decodes stdin as one UTF-8 stream across chunk boundaries', async () => {
+  const bytes = Buffer.from('A test thought about a café garden', 'utf8');
+  const split = bytes.indexOf(0xc3) + 1; // inside the two-byte "é"
+  let seen = null;
+  const code = await runCaptureCommand(flags, {}, {
+    stdin: Readable.from([bytes.subarray(0, split), bytes.subarray(split)]),
+    stdout: { write() {} },
+    stderr: { write() {} },
+    capture: (value) => { seen = value.text; return simpleCapture(value, { capture: () => ({ ok: true }) }); },
+  });
+  assert.equal(code, 0);
+  assert.equal(seen, 'A test thought about a café garden');
+});
