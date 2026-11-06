@@ -24,8 +24,17 @@ function parseFrontmatter(text) {
 function parseSections(body) {
   const sections = [];
   let current = null;
+  let fence = null;
   for (const line of body.split('\n')) {
-    const h = line.match(/^##\s+(.*)$/);
+    // A heading shown inside a fenced code block is an example, not a section.
+    const delimiter = line.trim().match(/^(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (delimiter && delimiter[1][0] === fence[0] && delimiter[1].length >= fence.length && !delimiter[2].trim()) fence = null;
+      if (current) current.lines.push(line);
+      continue;
+    }
+    if (delimiter) fence = delimiter[1];
+    const h = !delimiter && line.match(/^##\s+(.*)$/);
     if (h) {
       if (current) sections.push(current);
       const title = h[1].trim();

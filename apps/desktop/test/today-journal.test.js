@@ -48,3 +48,14 @@ test('Desktop append skips a fenced Journal example and lands in the real sectio
   assert.match(content, /## 📓 Journal Entry\n- A second test reflection\n- A test reflection/);
   assert.match(content, /```\n## 📓 Journal\n```/);
 });
+
+test('Today reads the real Journal section, not a fenced example heading', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-today-fence-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(root, `${localDate()}.md`), ['## 📝 Notes', '```', '## 📓 Journal', '```', '', '## 📓 Journal Entry', '- A test reflection', ''].join('\n'));
+  const { parseSections } = require('../server/adapters/journal');
+  const titles = parseSections(fs.readFileSync(path.join(root, `${localDate()}.md`), 'utf8')).map((s) => s.title);
+  assert.deepEqual(titles, ['Notes', 'Journal Entry']);
+  const result = await brief({ vault: { journalDir: root } });
+  assert.deepEqual(result.journalEntry, ['A test reflection']);
+});
