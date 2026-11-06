@@ -724,8 +724,8 @@ test('payload rejection is public, planned and attempt-free before probe or drai
       assert.equal(result.reason, 'Capture rejected before dispatch: invalid journal entry payload. Nothing was written; the retained intent needs correction.');
       assert.equal(result.obsidian, 'unacknowledged');
       const record = adapter.ledger.get(input.operationId);
-      assert.equal(record.status, 'planned');
-      assert.equal(record.attempts, 0);
+      assert.equal(record, null);
+      assert.equal(fs.existsSync(path.join(root, 'ledger.json')), false);
       const projected = projectPublicResult(result);
       assert.equal(projected.reason, result.reason);
       assert.equal(projected.validationReason, result.validationReason);
@@ -754,4 +754,84 @@ test('Ideas mutation and inspection preserve existing markers and omit new marke
     assert.equal(fresh.result.status, 'done');
     assert.equal(fresh.content, transforms.applyNode('', input));
   }
+});
+
+for (const method of ['submit', 'execute', 'acknowledgeIfSatisfied']) {
+  test(`${method} rejects invalid payloads before creating ledger records or consuming sequences`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-validation-'));
+    try {
+      const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+      const filePath = path.join(root, 'ledger.json');
+      const service = createConfiguredVaultMutationService({ vaultRoot: root, vaultId: 'vault-a', adapterOptions: {
+        ledgerPath: filePath, probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+        evaluate: () => { throw new Error('Rejected operations must never reach Obsidian'); },
+      } });
+      const invalid = [
+        ...['## Synthetic heading', '- Synthetic list', '> Synthetic quote'].map(line => ({
+          operationKind: 'transform', transformName: 'journal-section-line', transformVersion: 2,
+          replayPayload: { heading: 'Synthetic ideas', line: `- Synthetic idea\n${line}`, contentOrigin: { content_origin: 'unknown', content_origin_basis: 'unknown' } },
+        })),
+        { operationKind: 'create', content: undefined },
+        { operationKind: 'replace', content: 'Synthetic replacement', expectedContent: 'Synthetic previous' },
+        { vaultId: 'other-vault' },
+        { operationKind: 'delete', expectedContent: 'Synthetic previous', expectedHash: require('../adapters/obsidian/src/vault-mutation-contract').hashUtf8('Synthetic previous') },
+      ];
+      for (const [index, extra] of invalid.entries()) {
+        const input = { ...operation(), operationId: `op-invalid-${index}`, vaultRelativePath: 'Journal/2026-01-01.md', ...extra };
+        const result = method === 'submit' ? service.execute(input) : service.adapter[method](input);
+        if (method === 'acknowledgeIfSatisfied') assert.equal(result, false);
+        else {
+          assert.equal(result.status, 'failed');
+          if (index < 5) assert.equal(result.adapterEvidence.validationReason, 'invalid_replay_payload');
+        }
+        assert.equal(fs.existsSync(filePath), false);
+      }
+      assert.throws(() => service.adapter[method]({ ...operation(), vaultRelativePath: '../Synthetic.md' }), /normalized vault-relative/);
+      assert.equal(fs.existsSync(filePath), false);
+      const ledger = require('../adapters/obsidian/src/vault-mutation-ledger').createVaultMutationLedger({ filePath });
+      assert.equal(ledger.planNext({ ...operation(), vaultRelativePath: 'Journal/2026-01-01.md' }).operation.sequence, 1);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('reconciler drains a valid journal transform after pre-dispatch quarantine in the same drain', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-quarantine-drain-'));
+  try {
+    const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+    const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
+    const filePath = path.join(root, 'ledger.json');
+    const ledger = createVaultMutationLedger({ filePath });
+    const journalPath = 'Journal/2026-01-01.md';
+    const file = { path: journalPath, content: '## Synthetic ideas\n' };
+    const settled = value => ({ then(fn) { fn(value); return this; }, catch() { return this; } });
+    const context = { TextDecoder, Uint8Array, btoa: value => Buffer.from(value, 'binary').toString('base64'), atob: value => Buffer.from(value, 'base64').toString('binary'), app: { vault: {
+      getFileByPath: target => target === journalPath ? file : null,
+      process: (entry, transform) => { entry.content = transform(entry.content); return settled(entry); },
+      read: entry => settled(entry.content),
+    } } };
+    context.globalThis = context;
+    const service = createConfiguredVaultMutationService({ vaultRoot: root, vaultId: 'vault-a', adapterOptions: {
+      ledgerPath: filePath, probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+      evaluate(code) { const raw = vm.runInNewContext(code, context); return typeof raw === 'string' ? JSON.parse(raw) : raw; },
+    } });
+    const invalid = { ...operation(), operationId: 'op-quarantine-first', vaultRelativePath: journalPath, operationKind: 'transform',
+      transformName: 'journal-section-line', transformVersion: 2,
+      replayPayload: { heading: 'Synthetic ideas', line: '- Synthetic idea\n## Synthetic heading', contentOrigin: {} } };
+    ledger.planNext(invalid);
+    const valid = ledger.planNext({ ...invalid, operationId: 'op-quarantine-later', replayPayload: {
+      heading: 'Synthetic ideas', line: '- Synthetic later entry', contentOrigin: { content_origin: 'unknown', content_origin_basis: 'unknown' },
+    } }).operation;
+    const result = service.reconciler.drain({ timeMs: 10000 });
+    assert.equal(result.quarantined, 1);
+    assert.equal(result.acknowledged, 1);
+    assert.equal(ledger.get(valid.operationId).status, 'acknowledged');
+    assert.match(file.content, /Synthetic later entry/);
+    assert.doesNotMatch(file.content, /Synthetic heading/);
+    assert.equal(ledger.get(invalid.operationId).status, 'quarantined');
+    assert.equal(fs.readdirSync(`${filePath}.quarantine`).length, 1);
+    // A restarted drain also skips the retained quarantine record.
+    const later = ledger.planNext({ ...valid, operationId: 'op-quarantine-restart', replayPayload: { ...valid.replayPayload, line: '- Synthetic restart entry' } }).operation;
+    assert.equal(service.reconciler.drain({ timeMs: 10000 }).acknowledged, 1);
+    assert.equal(ledger.get(later.operationId).status, 'acknowledged');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

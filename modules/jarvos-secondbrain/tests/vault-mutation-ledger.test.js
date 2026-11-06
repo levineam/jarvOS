@@ -98,3 +98,32 @@ test('complete operations are planned atomically in submission order', () => {
     assert.equal(Object.keys(ledger.read().operations).length, 2);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+for (const state of ['planned', 'dispatched', 'local_mutating', 'local_applied', 'unknown_after_dispatch']) {
+  test(`quarantine following ${state} ${state === 'planned' ? 'allows' : 'blocks'} later file claims`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-quarantine-order-'));
+    try {
+      const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json') });
+      const first = op('op-quarantine-first');
+      ledger.ensure(first);
+      if (state !== 'planned') {
+        const claim = ledger.claim(first, 'owner', { local: state.startsWith('local_') });
+        if (['local_applied', 'unknown_after_dispatch'].includes(state)) ledger.transition(first.operationId, state, { ownerId: 'owner', fence: claim.fence });
+      }
+      ledger.quarantine(first.operationId, 'synthetic rejection');
+      const later = op('op-quarantine-later', 2);
+      const claim = ledger.claim(later, 'later-owner');
+      assert.equal(claim.granted, state === 'planned');
+      if (state !== 'planned') {
+        assert.equal(claim.reason, 'prior_operation_blocked');
+        assert.equal(ledger.active()[0].operation.operationId, first.operationId);
+        const { createVaultMutationReconciler } = require('../adapters/obsidian/src/vault-mutation-reconciler');
+        const reconciler = createVaultMutationReconciler({ ledger, vaultRoot: root, adapter: { execute() { assert.fail('quarantine after possible mutation must block drain'); } } });
+        const summary = reconciler.drain();
+        assert.equal(summary.processed, 1);
+        assert.equal(summary.blocked, 1);
+      }
+      assert.equal(ledger.get(first.operationId).status, 'quarantined');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
