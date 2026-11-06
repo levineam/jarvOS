@@ -92,7 +92,8 @@ function orientation(record) {
     if (section === 'Goal') goal.push(line);
     if (inFence) continue;
     const checkbox = /^\s*- \[([ xX])\]\s+(.+)$/.exec(line);
-    if (section === 'Definition of Done' && checkbox) {
+    // The project's acceptance criteria; older files use the heading Definition of Done.
+    if ((section === 'Acceptance criteria' || section === 'Definition of Done') && checkbox) {
       done.total++;
       if (checkbox[1].toLowerCase() === 'x') done.checked++;
     }
