@@ -281,7 +281,7 @@ test('jarvos_create_note rejects forged origin fields, unsafe titles and unbound
   });
 });
 
-test('session thread tools require explicit threadId and writes are stamped host=grok-bot, journalPolicy=link', async () => {
+test('session thread tools require explicit threadId and writes are stamped host=grok-bot without forcing a journal link', async () => {
   await withServer(GROK(), async (ctx) => {
     const writeArgs = { ...THREAD_WRITE };
     const reject = [
@@ -311,7 +311,7 @@ test('session thread tools require explicit threadId and writes are stamped host
     assert.equal(forwarded.threadId, 'grok-thread-0001');
     assert.equal(forwarded.summary, 'Grok checkpoint');
     assert.equal(forwarded.host, 'grok-bot');
-    assert.equal(forwarded.journalPolicy, 'link');
+    assert.equal(Object.hasOwn(forwarded, 'journalPolicy'), false);
     assert.equal(hasOwn(forwarded, 'title'), false);
     assert.equal(hasOwn(forwarded, 'routeCapability'), false);
   });
@@ -576,4 +576,11 @@ test('Grok launcher main pins GROK_TOOL_POLICY and grokChildEnv into shared serv
   assert.equal(options.port, 8767);
   assert.ok(gateway.isLoopbackHost(options.host));
   assert.equal(options.env, env);
+});
+
+test('thread write stamp preserves the shared no-link default without a socket', () => {
+  const stamped = grok.GROK_TOOL_POLICY.tools.jarvos_session_thread_write.transform(THREAD_WRITE);
+  assert.equal(stamped.host, 'grok-bot');
+  assert.equal(Object.hasOwn(stamped, 'journalPolicy'), false);
+  assert.deepEqual(THREAD_WRITE, { threadId: 'grok-thread-0001', summary: 'Grok checkpoint' });
 });

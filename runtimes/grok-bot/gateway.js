@@ -60,7 +60,7 @@ function stampNote(args) {
 }
 
 function stampThreadWrite(args) {
-  return { ...args, host: GROK_SOURCE_PERSONALITY, journalPolicy: 'link' };
+  return { ...args, host: GROK_SOURCE_PERSONALITY };
 }
 
 const GROK_TOOL_POLICY = deepFreeze({

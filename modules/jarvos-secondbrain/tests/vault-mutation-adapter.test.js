@@ -314,7 +314,7 @@ test('fixed program uses create, process, and app-owned readback in their respec
 });
 
 function settled(value) { return { then(fn) { try { fn(value); return this; } catch (error) { this.error = error; return this; } }, catch(fn) { if (this.error) fn(this.error); return this; } }; }
-function runInFakeObsidian(operation, { initial, readback } = {}) {
+function runInFakeObsidian(operation, { initial, readback, inspect = false } = {}) {
   const files = initial === undefined ? new Map() : new Map([[operation.vaultRelativePath, { path: operation.vaultRelativePath, content: initial }]]);
   const vault = { getFileByPath: (target) => files.get(target) || null, create: (target, content) => { const file = { path: target, content }; files.set(target, file); return settled(file); }, process: (file, transform) => { file.content = transform(file.content); return settled(file); }, delete: (file) => { files.delete(file.path); return settled(); }, read: (file) => settled(readback === undefined ? file.content : readback) };
   const context = {
@@ -326,8 +326,8 @@ function runInFakeObsidian(operation, { initial, readback } = {}) {
     unescape,
     JSON,
   };
-  context.globalThis = context; vm.runInNewContext(buildObsidianMutationProgram(operation), context);
-  return { result: context.__jarvosVaultMutationResults[operation.operationId], content: files.get(operation.vaultRelativePath)?.content };
+  context.globalThis = context; vm.runInNewContext(inspect ? buildObsidianInvariantProgram(operation, 'inspection-test', 'nonce') : buildObsidianMutationProgram(operation), context);
+  return { result: context.__jarvosVaultMutationResults[inspect ? 'inspection-test' : operation.operationId], content: files.get(operation.vaultRelativePath)?.content };
 }
 
 test('fixed program handles collision identity, latest-content transforms, and stale app readback', () => {
@@ -682,4 +682,55 @@ test('a staged runner dropped before running is resent until it runs', () => {
   };
   assert.equal(runObsidianEval(`/* ${'x'.repeat(9_000)} */ JSON.stringify(7)`, { vaultName: 'V', execute }), 7);
   assert.equal(vm.runInContext('Object.keys(globalThis.__jarvosEvalStage).length', app), 0);
+});
+
+test('multiline journal mutation and inspection match Node including stale markers', () => {
+  const transforms = createJarvosVaultTransforms();
+  const draft = fs.readFileSync(path.join(__dirname, 'fixtures/multi-paragraph-idea.md'), 'utf8').replace(/^# /, '').trim();
+  const input = { ...operation(), operationKind: 'transform', transformName: 'journal-section-line', transformVersion: 2, replayPayload: {
+    heading: '## 💡 Ideas', line: `- ${draft.replace(/\n/g, '\r\n')}`,
+    contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+  } };
+  const initial = '## 💡 Ideas\n\n- Previous\n\n\n## Next\n- Untouched\n';
+  const first = transforms.applyNode(initial, input);
+  const edited = first.replace('When you have money', 'When you had money');
+  const other = { ...input, replayPayload: { ...input.replayPayload, line: '- Tides, lamps, and ledgers\n\nDifferent remainder' } };
+  const malformed = first.replace(/<!-- jarvos-content-origin\/v1 [^\n]+/, '<!-- jarvos-content-origin/v1 forged -->');
+  for (const [before, request] of [[initial, input], [first, input], [edited, input], [first, other], [malformed, input]]) {
+    const expected = transforms.applyNode(before, request);
+    const actual = runInFakeObsidian(request, { initial: before });
+    assert.equal(actual.content, expected);
+    assert.equal(actual.result.invariant, transforms.isSatisfied(expected, request));
+    for (const content of [before, expected]) {
+      assert.equal(runInFakeObsidian(request, { initial: content, inspect: true }).result.invariant, transforms.isSatisfied(content, request));
+    }
+  }
+});
+
+test('payload rejection is public, planned and attempt-free before probe or drain', () => {
+  const { projectPublicResult } = require('../adapters/obsidian/src/vault-mutation-contract');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-invalid-entry-'));
+  try {
+    const input = { ...operation(), operationKind: 'transform', transformName: 'journal-section-line', transformVersion: 2, replayPayload: {
+      heading: '## 💡 Ideas', line: '- First\n\n# Injected',
+      contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+    } };
+    const adapter = createVaultMutationAdapter({ vaultRoot: root, vaultId: input.vaultId, ledgerPath: path.join(root, 'ledger.json'), transforms: createJarvosVaultTransforms(), probe() { assert.fail('probe'); }, opportunisticDrain() { assert.fail('drain'); }, evaluate() { assert.fail('dispatch'); } });
+    for (let replay = 0; replay < 2; replay += 1) {
+      const result = adapter.execute(input);
+      assert.equal(result.status, 'failed');
+      assert.equal(result.lifecycleState, 'planned');
+      assert.equal(result.validationReason, 'invalid_replay_payload');
+      assert.equal(result.reason, 'Capture rejected before dispatch: invalid journal entry payload. Nothing was written; the retained intent needs correction.');
+      assert.equal(result.obsidian, 'unacknowledged');
+      const record = adapter.ledger.get(input.operationId);
+      assert.equal(record.status, 'planned');
+      assert.equal(record.attempts, 0);
+      const projected = projectPublicResult(result);
+      assert.equal(projected.reason, result.reason);
+      assert.equal(projected.validationReason, result.validationReason);
+      assert.doesNotMatch(JSON.stringify(projected), /Injected|replayPayload|vault-a/);
+    }
+    assert.equal(Object.hasOwn(projectPublicResult({ status: 'failed', adapterEvidence: { validationReason: '/private/secret', reason: 'secret' } }), 'validationReason'), false);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

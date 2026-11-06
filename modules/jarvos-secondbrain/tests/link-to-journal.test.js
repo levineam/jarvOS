@@ -599,3 +599,57 @@ test('default (uninjected) service: a journal only on disk is still registered t
     assert.deepEqual(ledgerKinds(root), ['create:acknowledged', 'transform:acknowledged']);
   });
 });
+
+test('journal policy excludes operational artifacts and preserves deliberate links and captures', () => {
+  const { resolveJournalLinkPolicy } = require('../bridge/provenance/src/link-to-journal');
+  for (const input of [{ subtype: 'session-thread' }, { purpose: 'checkpoint' }, { source: 'host.operational' }, { type: 'test-artifact' }, { operational: true }]) {
+    assert.equal(resolveJournalLinkPolicy(input), 'none');
+    assert.equal(resolveJournalLinkPolicy({ ...input, journalPolicy: 'link' }), 'link');
+    assert.equal(resolveJournalLinkPolicy({ ...input, explicitBacklink: true }), 'link');
+  }
+  assert.equal(resolveJournalLinkPolicy({ frontmatter: { type: 'draft', source_actor: 'assistant', host: 'codex' } }), 'link');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-link-policy-'));
+  try {
+    withVaultEnv(root, () => {
+      fs.mkdirSync(path.join(root, 'Notes'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'Journal'), { recursive: true });
+      const notePath = path.join(root, 'Notes', 'Renamed checkpoint.md');
+      fs.writeFileSync(notePath, '---\nsubtype: session-thread\n---\nCheckpoint\n');
+      const journalPath = path.join(root, 'Journal', '2030-02-03.md');
+      const mutationService = { vaultRoot: root, execute() { assert.fail('no dispatch'); } };
+      const result = rawLinkNoteToJournal({ noteTitle: 'Renamed checkpoint', notePath, journalPath, mutationService });
+      assert.equal(result.status, 'not_requested');
+      assert.equal(fs.existsSync(journalPath), false);
+      assert.equal(fs.existsSync(path.join(root, '.jarvos')), false);
+      const linked = linkNoteToJournal({ noteTitle: 'Renamed checkpoint', notePath, journalPath, explicitBacklink: true });
+      assert.equal(linked.linked, true);
+    });
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('ambient bare-link actions apply the same operational policy', () => {
+  const { buildThreePackagePlan } = require('../packages/jarvos-ambient/src/routing');
+  const capture = { trigger: 'note', title: 'Checkpoint', content: 'Capture this note', subtype: 'session-thread' };
+  const operational = buildThreePackagePlan(capture);
+  assert.equal(operational.actions.some(action => action.kind === 'journal'), false);
+  const explicit = buildThreePackagePlan({ ...capture, journalPolicy: 'link' });
+  assert.equal(explicit.actions.some(action => action.kind === 'journal'), true);
+  const intentional = buildThreePackagePlan({ trigger: 'note', title: 'User draft', content: 'A deliberately captured draft', source_actor: 'assistant' });
+  assert.equal(intentional.actions.some(action => action.kind === 'journal'), true);
+});
+
+test('both bridge routers omit operational bare links and preserve explicit captures', () => {
+  const routers = [require('../bridge/routing/src/keyword-capture-router').applyRoutingPlan, require('../bridge/routing/src/three-package-router').applyThreePackagePlan];
+  for (const route of routers) {
+    for (const policy of [{ subtype: 'session-thread' }, { subtype: 'session-thread', journalPolicy: 'link' }, {}]) {
+      const calls = [];
+      const adapter = {
+        writeNote(input) { return { title: input.title, written: true }; },
+        appendLineToJournalSection(input) { calls.push(input); return { acknowledged: true }; },
+        ensureJournal() { assert.fail('must not create an empty journal'); },
+      };
+      route({ trigger: 'note', title: 'Fixture capture', text: 'note: Keep this draft', date: '2030-02-03', ...policy }, { adapter });
+      assert.equal(calls.length, policy.subtype && !policy.journalPolicy ? 0 : 1);
+    }
+  }
+});

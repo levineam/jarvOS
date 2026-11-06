@@ -15,6 +15,8 @@ const {
   normalizeContentOrigin,
 } = require('../../../../bridge/provenance/src/content-origin-contract');
 
+const { resolveJournalLinkPolicy } = require('../../../../bridge/provenance/src/link-to-journal');
+
 const MEMORY = 'memory';
 const WORK_INTAKE = 'work-intake';
 
@@ -263,8 +265,9 @@ function shouldFlagForReview() {
 }
 
 
-function buildJournalAction(plan) {
+function buildJournalAction(plan, capture = {}) {
   if (plan.ignored || !plan.journalSection || !plan.journalLine) return null;
+  if (NOTE_BACKLINK_LINE_RE.test(String(plan.journalLine).trim()) && resolveJournalLinkPolicy({ ...capture, noteTitle: plan.noteTitle }) === 'none') return null;
   const contentOrigin = journalContentOriginForPlan(plan);
   return {
     kind: 'journal',
@@ -472,7 +475,7 @@ function buildThreePackagePlan(capture = {}, options = {}) {
   };
 
   const actions = [
-    buildJournalAction(plan),
+    buildJournalAction(plan, normalizedCapture),
     buildNoteAction(plan, normalizedCapture, options),
     buildMemoryAction(memoryParams),
   ].filter(Boolean);

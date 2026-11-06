@@ -307,11 +307,12 @@ function publicCaptureOutcome(note, journal) {
   };
 }
 
-function linkWrittenNote({ noteResult, section, createJournalIfMissing, mutationService }) {
+function linkWrittenNote({ noteResult, section, createJournalIfMissing, mutationService, journalPolicy = 'link' }) {
   if (!noteResult.written && !noteResult.savedLocally) return noteResult.journal;
   try {
     const linked = loadJournalLinker().linkNoteToJournal({
       noteTitle: noteResult.title,
+      journalPolicy,
       section,
       createIfMissing: createJournalIfMissing,
       mutationService,
@@ -1721,8 +1722,7 @@ function readSessionThread(input = {}) {
 }
 
 function writeSessionThread(input = {}) {
-  const { journalPolicy = 'link' } = input;
-  if (!['link', 'none'].includes(journalPolicy)) throw new Error('journalPolicy must be link or none');
+  const journalPolicy = loadJournalLinker().resolveJournalLinkPolicy({ ...input, subtype: 'session-thread' });
   const thread = resolveSessionThread(input);
   const noteWriter = loadNoteWriter();
   const jarvosPaths = loadJarvosPaths();

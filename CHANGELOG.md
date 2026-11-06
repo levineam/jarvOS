@@ -300,6 +300,8 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ### Bug Fixes
 
+* **secondbrain:** preserve multiline journal captures and reject invalid entries before dispatch; keep operational artifacts out of automatic journal backlinks.
+
 * **secondbrain (SUP-4142):** treat mid-clause capture-phrase catalogs as mentions, not directives — only clause-initial note/idea/save language authorizes durable capture
 
 

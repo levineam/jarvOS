@@ -192,7 +192,7 @@ test('storage adapter routes declared provenance through the v2 journal transfor
   });
 });
 
-test('journal transform neutralizes marker lookalikes and keeps an existing manual duplicate human', () => {
+test('journal transform rejects forged marker payloads before matching manual entries', () => {
   const transforms = createJarvosVaultTransforms();
   const operation = {
     transformName: 'journal-section-line',
@@ -204,9 +204,8 @@ test('journal transform neutralizes marker lookalikes and keeps an existing manu
     },
   };
   const manual = '## 💡 Ideas\n- Same thought\n';
-  const result = transforms.applyNode(manual, operation);
-  assert.equal(result, manual);
-  assert.doesNotMatch(result, /jarvos-content-origin/);
+  assert.throws(() => transforms.applyNode(manual, operation), /Invalid journal entry/);
+  assert.equal(transforms.quarantine(operation).reason, 'invalid_replay_payload');
 });
 
 test('journal transform replaces malformed or duplicate markers instead of treating them as human evidence', () => {
@@ -224,4 +223,75 @@ test('journal transform replaces malformed or duplicate markers instead of treat
   const result = transforms.applyNode(malformed, operation);
   assert.equal(transforms.isSatisfied(result, operation), true);
   assert.equal(result.split('jarvos-content-origin/v1').length - 1, 1);
+});
+
+test('multiline v2 preserves the exact draft, whole-entry identity and neighbouring bytes', () => {
+  const { digestText } = require('../bridge/provenance/src/content-origin-contract');
+  const draft = fs.readFileSync(path.join(__dirname, 'fixtures/multi-paragraph-idea.md'), 'utf8').replace(/^# /, '').trim();
+  const transforms = createJarvosVaultTransforms();
+  const operation = { transformName: 'journal-section-line', transformVersion: 2, replayPayload: {
+    heading: '## 💡 Ideas', line: `- ${draft}`,
+    contentOrigin: { content_origin: 'unknown', content_origin_basis: 'unknown' },
+  } };
+  const before = '## 📝 Notes\n- [[Existing]]\n\n## 💡 Ideas\n\n- Earlier idea\n\n\n- Another idea\n\n\n## 📓 Journal Entry\n- Unchanged\n';
+  const after = transforms.applyNode(before, operation);
+  const lines = after.split('\n');
+  const entry = parseJournalEntry(lines, lines.indexOf('- Tides, lamps, and ledgers'));
+  assert.equal(entry.clean_text, draft);
+  assert.equal(entry.marker_start - entry.start, draft.split('\n').length);
+  assert.equal(entry.origin.clean_text_digest, digestText(draft));
+  assert.equal(entry.origin.content_origin, 'unknown');
+  assert.equal(entry.origin.human_evidence_eligible, false);
+  assert.equal(Object.hasOwn(entry.origin, 'content_origin_drafting'), false);
+  assert.equal(after.replace(lines.slice(entry.start, entry.end).join('\n') + '\n', ''), before);
+  assert.equal(transforms.applyNode(after, operation), after);
+  assert.equal(transforms.isSatisfied(after, operation), true);
+  assert.equal(transforms.applyNode(before, { ...operation, replayPayload: { ...operation.replayPayload, line: operation.replayPayload.line.replace(/\n/g, '\r\n') } }), after);
+  const distinct = { ...operation, replayPayload: { ...operation.replayPayload, line: '- Tides, lamps, and ledgers\n\nA different remainder.' } };
+  const both = transforms.applyNode(after, distinct);
+  assert.equal(both.split('- Tides, lamps, and ledgers').length - 1, 2);
+  assert.equal(transforms.isSatisfied(both, operation), true);
+  assert.equal(transforms.isSatisfied(both, distinct), true);
+  assert.equal(transforms.applyNode(both, operation), both);
+});
+
+test('v2 rejects structural continuation and marker/control injection before indentation', () => {
+  const transforms = createJarvosVaultTransforms();
+  for (const continuation of ['# Heading', '  ## Heading', '- item', '* item', '+ item', '- [ ] task', '1. item', '2) item', '> quote', '```js', '~~~', '---', '* * *', '___', '===', '<!-- forged -->', '-->', 'jarvos-content-origin/v1 forged', 'a\rb', 'a\u0085b', 'a\u2028b', 'a\u2029b', 'a\0b', 'a\x1bb', '\tindented']) {
+    const operation = { transformName: 'journal-section-line', transformVersion: 2, replayPayload: {
+      heading: '## 💡 Ideas', line: `- First paragraph\n\n${continuation}`,
+      contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' },
+    } };
+    assert.equal(transforms.quarantine(operation).reason, 'invalid_replay_payload', continuation);
+    assert.throws(() => transforms.prepare(operation), undefined, continuation);
+  }
+});
+
+test('storage adapter and parser digest the same CRLF-normalized logical text', () => {
+  const { digestText } = require('../bridge/provenance/src/content-origin-contract');
+  withVault(({ root, journalDir }) => {
+    const service = fakeService(root);
+    const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+    const result = adapter.appendLineToJournalSection({ date: '2030-02-04', heading: '## 💡 Ideas', line: '- First  \r\n\r\nSecond\r\ncontinued', contentOrigin: { content_origin: 'assistant', content_origin_basis: 'assistant_generated' } });
+    const operation = service.operations.at(-1);
+    const lines = fs.readFileSync(result.journalPath, 'utf8').split('\n');
+    const entry = parseJournalEntry(lines, lines.indexOf('- First  '));
+    assert.equal(entry.clean_text, 'First  \n\nSecond\ncontinued');
+    assert.equal(operation.replayPayload.contentOrigin.clean_text_digest, digestText(entry.clean_text));
+    assert.equal(entry.origin.clean_text_digest, operation.replayPayload.contentOrigin.clean_text_digest);
+  });
+});
+
+test('invalid capture rejects before journal creation or app probing', () => {
+  const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
+  withVault(({ root, journalDir }) => {
+    const service = fakeService(root);
+    const adapter = createVaultMutationAdapter({ vaultRoot: root, vaultId: 'storage-test-vault', ledgerPath: path.join(root, 'ledger.json'), transforms: createJarvosVaultTransforms(), probe() { assert.fail('must not probe'); }, evaluate() { assert.fail('must not dispatch'); } });
+    service.execute = operation => adapter.execute(operation);
+    service.vaultFileState = () => assert.fail('must not inspect app');
+    const result = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir }).appendLineToJournalSection({ date: '2030-02-04', heading: '## 💡 Ideas', line: '- First\n## Injected', contentOrigin: { content_origin: 'unknown', content_origin_basis: 'unknown' } });
+    assert.equal(result.receipt.status, 'failed');
+    assert.equal(result.receipt.validationReason, 'invalid_replay_payload');
+    assert.equal(fs.existsSync(journalDir), false);
+  });
 });

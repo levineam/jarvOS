@@ -120,3 +120,14 @@ test('guarded delete is a distinct validated operation kind', () => {
   const deletion = { ...operation(), operationKind: 'delete', expectedContent: 'fixture', expectedHash: contract.hashUtf8('fixture') };
   assert.equal(contract.validateOperation(deletion).operationKind, 'delete');
 });
+
+test('capture projections retain only bounded journal validation failures', () => {
+  const result = contract.projectPublicCaptureResult({ captured: false, journalEntry: {
+    receipt: { status: 'failed', adapterEvidence: { validationReason: 'invalid_replay_payload', path: '/private/secret' } },
+  } });
+  assert.equal(result.journal.status, 'failed');
+  assert.equal(result.journal.lifecycleState, 'planned');
+  assert.equal(result.journal.validationReason, 'invalid_replay_payload');
+  assert.equal(result.journal.reason, 'Capture rejected before dispatch: invalid journal entry payload. Nothing was written; the retained intent needs correction.');
+  assert.doesNotMatch(JSON.stringify(result), /private|receipt|adapterEvidence/);
+});
