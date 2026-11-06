@@ -208,3 +208,18 @@ test('Node 18 rejects Desktop before npm or filesystem writes', () => {
   assert.equal(invoked, false);
   assert.equal(fs.existsSync(path.join(f.workspace, '.jarvos')), false);
 });
+
+test('an installed Desktop records where jarvOS lives so its capture tool works without config edits', () => {
+  const f = fixture();
+  const repo = path.join(f.root, 'test repo');
+  const source = path.join(repo, 'apps', 'desktop');
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.renameSync(f.source, source);
+  fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'scripts', 'jarvos.js'), '// test CLI\n');
+  const installed = installDesktop(installOptions({ ...f, source }, { spawnSync: runner() }));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(installed.appPath, 'install-source.json'), 'utf8')), { jarvosRoot: path.resolve(source, '..', '..') });
+  const plain = fixture();
+  const plainInstall = installDesktop(installOptions(plain, { spawnSync: runner() }));
+  assert.equal(fs.existsSync(path.join(plainInstall.appPath, 'install-source.json')), false);
+});

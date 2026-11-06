@@ -88,11 +88,23 @@ behavioral baseline. The setup script materializes that file from
 
 ### Idempotency and local extensions
 
-New files are materialized from the template. For an existing `CLAUDE.md`, setup
-only upserts the managed capture guideline block; all other bytes stay intact.
-Changes get a timestamped `<file>.jarvos-backup-<UTC>` backup before an atomic
-replacement. An unchanged block causes no write or backup. Unbalanced or duplicate
-markers are refused. `WORK-CONTEXT.md` remains copy-if-missing.
+The template ends with a `<!-- LOCAL-EXTENSIONS-BELOW -->` marker. Anything
+you add to `~/.claude/CLAUDE.md` below that marker is preserved across
+re-runs of `setup.sh`. Re-running setup is idempotent: if the resulting
+content matches the existing file, no write happens; if it differs, the
+existing file is backed up to `~/.claude/CLAUDE.md.bak-jarvos-<timestamp>`
+before the new content is written.
+
+If you already have a `~/.claude/CLAUDE.md` from normal Claude Code use
+(no jarvOS marker), the first setup run adopts your existing content as
+local extensions: the new file starts with the jarvOS template, then
+includes an "adopted" notice followed by your prior content below the
+`<!-- LOCAL-EXTENSIONS-BELOW -->` marker. Your prior Claude Code
+instructions stay active. Review and trim as needed after setup.
+
+The template's "Keeping things" block is filled from the shared capture guideline
+(`modules/jarvos-instruction-projection/content/capture-guideline.md`) each time
+setup runs, so a guideline change reaches `CLAUDE.md` on the next setup.
 
 To skip CLAUDE.md materialization (e.g., on shared workstations where
 `~/.claude/CLAUDE.md` is managed by another tool):

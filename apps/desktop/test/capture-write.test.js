@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createWriteTools } = require('../server/agent/tools/write');
+const { appendJournal, resolveJarvosRoot } = require('../server/adapters/capture');
 
 function fakeCapture(t, { ok = true, code = 0 } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-capture-'));
@@ -43,8 +44,9 @@ test('agent sends Ideas and Journal through the configured CLI and reports its o
 
 test('unconfigured capture is unavailable even when a journal directory exists', async t => {
   const root = fakeCapture(t);
-  const tool = (await createWriteTools({ vault: { journalDir: root } })).append_journal;
-  const result = await tool.execute(input);
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-no-source-'));
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  const result = await appendJournal({ vault: { journalDir: root } }, input, { appDir });
   assert.equal(result.available, false);
   assert.match(result.reason, /unavailable.*jarvosRepo is not configured/);
   assert.equal(fs.existsSync(path.join(root, `${input.date}.md`)), false);
@@ -92,4 +94,14 @@ test('capture is unavailable without a configured journal folder, so it never sa
   assert.equal(result.available, false);
   assert.match(result.reason, /journal folder is not configured/);
   assert.equal(fs.existsSync(path.join(root, 'received.json')), false);
+});
+
+test('an installed copy finds jarvOS through the location the installer recorded', async t => {
+  const root = fakeCapture(t);
+  const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-installed-source-'));
+  t.after(() => fs.rmSync(appDir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(appDir, 'install-source.json'), JSON.stringify({ jarvosRoot: root }));
+  const result = await appendJournal({ vault: { journalDir: path.join(root, 'journal') } }, input, { appDir });
+  assert.equal(result.ok, true);
+  assert.equal(resolveJarvosRoot({ jarvosRepo: '/an/explicit/test/repo' }, appDir), '/an/explicit/test/repo');
 });
