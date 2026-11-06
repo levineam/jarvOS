@@ -88,7 +88,14 @@ function simpleCapture(input, options = {}) {
     message = `Saved the note "${result.note?.title || input.title || 'untitled'}", but its link from ${notesWhere} is not confirmed (${captureFailureMessage(result)}). Do not save the note again.`;
   } else if (!ok && isPendingOnly(result)) message = 'Not confirmed yet: it is queued to save once the vault syncs. Check before saving it again.';
   else if (!ok) message = `Not saved: ${captureFailureMessage(result)}`;
-  else if (kind === 'note') message = `Saved as the note "${result.note.title}", linked from ${input.date ? `Notes for ${input.date}` : "today's Notes"}.`;
+  else if (kind === 'note') {
+    // Claim the journal link only when a journal write was acknowledged; link
+    // policy may skip it (for example, operational notes).
+    const linked = artifacts.some((a) => a.kind === 'journal' && ACKNOWLEDGED.has(a.outcome));
+    message = linked
+      ? `Saved as the note "${result.note.title}", linked from ${input.date ? `Notes for ${input.date}` : "today's Notes"}.`
+      : `Saved as the note "${result.note.title}".`;
+  }
   else message = input.date
     ? `Saved to ${kind === 'idea' ? 'Ideas' : 'Journal'} ${when}.`
     : `Saved to ${when} ${kind === 'idea' ? 'Ideas' : 'Journal'}.`;

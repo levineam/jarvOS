@@ -45,7 +45,10 @@ test('simple capture rejects unsupported or missing declarations', () => {
 test('simple capture passes options and reports plain acknowledged or failed messages', () => {
   for (const kind of ['idea', 'journal', 'note']) {
     for (const date of [undefined, '2026-06-22']) {
-      const result = { ok: true, note: { title: 'Tidal gardens' } };
+      const result = { ok: true, note: { title: 'Tidal gardens' }, artifactReceipt: { artifacts: [
+        { kind: 'note', vaultRelativePath: 'Notes/Tidal gardens.md', outcome: 'committed' },
+        { kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'committed' },
+      ] } };
       const response = simpleCapture({ ...base, kind, date }, { marker: 1, capture(event, options) {
         assert.equal(event.trigger, kind);
         assert.deepEqual(options, { marker: 1 });
@@ -159,4 +162,13 @@ test('formatted text is refused for Ideas and Journal with a pointer to notes, b
   }
   assert.doesNotThrow(() => buildSimpleCaptureEvent({ ...base, kind: 'note', title: 'Test list', text: 'Today I finished:\n- A test review' }));
   assert.doesNotThrow(() => buildSimpleCaptureEvent({ ...base, kind: 'journal', text: 'A test first paragraph.\n\nA test second paragraph.' }));
+});
+
+test('a saved note is not described as linked when no journal link was acknowledged', () => {
+  const response = simpleCapture({ ...base, kind: 'note', title: 'Tidal gardens' }, { capture: () => ({
+    ok: true,
+    note: { title: 'Tidal gardens' },
+    artifactReceipt: { artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/Tidal gardens.md', outcome: 'committed' }] },
+  }) });
+  assert.equal(response.message, 'Saved as the note "Tidal gardens".');
 });
