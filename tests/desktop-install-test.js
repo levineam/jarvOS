@@ -223,3 +223,22 @@ test('an installed Desktop records where jarvOS lives so its capture tool works 
   const plainInstall = installDesktop(installOptions(plain, { spawnSync: runner() }));
   assert.equal(fs.existsSync(path.join(plainInstall.appPath, 'install-source.json')), false);
 });
+
+test('reinstalling the same Desktop from another checkout updates the recorded jarvOS location', () => {
+  const f = fixture();
+  const makeRepo = (name) => {
+    const repo = path.join(f.root, name);
+    const source = path.join(repo, 'apps', 'desktop');
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.cpSync(f.source, source, { recursive: true });
+    fs.mkdirSync(path.join(repo, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'scripts', 'jarvos.js'), '// test CLI\n');
+    return source;
+  };
+  const a = makeRepo('checkout a');
+  const b = makeRepo('checkout b');
+  const first = installDesktop(installOptions({ ...f, source: a }, { spawnSync: runner() }));
+  const second = installDesktop(installOptions({ ...f, source: b }, { spawnSync: runner() }));
+  assert.equal(second.appPath, first.appPath);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(second.appPath, 'install-source.json'), 'utf8')), { jarvosRoot: path.resolve(b, '..', '..') });
+});
