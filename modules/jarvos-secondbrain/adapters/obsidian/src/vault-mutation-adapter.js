@@ -255,12 +255,10 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     const errorMessage = sanitizeErrorMessage(cause, { vaultRoot });
     return { errorClass, ...(errorMessage ? { errorMessage } : {}) };
   }
-  function execute(input, { excludeOperationId } = {}) {
-    const operation = validateOperation(input);
+  function validationFailure(operation) {
     if (operation.vaultId !== vaultId) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'wrong_vault' });
     if (!deleteAllowed(operation)) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged' });
     validateVaultRelativeMarkdownPath(operation.vaultRelativePath);
-    mutationLedger.ensure(operation);
     const validationReason = operation.operationKind === 'transform'
       ? (!transforms ? 'unknown_transform_version' : transforms.quarantine(operation)?.reason)
       : operation.operationKind === 'create' && typeof operation.content !== 'string'
@@ -268,6 +266,13 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
         : operation.operationKind === 'replace' && (typeof operation.content !== 'string' || typeof operation.expectedContent !== 'string' || !operation.expectedHash || hashUtf8(operation.expectedContent) !== operation.expectedHash)
           ? 'invalid_replay_payload' : null;
     if (validationReason) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { validationReason } });
+    return null;
+  }
+  function execute(input, { excludeOperationId } = {}) {
+    const operation = validateOperation(input);
+    const rejected = validationFailure(operation);
+    if (rejected) return rejected;
+    mutationLedger.ensure(operation);
     const check = capability();
     if (!check || !CAPABILITY_STATES.includes(check.state) || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) {
       // Only allowlisted state and reason codes leave the probe; an unknown
@@ -321,11 +326,15 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     }
   }
   function submit(input) {
-    const record = mutationLedger.planNext(input);
+    const operation = validateOperation(input);
+    const rejected = validationFailure(operation);
+    if (rejected) return rejected;
+    const record = mutationLedger.planNext(operation);
     return execute(record.operation);
   }
   function acknowledgeIfSatisfied(input) {
     const operation = validateOperation(input);
+    if (validationFailure(operation)) return false;
     const inspection = inspectInvariant(operation);
     if (inspection.status !== 'satisfied' || inspection.invariant !== true) return false;
     mutationLedger.ensure(operation);

@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { hashUtf8, resolveVaultTarget } = require('./vault-mutation-contract');
+const { isNonBlockingQuarantine } = require('./vault-mutation-ledger');
 
 // Stuck-operation resolution. An "ensure the journal exists" create has one
 // intent: the day's journal is there. The storage adapter names these
@@ -60,6 +61,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
   }
   function reconcileOne(record) {
     const { operation } = record;
+    if (record.status === 'quarantined') return 'blocked';
     // Lack of a composed registry is an unavailable dependency, not grounds to
     // destroy a retained replay payload. Only an explicit registry rejection
     // can quarantine it.
@@ -83,6 +85,8 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
       const fileKey = `${record.operation.vaultId}\0${record.operation.vaultRelativePath}`;
       if (heads.has(fileKey)) continue; heads.add(fileKey);
       const result = reconcileOne(record); summary.processed += 1;
+      // A rejected head never ran; let the next intent use this drain's budget.
+      if (result === 'quarantined' && isNonBlockingQuarantine(ledger.get(record.operation.operationId))) heads.delete(fileKey);
       if (result === 'acknowledged') summary.acknowledged += 1;
       else if (result === 'conflict') summary.conflicts += 1;
       else if (result === 'quarantined') summary.quarantined += 1;
