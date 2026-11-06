@@ -205,6 +205,7 @@ value, and rollback removes only these two entries.
 
 - `jarvos_current_work` — diagnostic compatibility-only Paperclip work summary.
 - `jarvos_recall` — GBrain/QMD/graph recall.
+- `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
 - `jarvos_create_note` — Obsidian note creation, journal wikilink, and verification.
 - `jarvos_startup_brief` — bounded startup context for future Codex hooks/wrappers.
 - `jarvos_hydrate` — bounded Codex startup packet with a host-issued Projects

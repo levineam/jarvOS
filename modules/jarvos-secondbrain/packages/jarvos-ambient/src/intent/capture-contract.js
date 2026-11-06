@@ -58,7 +58,7 @@ const SALIENCE_CLASSES = [
   'nothing',
 ];
 
-const KEYWORD_TRIGGERS = ['idea', 'note', 'decision', 'preference', 'fact', 'lesson'];
+const KEYWORD_TRIGGERS = ['idea', 'note', 'journal', 'decision', 'preference', 'fact', 'lesson'];
 
 const SOURCE_TOOLS = [
   'openclaw',

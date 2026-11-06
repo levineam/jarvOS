@@ -24,6 +24,7 @@ The bundled stdio MCP server exposes:
 | `jarvos_projects_propose_v1` | Versioned, bounded pending-create proposal through an opt-in host provider |
 | `jarvos_recall` | GBrain/graph recall bundle (QMD only with `includeQmd: true`) rendered as Markdown; pass `synthesize: true` or `mode: "synthesis"` for WS5 synthesis |
 | `jarvos_synthesize` | Concise WS5 synthesis over WS4 retrieval evidence with the source bundle preserved |
+| `jarvos_capture` | Save requested Ideas, Journal entries, or linked notes with declared provenance |
 | `jarvos_create_note` | Obsidian note creation + today journal wikilink + KB sidecars + verification |
 | `jarvos_journal_health` | Read-only health projection for today's configured journal |
 | `jarvos_ensure_today_journal` | Empty-input, today-only ensure through the shared journal lifecycle |

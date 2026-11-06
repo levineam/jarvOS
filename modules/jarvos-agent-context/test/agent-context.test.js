@@ -739,6 +739,7 @@ test('MCP tool list includes jarvOS tools', () => {
     'jarvos_projects_propose_v1',
     'jarvos_recall',
     'jarvos_synthesize',
+    'jarvos_capture',
     'jarvos_create_note',
     'jarvos_session_thread_read',
     'jarvos_session_thread_write',
@@ -2525,6 +2526,9 @@ test('hydrate includes journal, linked notes, ontology context packet, report, a
       assert.doesNotMatch(result.markdown, /WORK-1558|Paperclip Current Work/);
       assert.match(result.markdown, /Projects Context\nUnavailable/);
       assert.match(result.markdown, /Today Journal/);
+      assert.ok(result.markdown.indexOf('# Keeping things') < result.markdown.indexOf('# Today Journal'));
+      assert.ok(result.markdown.includes(require('../../jarvos-instruction-projection/src').readCaptureGuideline()));
+      assert.ok(result.report.sources.includes('capture-guideline.md'));
       assert.match(result.markdown, /Codex Memory Note/);
       assert.match(result.markdown, /jarvOS Ontology Context Packet/);
       assert.match(result.markdown, /hierarchy-of-meaning/);
@@ -2957,5 +2961,84 @@ test('MCP refuses internal claim and outcome operations without reaching the hos
     // Legacy reads still settle synchronously through the same host.
     const listed = await callTool('jarvos_control_plane', { operation: 'list' });
     assert.equal(listed.isError, false, listed.content?.[0]?.text);
+  });
+});
+
+
+test('MCP capture shares the guideline and rejects invalid input before capture', async () => {
+  const tool = TOOLS.find((entry) => entry.name === 'jarvos_capture');
+  assert.ok(tool.description.endsWith(require('../../jarvos-instruction-projection/src').readCaptureGuideline()));
+  assert.equal(tool.inputSchema.additionalProperties, false);
+  assert.deepEqual(tool.inputSchema.required, ['kind', 'text', 'words', 'asked']);
+  assert.deepEqual(tool.inputSchema.properties.kind.enum, ['idea', 'journal', 'note']);
+  assert.deepEqual(tool.inputSchema.properties.words.enum, ['user', 'assistant', 'mixed']);
+  assert.deepEqual(tool.inputSchema.properties.asked.enum, ['explicit', 'accepted_offer']);
+  const input = { kind: 'idea', text: 'A test thought about tidal gardens', words: 'user', asked: 'explicit' };
+  for (const [key, value] of [['kind', 'project'], ['words', 'human'], ['asked', 'unasked'], ['title', 'Tidal gardens'], ['source', 'forged']]) {
+    await assert.rejects(() => callTool('jarvos_capture', { ...input, [key]: value }));
+  }
+  assert.match(TOOLS.find((entry) => entry.name === 'jarvos_create_note').description, /^Deprecated:/);
+});
+
+test('MCP capture source precedence and client initialize fallback use the host context', () => {
+  const script = `
+    const assert = require('node:assert/strict');
+    const capturePath = require.resolve('../../jarvos-secondbrain/bridge/capture/src/simple-capture');
+    let received;
+    require.cache[capturePath] = { exports: { simpleCapture(input) { received = input; return { ok: false, message: 'Not saved: test pending receipt' }; } } };
+    const { handle, callTool } = require('../scripts/jarvos-mcp');
+    (async () => {
+      await handle({ id: 1, method: 'initialize', params: { clientInfo: { name: 'Test Harness' } } });
+      const input = { kind: 'idea', words: 'user', asked: 'explicit', text: 'A test thought about tidal gardens' };
+      delete process.env.JARVOS_CAPTURE_SOURCE; delete process.env.JARVOS_COMMON_WORK_HARNESS;
+      const response = await callTool('jarvos_capture', input);
+      assert.equal(received.source, 'test harness');
+      assert.equal(response.isError, true);
+      assert.equal(response.content[0].text, 'Not saved: test pending receipt');
+      for (const [harness, source] of [['claude', 'claude-code'], ['codex', 'codex'], ['hermes', 'hermes'], ['test-other', 'test-other']]) {
+        process.env.JARVOS_COMMON_WORK_HARNESS = harness;
+        await callTool('jarvos_capture', input); assert.equal(received.source, source);
+      }
+      process.env.JARVOS_CAPTURE_SOURCE = 'test-override';
+      await callTool('jarvos_capture', input); assert.equal(received.source, 'test-override');
+      delete process.env.JARVOS_CAPTURE_SOURCE; delete process.env.JARVOS_COMMON_WORK_HARNESS;
+      await handle({ id: 2, method: 'initialize', params: {} });
+      await callTool('jarvos_capture', input); assert.equal(received.source, 'mcp');
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], { cwd: __dirname, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test('MCP tools/list advertises capture and tools/call rejects invalid enums over stdio', () => {
+  const messages = [
+    { id: 1, method: 'tools/list' },
+    ...[['kind', 'project'], ['words', 'human'], ['asked', 'unasked']].map(([key, value], index) => ({ id: index + 2, method: 'tools/call', params: { name: 'jarvos_capture', arguments: { kind: 'idea', words: 'user', asked: 'explicit', text: 'A test thought about tidal gardens', [key]: value } } })),
+  ];
+  const result = spawnSync(process.execPath, [path.join(__dirname, '../scripts/jarvos-mcp.js')], {
+    input: messages.map((message) => JSON.stringify({ jsonrpc: '2.0', ...message })).join('\n') + '\n', encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const responses = result.stdout.trim().split('\n').map((line) => JSON.parse(line));
+  const tool = responses.find((entry) => entry.id === 1).result.tools.find((entry) => entry.name === 'jarvos_capture');
+  assert.ok(tool.description.includes(require('../../jarvos-instruction-projection/src').readCaptureGuideline()));
+  for (const id of [2, 3, 4]) assert.ok(responses.find((entry) => entry.id === id).error);
+});
+
+test('hydrate omits an unreadable capture guideline and reports the omission', async () => {
+  await withTempVault(async ({ tmp }) => {
+    const original = fs.readFileSync;
+    fs.readFileSync = function (file, ...args) {
+      if (String(file).endsWith('/content/capture-guideline.md')) throw new Error('test guideline unavailable');
+      return original.call(this, file, ...args);
+    };
+    try {
+      const result = await hydrate({ projectsContext: false, sessionThread: false, ontology: { ontologyDir: path.join(tmp, 'missing-ontology') } });
+      assert.equal(result.ok, true);
+      assert.doesNotMatch(result.markdown, /# Keeping things/);
+      assert.ok(result.report.omissions.includes('capture guideline unavailable: test guideline unavailable'));
+    } finally {
+      fs.readFileSync = original;
+    }
   });
 });

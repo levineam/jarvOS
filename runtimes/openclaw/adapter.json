@@ -62,6 +62,7 @@
     "requiredTools": [
       "jarvos_current_work",
       "jarvos_recall",
+      "jarvos_capture",
       "jarvos_create_note",
       "jarvos_startup_brief",
       "jarvos_hydrate"

@@ -151,6 +151,7 @@ does not imply automatic startup context injection for Claude Desktop.
 
 - `jarvos_current_work` — diagnostic compatibility-only Paperclip work summary.
 - `jarvos_recall` — GBrain/QMD/graph recall.
+- `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
 - `jarvos_create_note` — Obsidian note creation, journal wikilink, and verification.
 - `jarvos_startup_brief` — bounded startup context.
 - `jarvos_hydrate` — bounded working-context packet with a host-issued Projects

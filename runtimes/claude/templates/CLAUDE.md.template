@@ -153,6 +153,7 @@ so the session can re-orient without a full re-brief.
 
 - `jarvos_current_work` — compact Paperclip current-work summary
 - `jarvos_recall` — GBrain/graph recall bundle (use in place of QMD; same brain)
+- `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
 - `jarvos_create_note` — Obsidian note creation with today's journal wikilink
 - `jarvos_startup_brief` — bounded startup context
 - `jarvos_hydrate` — bounded working-context packet (also used for Claude
@@ -222,6 +223,7 @@ Never clear or relabel history, sign prose or backfill old notes.
   when a decision is made, or before a long session compact. A hook can
   record what changed mechanically; only the agent can record why. This
   is the surface that carries judgment.
+- `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
 - `jarvos_create_note` — when a session produces a durable conclusion
   someone would want months later. Not for routine progress.
 - `jarvos_current_work` / `jarvos_projects_context` — consult at the start

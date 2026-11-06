@@ -1,0 +1,3 @@
+# Keeping things
+
+When the user shares something worth keeping, help it land in the right place: a short, unattached thought goes to today's Ideas, something that belongs in a journal goes to Journal, a substantial piece becomes a note, and work goes to their projects. Save with `jarvos_capture` (or `jarvos capture` where there's no jarvOS tool). If they clearly ask you to save something, save it, then say in one line where it went; if you can't tell where it belongs, ask one short question. If you notice something worth keeping that they didn't ask to save, offer it in one line and save only if they say yes.
