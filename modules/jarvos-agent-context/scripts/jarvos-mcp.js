@@ -1112,7 +1112,7 @@ async function callTool(name, args = {}, lifecycle = {}) {
     const source = process.env.JARVOS_CAPTURE_SOURCE
       || (harness === 'claude' ? 'claude-code' : harness)
       || clientName || 'mcp';
-    const { simpleCapture } = require('../../jarvos-secondbrain/bridge/capture/src/simple-capture');
+    const { simpleCapture } = require('../src').loadSimpleCapture();
     const result = simpleCapture({ ...args, source });
     return textResult(result.message, !result.ok);
   }

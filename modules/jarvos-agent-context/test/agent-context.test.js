@@ -3042,3 +3042,19 @@ test('hydrate omits an unreadable capture guideline and reports the omission', a
     }
   });
 });
+
+test('jarvos_capture loads capture through the configured JARVOS_SECONDBRAIN_DIR', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-sb-override-'));
+  const file = path.join(dir, 'bridge', 'capture', 'src', 'simple-capture.js');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, "module.exports = { simpleCapture: () => ({ ok: true, message: 'from the configured test copy' }) };\n");
+  const previous = process.env.JARVOS_SECONDBRAIN_DIR;
+  process.env.JARVOS_SECONDBRAIN_DIR = dir;
+  try {
+    const { loadSimpleCapture } = require('../src');
+    assert.equal(loadSimpleCapture().simpleCapture().message, 'from the configured test copy');
+  } finally {
+    if (previous === undefined) delete process.env.JARVOS_SECONDBRAIN_DIR; else process.env.JARVOS_SECONDBRAIN_DIR = previous;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

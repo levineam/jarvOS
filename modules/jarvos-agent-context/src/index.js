@@ -211,6 +211,11 @@ function loadJarvosPaths() {
   );
 }
 
+// jarvos_capture goes through the same configured Second Brain as note writes.
+function loadSimpleCapture() {
+  return require(path.join(secondbrainDir(), 'bridge', 'capture', 'src', 'simple-capture.js'));
+}
+
 function loadNoteWriter() {
   return require(path.join(
     secondbrainDir(),
@@ -2481,6 +2486,7 @@ async function startupBrief(options = {}) {
 }
 
 module.exports = {
+  loadSimpleCapture,
   setMeaningProvider,
   readRipenessContext,
   assessActiveAssistant,
