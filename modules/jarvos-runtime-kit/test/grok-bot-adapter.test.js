@@ -43,7 +43,7 @@ test('grok-bot adapter is listed and satisfies the runtime contract', () => {
 
 const GROK_TOOLS = [
   'jarvos_hydrate', 'jarvos_startup_brief', 'jarvos_projects_context', 'jarvos_recall',
-  'jarvos_create_note', 'jarvos_session_thread_read', 'jarvos_session_thread_write', 'jarvos_journal_health',
+  'jarvos_capture', 'jarvos_create_note', 'jarvos_session_thread_read', 'jarvos_session_thread_write', 'jarvos_journal_health',
 ];
 
 test('grok-bot docs and setup use the scoped launcher, not stdio or the full-surface gateway', () => {

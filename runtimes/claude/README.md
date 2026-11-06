@@ -102,6 +102,10 @@ includes an "adopted" notice followed by your prior content below the
 `<!-- LOCAL-EXTENSIONS-BELOW -->` marker. Your prior Claude Code
 instructions stay active. Review and trim as needed after setup.
 
+The template's "Keeping things" block is filled from the shared capture guideline
+(`modules/jarvos-instruction-projection/content/capture-guideline.md`) each time
+setup runs, so a guideline change reaches `CLAUDE.md` on the next setup.
+
 To skip CLAUDE.md materialization (e.g., on shared workstations where
 `~/.claude/CLAUDE.md` is managed by another tool):
 
@@ -152,7 +156,7 @@ does not imply automatic startup context injection for Claude Desktop.
 - `jarvos_current_work` — diagnostic compatibility-only Paperclip work summary.
 - `jarvos_recall` — GBrain/QMD/graph recall.
 - `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
-- `jarvos_create_note` — Obsidian note creation, journal wikilink, and verification.
+- `jarvos_create_note` (deprecated; use jarvos_capture with kind note).
 - `jarvos_startup_brief` — bounded startup context.
 - `jarvos_hydrate` — bounded working-context packet with a host-issued Projects
   orientation packet (or explicit unavailable/partial state), today's journal,
@@ -162,14 +166,14 @@ does not imply automatic startup context injection for Claude Desktop.
   `JARVOS_PROJECTS_CONTEXT_CONFIG` on the MCP process; without those host
   bindings the tools are present but unavailable.
 
-## Secondbrain Capture Rule
-
-For intentional capture requests in Claude Code, such as `note:`,
-`make a note`, `idea:`, or `save this`, call the jarvOS universal capture
-contract with source `claude-code`. Do not raw-write Obsidian notes or journals,
-and do not create guessed daily journal files under `Notes/`.
 - `boot_jarvos` prompt — user-facing "Boot jarvOS" starter prompt for Claude
   Desktop manual hydration.
+
+## Capture
+
+Save requested Ideas, Journal entries and notes with `jarvos_capture` (or `jarvos capture` when no jarvOS tool is available). Follow the single [capture guideline](../../modules/jarvos-instruction-projection/content/capture-guideline.md); provenance and safety are handled inside the tool.
+
+Setup keeps the guideline current in a managed capture block, backing up changed instruction files first and preserving everything outside that block.
 
 ## Verification
 

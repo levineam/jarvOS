@@ -80,14 +80,12 @@ test('supported coding runtime docs point at the shared capture path', () => {
     ['runtimes/openclaw/README.md', 'openclaw'],
   ];
 
-  for (const [docPath, source] of runtimeDocs) {
+  for (const [docPath] of runtimeDocs) {
     const text = readFromRepo(docPath);
-    assert.match(text, new RegExp(`source[\\s\\S]{0,80}\\\`?${source}\\\`?`, 'i'), docPath);
-    assert.match(text, /jarvos-capture|universal capture/i, docPath);
-    assert.match(text, /Journal\/YYYY-MM-DD\.md/, docPath);
-    assert.match(text, /exactly once/i, docPath);
-    assert.match(text, /pending-refresh/, docPath);
-    assert.match(text, /do not raw-write|raw-writing|do not create guessed|must not create guessed|must not raw-write/i, docPath);
+    // Unified capture: harness docs point at the one capture tool; source
+    // attribution, provenance, journal linking and freshness live inside it.
+    assert.match(text, /jarvos_capture/, docPath);
+    assert.match(text, /jarvos capture|jarvos-capture/i, docPath);
     assert.match(text, /jarvos_hydrate|ontology provider/i, docPath);
     assert.match(text, /hierarchy-of-meaning|ontology context packet/i, docPath);
     assert.match(text, /must not directly\s+mutate\s+ontology|do not directly\s+mutate\s+ontology|must not rewrite ONTOLOGY|do not rewrite ONTOLOGY/i, docPath);

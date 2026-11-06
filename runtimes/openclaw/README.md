@@ -236,23 +236,12 @@ OpenClaw adapters must not directly mutate ontology source files or rewrite
 `ONTOLOGY.md`. Source-backed secondbrain evidence can create ontology
 candidates or inquiry items; promotion into active ontology requires review.
 
-## Intentional Secondbrain Capture
+## Capture
 
-OpenClaw is the reference adapter for deterministic note and journal behavior,
-but jarvOS owns the contract. For `note:`, `make a note`, `idea:`, `save this`,
-and similar explicit capture requests, OpenClaw should resolve the trusted
-jarvOS installation outside the current workspace and call its absolute path:
+Save requested Ideas, Journal entries and notes with `jarvos_capture` (or `jarvos capture` when no jarvOS tool is available). Follow the single [capture guideline](../../modules/jarvos-instruction-projection/content/capture-guideline.md); provenance and safety are handled inside the tool.
 
-```bash
-node "/absolute/path/to/trusted/jarvOS/modules/jarvos-secondbrain/scripts/jarvos-capture.js"
-```
+Setup keeps the guideline current in a managed capture block, backing up changed instruction files first and preserving everything outside that block.
 
-The capture event source is `openclaw`. Successful note captures must write
-under the configured `Notes/` directory, link exactly once from
-`Journal/YYYY-MM-DD.md`, preserve source-backed provenance, and leave QMD/search
-freshness as `pending-refresh`. OpenClaw adapters should enforce this behavior
-without becoming the owner of the abstraction, and they must not create guessed
-daily journal files under `Notes/`.
 
 ## What jarvOS Adds On Top
 

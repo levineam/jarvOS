@@ -100,7 +100,7 @@ Next steps (vault host; operator-supervised, start it yourself):
   node "$LAUNCHER"
 
 The launcher requires an explicit JARVOS_GROK_MCP_PORT. It serves only the
-scoped eight-tool Grok interface. Do not start the general full-surface
+scoped nine-tool Grok interface. Do not start the general full-surface
 gateway (jarvos-mcp-http.js) for Grok Bot.
 
 Grok Bot client (URL + token only):

@@ -7,6 +7,7 @@ const receipts = require('./receipts');
 const projection = require('./projection');
 
 module.exports = {
+  ...require('./managed-block'),
   ...require('./capture-guideline'),
   ...contracts,
   ...catalog,

@@ -163,3 +163,11 @@ dictation lifecycle maps recording to `listening` and transcription to
 `thinking`. When voice playback is added, connect its `AnalyserNode` to
 `WebAudioSpeechEnergy` and feed the sampled value to `setSpeechEnergy` while the
 avatar is `speaking`; the renderer deliberately owns no audio or agent logic.
+
+The bundled agent's `append_journal` tool uses `jarvosRepo` to run the configured
+installation's `scripts/jarvos.js capture` CLI with Desktop's configured vault paths. Set `jarvosRepo` to the absolute
+jarvOS installation path to enable it; without that configuration capture is
+unavailable. Only `Ideas` and `Journal` are accepted, with required `words`
+(`user`, `assistant`, `mixed`) and `asked` (`explicit`, `accepted_offer`). The
+installed Desktop copy never imports repository modules or writes journal bullets
+directly; the capture receipt supplies the one-line result.

@@ -9,7 +9,6 @@ const { Readable } = require('node:stream');
 const test = require('node:test');
 
 const notes = require('../server/adapters/notes');
-const journal = require('../server/adapters/journal');
 const paperclip = require('../server/adapters/paperclip');
 const credentials = require('../server/agent/credentials');
 const providers = require('../server/agent/providers');
@@ -44,15 +43,6 @@ test('note reads block path traversal', () => {
 
   assert.equal(notes.read(notesDir, 'Project').title, 'Project');
   assert.throws(() => notes.read(notesDir, '../Journal/2026-06-29'), /path separators/);
-});
-
-test('journal append only adds bullets and preserves existing content', () => {
-  const dir = tempDir();
-  fs.writeFileSync(path.join(dir, '2026-06-29.md'), '---\ndate: 2026-06-29\n---\n\n## Existing\n- keep me\n');
-  journal.appendBullet(dir, '2026-06-29', 'Existing', 'new item');
-  const raw = fs.readFileSync(path.join(dir, '2026-06-29.md'), 'utf8');
-  assert.match(raw, /- keep me/);
-  assert.match(raw, /## Existing\n- new item\n- keep me|## Existing\n- keep me\n- new item/);
 });
 
 test('Paperclip writes use company create route and issue update route', async () => {

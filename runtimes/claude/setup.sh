@@ -437,11 +437,12 @@ else
     echo "jarvOS Claude CLAUDE.md template not found: $CLAUDE_MD_TEMPLATE" >&2
     exit 1
   fi
-  node - "$CLAUDE_MD_TEMPLATE" "$CLAUDE_MD_PATH" "$CAPTURE_SCRIPT" <<'NODE'
+  node - "$CLAUDE_MD_TEMPLATE" "$CLAUDE_MD_PATH" "$CAPTURE_SCRIPT" "$ROOT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 
-const [templatePath, claudeMdPath, captureScript] = process.argv.slice(2);
+const [templatePath, claudeMdPath, captureScript, root] = process.argv.slice(2);
+const { readCaptureGuideline } = require(path.join(root, 'modules/jarvos-instruction-projection/src/capture-guideline'));
 const LOCAL_EXTENSIONS_MARKER = '<!-- LOCAL-EXTENSIONS-BELOW -->';
 const ADOPTED_NOTICE =
   '\n<!-- The block below was preserved from your prior ~/.claude/CLAUDE.md ' +
@@ -469,10 +470,9 @@ function timestampSuffix() {
 
 if (!path.isAbsolute(captureScript)) throw new Error('capture script path must be absolute');
 const shellQuote = (value) => `'${value.replace(/'/g, `'"'"'`)}'`;
-const template = fs.readFileSync(templatePath, 'utf8').replace(
-  '{{JARVOS_CAPTURE_SCRIPT}}',
-  () => shellQuote(captureScript),
-);
+const template = fs.readFileSync(templatePath, 'utf8')
+  .replace('{{JARVOS_CAPTURE_SCRIPT}}', () => shellQuote(captureScript))
+  .replace('{{JARVOS_CAPTURE_GUIDELINE}}', () => readCaptureGuideline());
 const existing = readFileOrNull(claudeMdPath);
 const { mode, body } = extractLocalExtensions(existing);
 

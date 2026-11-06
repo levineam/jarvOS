@@ -25,7 +25,7 @@ without jarvOS context instead of pretending the local box is the vault.
 ## Scoped Grok interface
 
 Grok Bot uses its own launcher, `runtimes/grok-bot/gateway.js`. It serves
-exactly eight tools with host-owned, closed argument schemas:
+exactly nine tools with host-owned, closed argument schemas:
 
 | Tool | Effect |
 | --- | --- |
@@ -35,7 +35,8 @@ exactly eight tools with host-owned, closed argument schemas:
 | `jarvos_recall` | read |
 | `jarvos_journal_health` | read |
 | `jarvos_session_thread_read` | read |
-| `jarvos_create_note` | write (host stamps `source_personality: grok-bot`) |
+| `jarvos_capture` | write (host stamps `source: grok-bot`; kinds `idea`, `journal`, `note`) |
+| `jarvos_create_note` (deprecated; kept for one release) | write (host stamps `source_personality: grok-bot`) |
 | `jarvos_session_thread_write` | write (host stamps `host: grok-bot`, journal link) |
 
 Unknown arguments are refused; attribution is stamped by the host after
@@ -58,7 +59,7 @@ scoped endpoint denies prompts, so do not use it here.
 ## What's here
 
 - `adapter.json` — public runtime declaration (not a canonical managed harness)
-- `gateway.js` — scoped Grok launcher (fixed eight-tool policy)
+- `gateway.js` — scoped Grok launcher (fixed nine-tool policy)
 - `setup.sh` — vault-host token preparation and read-only validation
 - this README
 
@@ -151,7 +152,7 @@ yourself (`launchctl bootstrap gui/$(id -u) <plist>`); nothing here installs it.
 
 ## Write timeouts
 
-If `jarvos_create_note` or `jarvos_session_thread_write` times out, the result
+If `jarvos_capture`, `jarvos_create_note` or `jarvos_session_thread_write` times out, the result
 is **outcome uncertain**: the write may or may not have landed. Do not retry
 blindly; read back (`jarvos_session_thread_read`, `jarvos_recall`) first.
 `jarvos_create_note` follows the vault mutation contract: Obsidian should be
@@ -183,9 +184,10 @@ gateway pins it for the session. This is Streamable HTTP only: the legacy
 
 ## Intentional capture
 
-When the user asks to save a note or idea through Grok Bot, use
-`jarvos_create_note` via this endpoint. Do not raw-write vault Markdown on the
-Grok Bot disk.
+When the user asks to save through Grok Bot, use `jarvos_capture`: `kind: idea`
+for Ideas, `kind: journal` for Journal entries, and `kind: note` for notes. Follow
+the single [capture guideline](../../modules/jarvos-instruction-projection/content/capture-guideline.md).
+Do not raw-write vault Markdown on the Grok Bot disk.
 
 ## Verification
 

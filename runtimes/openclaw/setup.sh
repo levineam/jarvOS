@@ -329,6 +329,7 @@ echo "→ Installing core behavioral layer..."
 for f in AGENTS.md SOUL.md IDENTITY.md; do
   copy_if_missing "$CORE_DIR/$f" "$WORKSPACE/$f"
 done
+node "$REPO_ROOT/scripts/lib/upsert-capture-guideline.js" "$WORKSPACE/AGENTS.md"
 copy_if_missing "$WORK_CONTEXT_SOURCE" "$WORKSPACE/WORK-CONTEXT.md"
 echo ""
 
