@@ -130,7 +130,7 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (!data.captures || typeof data.captures !== 'object' || Array.isArray(data.captures)) throw new Error('Invalid capture operation reservations');
     const existing = data.captures[intentId];
     if (existing) {
-      if (existing.requestHash !== requestHash || existing.vaultId !== vaultId) throw new Error('this operation id was already used for different content');
+      if (existing.requestHash !== requestHash || existing.vaultId !== vaultId) throw Object.assign(new Error('this operation id was already used for different content'), { validation: true });
       if (!existing.plan || typeof existing.plan !== 'object') throw new Error('Invalid stored capture operation plan');
       return existing;
     }

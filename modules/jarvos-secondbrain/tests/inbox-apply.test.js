@@ -9,7 +9,7 @@ const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { applyInbox } = require('../bridge/capture/src/inbox-apply');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
-const { simpleCapture } = require('../bridge/capture/src/simple-capture');
+const { CaptureValidationError, simpleCapture } = require('../bridge/capture/src/simple-capture');
 const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
 
 const device = 'phone-47ba92';
@@ -54,6 +54,92 @@ function runInbox(f, options = {}, env = {}) {
       JARVOS_TIMEZONE: 'UTC', TZ: 'UTC', ...env },
   }));
 }
+
+test('an offline local_applied capture stays pending on replay and acknowledges once Obsidian returns', (t) => {
+  const f = fixture(t);
+  f.put(request({ kind: 'note', title: '"An invented offline note"' }));
+  const first = runInbox(f, { fault: 'offline_stopped' });
+  assert.equal(first.error, null);
+  assert.equal(first.result.counts.not_confirmed, 1);
+  assert.equal(first.notes.length, 1);
+  const note = Object.values(first.ledger.operations).find(({ operation }) => operation.operationId.startsWith('capture:op:')
+    && operation.vaultRelativePath.startsWith('Notes/'));
+  assert.equal(note.status, 'local_applied');
+
+  const retry = runInbox(f, { fault: 'offline_stopped' });
+  assert.equal(retry.error, null);
+  assert.equal(retry.ledger.operations[note.operation.operationId].status, 'local_applied');
+  assert.equal(retry.result.counts.not_confirmed, 1);
+  assert.deepEqual(retry.ledger.operations[note.operation.operationId], note);
+  assert.deepEqual(retry.notes, first.notes);
+  assert.deepEqual(retry.writes, []);
+
+  const recovered = runInbox(f);
+  assert.equal(recovered.error, null);
+  assert.equal(recovered.result.counts.saved, 1);
+  assert.equal(recovered.ledger.operations[note.operation.operationId].status, 'acknowledged');
+  assert.deepEqual(recovered.notes, first.notes);
+  assert.equal(recovered.writes.some((name) => name.startsWith('Notes/')), false);
+  assert.match(f.receipt(), /status: saved/);
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+});
+
+test('a capture ledger lock timeout stays not_confirmed and retries once with a saved receipt', (t) => {
+  const f = fixture(t); f.put();
+  const first = runInbox(f, { fault: 'ledger_lock' });
+  assert.equal(first.error, null);
+  assert.equal(first.result.counts.not_confirmed, 1, f.receipt());
+  assert.equal(first.result.counts.invalid, 0);
+  assert.match(f.receipt(), /status: not_confirmed/);
+  assert.match(f.receipt(), /Not confirmed yet: saving hit a temporary problem; it will be tried again\./);
+  assert.doesNotMatch(f.receipt(), /Timed out|ledger|lock/);
+  assert.equal(first.journal, null);
+  assert.deepEqual(first.notes, []);
+  const recovered = runInbox(f);
+  assert.equal(recovered.error, null);
+  assert.equal(recovered.result.counts.saved, 1);
+  assert.match(f.receipt(), /status: saved/);
+  assert.equal(recovered.journal.split('An invented first line.').length - 1, 1);
+  assert.ok(Object.values(recovered.ledger.operations).every(({ status }) => status === 'acknowledged'));
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+});
+
+for (const fault of ['capture_io', 'capture_unexpected']) {
+  test(`${fault} after a capture effect stays retryable and does not duplicate it`, (t) => {
+    const f = fixture(t); f.put();
+    const first = runInbox(f, { fault });
+    assert.equal(first.error, null);
+    assert.equal(first.result.counts.not_confirmed, 1);
+    assert.match(f.receipt(), /status: not_confirmed/);
+    assert.match(f.receipt(), /Not confirmed yet: saving hit a temporary problem; it will be tried again\./);
+    assert.doesNotMatch(f.receipt(), /invented.*failure/);
+    assert.equal(first.journal.split('An invented first line.').length - 1, 1);
+    const recovered = runInbox(f);
+    assert.equal(recovered.error, null);
+    assert.equal(recovered.result.counts.saved, 1);
+    assert.equal(recovered.journal, first.journal);
+    assert.equal(recovered.writes.some((name) => name.startsWith('Journal/')), false);
+    assert.match(f.receipt(), /status: saved/);
+    assert.equal(runInbox(f).result.counts.skipped, 1);
+  });
+}
+
+test('a real persisted operation ID conflict is invalid without changing the captured content', (t) => {
+  const f = fixture(t); f.put();
+  const first = runInbox(f, { inbox: false, simple: true, capture: { kind: 'journal',
+    text: 'An invented first line.\nAn invented second line.', words: 'user', asked: 'explicit',
+    model: 'test-model', source: 'phanos-mobile', date: '2030-02-03', opId } });
+  assert.equal(first.error, null);
+  assert.equal(first.result.ok, true);
+  f.put(request({}, 'An invented changed request.'));
+  const conflict = runInbox(f);
+  assert.equal(conflict.error, null);
+  assert.equal(conflict.result.counts.invalid, 1);
+  assert.match(f.receipt(), /this operation id was already used for different content/);
+  assert.equal(conflict.journal, first.journal);
+  assert.deepEqual(conflict.ledger.captures, first.ledger.captures);
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+});
 
 test('new-device receipts create missing parents before the Obsidian create operation', (t) => {
   const f = fixture(t); f.put();
@@ -485,8 +571,8 @@ test('oversized requests are invalid and duplicate fields are refused', async (t
 test('capture validation exceptions and opId conflicts are invalid; other not-ok is not_saved', async (t) => {
   const f = fixture(t); f.put();
   for (const [capture, status] of [
-    [() => { throw new Error('An invented validation error.'); }, 'invalid'],
-    [() => ({ ok: false, message: 'this operation id was already used for different content' }), 'invalid'],
+    [() => { throw new CaptureValidationError('An invented validation error.'); }, 'invalid'],
+    [() => { throw Object.assign(new Error('this operation id was already used for different content'), { validation: true }); }, 'invalid'],
     [() => ({ ok: false, message: 'Not saved: an invented failure.' }), 'not_saved'],
   ]) {
     assert.equal((await f.apply({ capture })).counts[status], 1);

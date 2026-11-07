@@ -6,37 +6,46 @@ const { SOURCE_TOOLS } = require('../../../packages/jarvos-ambient/src/intent/ca
 const { normalizeJournalEntry } = require('../../provenance/src/content-origin-contract');
 const { validateCaptureOpId } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 
+class CaptureValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.validation = true;
+  }
+}
+
 function buildSimpleCaptureEvent(input = {}) {
   const { kind, words, asked } = input;
-  if (input.opId !== undefined) validateCaptureOpId(input.opId);
-  if (!['idea', 'journal', 'note'].includes(kind)) throw new Error('kind must be idea, journal, or note');
-  if (typeof input.text !== 'string' || !input.text.trim()) throw new Error('text must be a non-empty string');
-  if (kind !== 'note' && input.title !== undefined) throw new Error('title is only used for notes');
-  if (!['user', 'assistant', 'mixed'].includes(words)) throw new Error('words must be user, assistant, or mixed');
-  if (!['explicit', 'accepted_offer'].includes(asked)) throw new Error('save only when the user asked or accepted an offer');
-  if (typeof input.source !== 'string' || !input.source.trim()) throw new Error('source must be a non-empty string');
+  if (input.opId !== undefined) {
+    try { validateCaptureOpId(input.opId); } catch (error) { throw new CaptureValidationError(error.message); }
+  }
+  if (!['idea', 'journal', 'note'].includes(kind)) throw new CaptureValidationError('kind must be idea, journal, or note');
+  if (typeof input.text !== 'string' || !input.text.trim()) throw new CaptureValidationError('text must be a non-empty string');
+  if (kind !== 'note' && input.title !== undefined) throw new CaptureValidationError('title is only used for notes');
+  if (!['user', 'assistant', 'mixed'].includes(words)) throw new CaptureValidationError('words must be user, assistant, or mixed');
+  if (!['explicit', 'accepted_offer'].includes(asked)) throw new CaptureValidationError('save only when the user asked or accepted an offer');
+  if (typeof input.source !== 'string' || !input.source.trim()) throw new CaptureValidationError('source must be a non-empty string');
   for (const key of ['title', 'model']) {
     if (input[key] !== undefined && (typeof input[key] !== 'string' || !input[key].trim() || /[\r\n\u2028\u2029]/.test(input[key]))) {
-      throw new Error(`${key} must be a non-empty single line`);
+      throw new CaptureValidationError(`${key} must be a non-empty single line`);
     }
   }
   if (input.date !== undefined && (typeof input.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input.date)
     || !Number.isFinite(Date.parse(input.date)) || new Date(input.date).toISOString().slice(0, 10) !== input.date)) {
-    throw new Error('date must be a valid YYYY-MM-DD date');
+    throw new CaptureValidationError('date must be a valid YYYY-MM-DD date');
   }
   // The universal path gives a leading hard command precedence over trigger.
   const command = parseHardCaptureCommand(input);
   if (command.matched && command.route !== kind) {
-    throw new Error(`text starts with a ${command.route} command; remove that prefix or use kind "${command.route}"`);
+    throw new CaptureValidationError(`text starts with a ${command.route} command; remove that prefix or use kind "${command.route}"`);
   }
   // A journal bullet cannot hold block Markdown (lists, headings, quotes,
   // code fences) or tabs; say so up front instead of failing after dispatch.
   // Check the words that will actually be written: after a matching
   // "Journal:"/"Idea:" prefix is removed, the rest must still be a valid bullet.
-  if (command.matched && !command.content) throw new Error('text has a command prefix but nothing to save');
+  if (command.matched && !command.content) throw new CaptureValidationError('text has a command prefix but nothing to save');
   if (kind !== 'note') {
     try { normalizeJournalEntry(`- ${command.matched ? command.content : input.text.trim()}`); } catch {
-      throw new Error('this text has lists, headings, quotes, code or tabs, which a journal bullet cannot hold; save it with kind "note" to keep the formatting, or as plain sentences');
+      throw new CaptureValidationError('this text has lists, headings, quotes, code or tabs, which a journal bullet cannot hold; save it with kind "note" to keep the formatting, or as plain sentences');
     }
   }
   const source = input.source.trim();
@@ -108,4 +117,4 @@ function simpleCapture(input, options = {}) {
   return { ok, kind, message: message.replace(/[\r\n\u2028\u2029]+/g, ' '), result };
 }
 
-module.exports = { buildSimpleCaptureEvent, simpleCapture };
+module.exports = { CaptureValidationError, buildSimpleCaptureEvent, simpleCapture };

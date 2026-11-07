@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { simpleCapture, buildSimpleCaptureEvent } = require('./simple-capture');
+const { CaptureValidationError, simpleCapture, buildSimpleCaptureEvent } = require('./simple-capture');
 const { OP_ID_PATTERN, captureOperationRequest } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 const { TERMINAL } = require('../../../adapters/obsidian/src/vault-mutation-ledger');
 const { createConfiguredVaultMutationService } = require('../../../src/vault-mutation-service');
@@ -13,6 +13,7 @@ const { resolveConfig } = require('../../config');
 const ID = new RegExp(OP_ID_PATTERN);
 const MAX_BYTES = 256 * 1024;
 const KEYS = new Set(['phanos_request', 'op_id', 'device', 'kind', 'words', 'asked', 'model', 'created', 'date', 'title']);
+const TEMPORARY_PROBLEM = 'Not confirmed yet: saving hit a temporary problem; it will be tried again.';
 
 function stat(file) {
   try { return fs.lstatSync(file); } catch (error) {
@@ -47,7 +48,7 @@ function readFile(file) {
       if (!count) break;
       length += count;
     }
-    if (length > MAX_BYTES) throw new Error('file exceeds 256 KB');
+    if (length > MAX_BYTES) throw new CaptureValidationError('file exceeds 256 KB');
     return bytes.subarray(0, length).toString('utf8');
   } finally { fs.closeSync(fd); }
 }
@@ -64,28 +65,28 @@ function parseRequest(source, opId, device) {
   while (lines.length && /^[ \t]*$/.test(value(lines.at(-1)))) lines.pop();
   if (!lines.length || value(lines.at(-1)) !== '<!-- phanos:end -->') return null;
   const marker = lines.pop();
-  if (!lines.length || value(lines[0]) !== '---') throw new Error('request must start with --- frontmatter');
+  if (!lines.length || value(lines[0]) !== '---') throw new CaptureValidationError('request must start with --- frontmatter');
   const end = lines.findIndex((line, i) => i > 0 && value(line) === '---');
-  if (end < 0) throw new Error('frontmatter must close with ---');
+  if (end < 0) throw new CaptureValidationError('frontmatter must close with ---');
   const fields = Object.create(null);
   for (const line of lines.slice(1, end)) {
     const match = /^([a-z_]+):[ \t]*(.*)$/.exec(value(line));
-    if (!match || Object.hasOwn(fields, match[1])) throw new Error('frontmatter fields must be unique key: value lines');
-    if (!KEYS.has(match[1])) throw new Error(`unknown frontmatter key: ${match[1]}`);
+    if (!match || Object.hasOwn(fields, match[1])) throw new CaptureValidationError('frontmatter fields must be unique key: value lines');
+    if (!KEYS.has(match[1])) throw new CaptureValidationError(`unknown frontmatter key: ${match[1]}`);
     fields[match[1]] = match[2];
   }
-  if (fields.phanos_request !== 'capture/v1') throw new Error('phanos_request must be capture/v1');
-  if (!ID.test(opId) || fields.op_id !== opId) throw new Error('op_id must match its filename and the 8-80 character ID rule');
-  if (!ID.test(device) || fields.device !== device) throw new Error('device must match its folder and the 8-80 character ID rule');
-  if (!['idea', 'journal', 'note'].includes(fields.kind)) throw new Error('kind must be idea, journal, or note');
-  if (fields.words !== 'user') throw new Error('words must be user');
-  if (fields.asked !== 'explicit') throw new Error('asked must be explicit');
+  if (fields.phanos_request !== 'capture/v1') throw new CaptureValidationError('phanos_request must be capture/v1');
+  if (!ID.test(opId) || fields.op_id !== opId) throw new CaptureValidationError('op_id must match its filename and the 8-80 character ID rule');
+  if (!ID.test(device) || fields.device !== device) throw new CaptureValidationError('device must match its folder and the 8-80 character ID rule');
+  if (!['idea', 'journal', 'note'].includes(fields.kind)) throw new CaptureValidationError('kind must be idea, journal, or note');
+  if (fields.words !== 'user') throw new CaptureValidationError('words must be user');
+  if (fields.asked !== 'explicit') throw new CaptureValidationError('asked must be explicit');
   if (fields.title !== undefined) {
-    if (fields.kind !== 'note') throw new Error('title is allowed only for notes');
-    try { fields.title = JSON.parse(fields.title); } catch { throw new Error('title must be JSON double-quoted'); }
+    if (fields.kind !== 'note') throw new CaptureValidationError('title is allowed only for notes');
+    try { fields.title = JSON.parse(fields.title); } catch { throw new CaptureValidationError('title must be JSON double-quoted'); }
     if (typeof fields.title !== 'string' || !fields.title.trim() || [...fields.title].length > 200
       || /^[.-]/.test(fields.title.trim()) || /[/\\\p{Cc}\p{Zl}\p{Zp}]/u.test(fields.title)) {
-      throw new Error('title must be one line, 1-200 characters, without leading . or -, slashes, or control characters');
+      throw new CaptureValidationError('title must be one line, 1-200 characters, without leading . or -, slashes, or control characters');
     }
   }
   const start = lines[end].index + lines[end][0].length;
@@ -230,8 +231,8 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       try {
         input = parseRequest(readFile(item.file), item.opId, item.device);
       } catch (error) {
-        if (error.code) throw error;
-        status = 'invalid'; message = error.message;
+        status = error.validation === true ? 'invalid' : 'not_confirmed';
+        message = error.validation === true ? error.message : TEMPORARY_PROBLEM;
       }
       if (!status && !input) { record.status = 'incomplete'; counts.incomplete++; continue; }
       processed++;
@@ -246,12 +247,11 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
               && ['planned', 'dispatched', 'unknown_after_dispatch', 'local_mutating', 'local_applied', 'blocked'].includes(status));
           const pending = saved.result?.artifactReceipt?.artifacts?.some((artifact) => ['note', 'journal'].includes(artifact.kind)
             && ['saved_locally_sync_pending', 'deferred'].includes(artifact.outcome)) || unresolved;
-          status = saved.message.includes('this operation id was already used for different content') ? 'invalid'
-            : pending ? 'not_confirmed' : saved.ok ? 'saved' : 'not_saved';
+          status = pending ? 'not_confirmed' : saved.ok ? 'saved' : 'not_saved';
           message = saved.message;
         } catch (error) {
-          if (error.code) throw error;
-          status = 'invalid'; message = error.message;
+          status = error.validation === true ? 'invalid' : 'not_confirmed';
+          message = error.validation === true ? error.message : TEMPORARY_PROBLEM;
         }
       }
       const receipt = await writeReceipt(mutationService, vaultRoot, item.device, item.opId, input?.kind, status, message, applied, currentReceipt);

@@ -116,9 +116,17 @@ async function main() {
   try {
     if (inbox) result = await require('../../bridge/capture/src/inbox-apply').applyInbox({ vaultRoot,
       mutationService: service, now: () => new Date(inboxNow), capture: (input, options) => {
-        const saved = simpleCapture(input, options);
-        captureFinished = true;
-        return saved;
+        const lockPath = path.join(root, 'ledger.json.lock');
+        if (fault === 'ledger_lock') fs.writeFileSync(lockPath, '{}', { flag: 'wx' });
+        try {
+          const saved = simpleCapture(input, options);
+          captureFinished = true;
+          if (fault === 'capture_io') throw Object.assign(new Error('An invented I/O failure after saving.'), { code: 'EIO' });
+          if (fault === 'capture_unexpected') throw new Error('An invented unexpected failure after saving.');
+          return saved;
+        } finally {
+          if (fault === 'ledger_lock') fs.unlinkSync(lockPath);
+        }
       } });
     if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
     if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');

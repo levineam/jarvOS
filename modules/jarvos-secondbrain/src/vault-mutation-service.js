@@ -164,6 +164,10 @@ function createConfiguredVaultMutationService({
       if (replay && operation.operationId.startsWith('capture:op:') && adapter.ledger.get(operation.operationId)?.status === 'acknowledged') {
         return createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' });
       }
+      // Offline effects already exist; only app readback may confirm them.
+      if (replay && operation.operationId.startsWith('capture:op:') && adapter.ledger.get(operation.operationId)?.status === 'local_applied') {
+        return createInternalReceipt({ operation, status: 'saved_locally_sync_pending', lifecycleState: 'local_applied', persistence: 'pending', obsidian: 'unacknowledged' });
+      }
     }
     let receipt;
     try { receipt = adapter.submit(operation); } catch (error) {
