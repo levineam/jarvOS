@@ -287,19 +287,25 @@ test('a replayed note swapped for a link outside the vault is never read or inde
   assert.doesNotMatch(indexed, /AN-INVENTED-PRIVATE-MARKER/);
 });
 
-test('replay indexing reads a note only when it is a plain file inside the notes folder', () => {
+test('replay indexing reads a note only when every segment from the vault root is real and inside the vault', () => {
   const { readContainedNote } = require('../packages/jarvos-secondbrain-notes/src/write-to-vault');
-  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contained-note-'));
+  const base = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contained-note-'));
   try {
-    const notes = path.join(root, 'Notes');
-    fs.mkdirSync(path.join(notes, 'sub'), { recursive: true });
+    const vault = path.join(base, 'vault');
+    const notes = path.join(vault, 'Notes');
+    const outsideDir = path.join(base, 'outside');
+    fs.mkdirSync(notes, { recursive: true });
+    fs.mkdirSync(outsideDir);
     fs.writeFileSync(path.join(notes, 'plain.md'), 'An invented plain note.');
-    fs.writeFileSync(path.join(root, 'outside.md'), 'AN-INVENTED-PRIVATE-MARKER');
-    fs.symlinkSync(path.join(root, 'outside.md'), path.join(notes, 'link.md'));
-    fs.symlinkSync(root, path.join(notes, 'dirlink'));
-    assert.equal(readContainedNote(path.join(notes, 'plain.md'), notes), 'An invented plain note.');
-    assert.equal(readContainedNote(path.join(notes, 'link.md'), notes), null);
-    assert.equal(readContainedNote(path.join(notes, 'dirlink', 'outside.md'), notes), null);
-    assert.equal(readContainedNote(path.join(root, 'outside.md'), notes), null);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    fs.writeFileSync(path.join(outsideDir, 'plain.md'), 'AN-INVENTED-PRIVATE-MARKER');
+    fs.symlinkSync(path.join(outsideDir, 'plain.md'), path.join(notes, 'link.md'));
+    assert.equal(readContainedNote(path.join(notes, 'plain.md'), vault), 'An invented plain note.');
+    assert.equal(readContainedNote(path.join(notes, 'link.md'), vault), null);
+    assert.equal(readContainedNote(path.join(outsideDir, 'plain.md'), vault), null);
+    assert.equal(readContainedNote(path.join(notes, 'plain.md'), undefined), null);
+    // The notes folder itself replaced by a link to an outside folder.
+    fs.renameSync(notes, path.join(base, 'Notes-moved'));
+    fs.symlinkSync(outsideDir, notes);
+    assert.equal(readContainedNote(path.join(notes, 'plain.md'), vault), null);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
