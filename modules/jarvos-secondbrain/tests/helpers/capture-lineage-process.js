@@ -32,7 +32,7 @@ function flushAllCallbacks() {
   while (pendingCallbacks.length) flushCallbacks();
 }
 
-const { root, capture, fault, reconcile = false, simple = false, ledgerNow } = JSON.parse(fs.readFileSync(0, 'utf8'));
+const { root, capture, fault, reconcile = false, simple = false, ledgerNow, inbox = false } = JSON.parse(fs.readFileSync(0, 'utf8'));
 const vaultRoot = path.join(root, 'vault');
 const writes = [];
 const absolute = (relative) => {
@@ -100,19 +100,24 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
   },
 });
 const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot, journalDir: path.join(vaultRoot, 'Journal') });
-const recovery = reconcile ? service.reconciler.drain({ limit: 20, timeMs: 2000 }) : null;
-let result = null;
-let error = null;
-try {
-  if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
-  if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
-} catch (caught) { error = caught.message; result = null; }
-// A timed-out app operation may complete after the caller has already returned.
-if (fault === 'poll_timeout' || fault === 'poll_deadline') flushAllCallbacks();
-const notesDir = path.join(vaultRoot, 'Notes');
-const notes = fs.existsSync(notesDir) ? fs.readdirSync(notesDir).filter((name) => name.endsWith('.md'))
-  .map((name) => ({ name, content: fs.readFileSync(path.join(notesDir, name), 'utf8') })) : [];
-const journalPath = path.join(vaultRoot, 'Journal', '2030-02-03.md');
-process.stdout.write(JSON.stringify({ result, error, recovery, writes, faultTriggered, pendingPolls, notes,
-  journal: fs.existsSync(journalPath) ? fs.readFileSync(journalPath, 'utf8') : null,
-  ledger: service.adapter.ledger.read() }));
+async function main() {
+  const recovery = reconcile ? service.reconciler.drain({ limit: 20, timeMs: 2000 }) : null;
+  let result = null;
+  let error = null;
+  try {
+    if (inbox) result = await require('../../bridge/capture/src/inbox-apply').applyInbox({ vaultRoot,
+      capture: (input, options) => simpleCapture(input, { ...options, mutationService: service }), now: () => new Date('2030-02-03T12:00:00Z') });
+    if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
+    if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
+  } catch (caught) { error = caught.message; result = null; }
+  // A timed-out app operation may complete after the caller has already returned.
+  if (fault === 'poll_timeout' || fault === 'poll_deadline') flushAllCallbacks();
+  const notesDir = path.join(vaultRoot, 'Notes');
+  const notes = fs.existsSync(notesDir) ? fs.readdirSync(notesDir).filter((name) => name.endsWith('.md'))
+    .map((name) => ({ name, content: fs.readFileSync(path.join(notesDir, name), 'utf8') })) : [];
+  const journalPath = path.join(vaultRoot, 'Journal', '2030-02-03.md');
+  process.stdout.write(JSON.stringify({ result, error, recovery, writes, faultTriggered, pendingPolls, notes,
+    journal: fs.existsSync(journalPath) ? fs.readFileSync(journalPath, 'utf8') : null,
+    ledger: service.adapter.ledger.read() }));
+}
+main().catch((error) => { process.stderr.write(error.message); process.exitCode = 1; });

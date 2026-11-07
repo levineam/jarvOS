@@ -39,8 +39,8 @@ function sanitizeTitle(title) {
   return String(title || '').trim().replace(/[/\\:*?"<>|]/g, '-');
 }
 
-function noteFilePath(title) {
-  return join(getVaultNotesDir(), `${sanitizeTitle(title)}.md`);
+function noteFilePath(title, notesDir = getVaultNotesDir()) {
+  return join(notesDir, `${sanitizeTitle(title)}.md`);
 }
 
 function buildNoteBody(title, content) {
@@ -315,7 +315,7 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, notesDir = getVaultNotesDir(), sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
   const collectedDrafting = collectDraftingDeclarations(drafting, content_origin_drafting);
   if (!collectedDrafting.ok) throw new Error(`Invalid note frontmatter: content_origin_drafting rejected: invalid_drafting:${collectedDrafting.reason}`);
   const draftingDeclaration = collectedDrafting.entries;
@@ -330,8 +330,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   }
 
   const safeName = sanitizeTitle(title);
-  const notesDir = getVaultNotesDir();
-  const filePath = noteFilePath(safeName);
+  const filePath = noteFilePath(safeName, notesDir);
   const created = !existsSync(filePath);
   // The fresh read below is only ever grounds for refusal, never proof that the
   // caller's state still holds: the operation is built from the caller's bytes

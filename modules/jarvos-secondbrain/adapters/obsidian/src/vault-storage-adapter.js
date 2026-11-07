@@ -51,7 +51,7 @@ function journalArtifact({ journalPath, vaultRoot, receipt, intent = 'auxiliary'
   };
 }
 
-function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(), journalDir = getVaultJournalDir(), source = 'obsidian.vault-storage-adapter' } = {}) {
+function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(), journalDir = getVaultJournalDir(), notesDir, source = 'obsidian.vault-storage-adapter' } = {}) {
   const service = mutationService || require('../../../src/vault-mutation-service.js').createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source });
   if (typeof service.execute !== 'function' || typeof service.createWriteContext !== 'function') throw new Error('vault storage adapter requires the configured mutation service');
   // An "ensure the journal exists" create is redundant, and a liability, when the
@@ -126,8 +126,8 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       };
     },
     writeNote({ title, content, frontmatter = {}, intentId, requestHash, resolveUserSource, resolveServedModel } = {}) {
-      const filePath = noteFilePath(title);
-      return writeNoteFile({ title, content, frontmatter, resolveUserSource, resolveServedModel, ...contextFor(relativeToVault(vaultRoot, filePath), intentId, requestHash) });
+      const filePath = noteFilePath(title, notesDir);
+      return writeNoteFile({ title, content, frontmatter, notesDir, resolveUserSource, resolveServedModel, ...contextFor(relativeToVault(vaultRoot, filePath), intentId, requestHash) });
     },
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId, journalPolicy, explicitBacklink, frontmatter, notePath } = {}) {
       if (resolveJournalLinkPolicy({ noteTitle, notePath, frontmatter, journalPolicy, explicitBacklink, vaultRoot, source }) === 'none') return { status: 'not_requested', linked: false, acknowledged: false };
