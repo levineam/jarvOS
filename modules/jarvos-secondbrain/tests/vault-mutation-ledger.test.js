@@ -8,6 +8,43 @@ const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mu
 
 const op = (id, sequence = 1) => ({ schemaVersion: 1, operationId: id, vaultId: 'vault', vaultRelativePath: 'Notes/A.md', sequence, operationKind: 'create' });
 
+test('capture reservations freeze the plan before dispatch and retain operations beyond pruning', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-capture-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let now = 100;
+  const filePath = path.join(root, 'ledger.json');
+  const ledger = createVaultMutationLedger({ filePath, now: () => now, retentionMs: 10 });
+  const intentId = `capture:op:${'a'.repeat(64)}`;
+  const request = { intentId, requestHash: 'b'.repeat(64), vaultId: 'vault', plan: { date: '2030-02-03', createNote: false } };
+  ledger.reserveCapture(request);
+  assert.equal(Object.keys(ledger.read().operations).length, 0);
+  const restarted = createVaultMutationLedger({ filePath });
+  assert.deepEqual(restarted.reserveCapture({ ...request, plan: { date: '2030-02-04' } }).plan, request.plan);
+  const before = fs.readFileSync(filePath, 'utf8');
+  assert.throws(() => restarted.reserveCapture({ ...request, requestHash: 'c'.repeat(64) }), /already used for different content/);
+  assert.equal(fs.readFileSync(filePath, 'utf8'), before);
+  for (const id of [`${intentId}:journal:section`, 'ordinary-0001']) {
+    const operation = ledger.planNext(op(id)).operation;
+    const claim = ledger.claim(operation, 'owner');
+    ledger.transition(id, 'acknowledged', { ownerId: 'owner', fence: claim.fence });
+  }
+  now += 100;
+  ledger.pruneRetained();
+  assert.ok(ledger.get(`${intentId}:journal:section`));
+  assert.equal(ledger.get('ordinary-0001'), null);
+  assert.deepEqual(ledger.read().captures[intentId].plan, request.plan);
+});
+
+test('capture reservation refuses corrupt state without repairing away its identity', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-capture-corrupt-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const filePath = path.join(root, 'ledger.json');
+  fs.writeFileSync(filePath, '{broken}', { mode: 0o600 });
+  const ledger = createVaultMutationLedger({ filePath });
+  assert.throws(() => ledger.reserveCapture({ intentId: `capture:op:${'a'.repeat(64)}`, requestHash: 'b'.repeat(64), vaultId: 'vault', plan: {} }));
+  assert.equal(fs.readFileSync(filePath, 'utf8'), '{broken}');
+});
+
 test('ledger durably creates intent before granting FIFO fenced claims', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-'));
   try {

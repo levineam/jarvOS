@@ -60,9 +60,17 @@ const {
 } = require('../../../packages/jarvos-ambient/src/routing');
 const { createArtifactReceipt } = require('../../../src/artifact-receipt');
 const { prepareIdentifiedCapture, projectNoteTitle } = require('../../../packages/jarvos-ambient/src/intent/capture-identity');
+const { captureOperationRequest } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 
 function applyPlan(capture, plan, options = {}) {
-  const prepared = prepareIdentifiedCapture(capture, plan);
+  let adapter = options.adapter;
+  let prepared;
+  if (capture.opId !== undefined) {
+    if (capture.captureIdentity !== undefined) throw new Error('opId and captureIdentity cannot be combined');
+    adapter ||= createStorageAdapter(options);
+    const request = options.captureOperation || captureOperationRequest(capture);
+    prepared = { capture, ...request, plan: adapter.reserveCaptureOperation({ ...request, plan }).plan };
+  } else prepared = prepareIdentifiedCapture(capture, plan);
   ({ capture, plan } = prepared);
   const { intentId, requestHash } = prepared;
   const date = plan.date;
@@ -77,7 +85,7 @@ function applyPlan(capture, plan, options = {}) {
   if (plan.ignored) {
     return result;
   }
-  const adapter = options.adapter || createStorageAdapter(options);
+  adapter ||= createStorageAdapter(options);
 
   if (plan.createNote) {
     result.note = adapter.writeNote({
@@ -97,7 +105,7 @@ function applyPlan(capture, plan, options = {}) {
   // point at nothing. A queued (locally pending) note may still be linked.
   const noteWriteFailed = plan.createNote
     && (result.note?.artifactReceipt?.artifacts || []).some((a) => a.outcome === 'failed' || a.outcome === 'conflict');
-  if ((intentId && !result.note?.written) || noteWriteFailed) {
+  if ((intentId && plan.createNote && !result.note?.written) || noteWriteFailed) {
     result.artifactReceipt = createArtifactReceipt({ artifacts: result.note?.artifactReceipt?.artifacts || [] });
     return result;
   }
@@ -121,7 +129,7 @@ function applyPlan(capture, plan, options = {}) {
       ...(capture.journalPolicy ? { journalPolicy: capture.journalPolicy } : {}),
       ...(capture.explicitBacklink === true ? { explicitBacklink: true } : {}),
       date,
-      ...(intentId ? { intentId: `${intentId}:journal`, requestHash } : {}),
+      ...(intentId ? { intentId: `${intentId}:${capture.opId && plan.createNote ? 'note-link' : 'journal'}`, requestHash } : {}),
       ...(contentOrigin ? { contentOrigin } : {}),
     });
     result.noteLink = result.journalEntry;

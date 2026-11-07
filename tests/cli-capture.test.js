@@ -39,6 +39,33 @@ test('capture CLI reads stdin and emits the full JSON receipt', async () => {
   assert.equal(JSON.parse(result.stdout).message, "Saved to today's Ideas.");
 });
 
+test('capture CLI maps --op-id and refuses malformed operation IDs with exit 1', async () => {
+  for (const args of [['--op-id', 'test-operation-001'], ['--op-id=test-operation-001']]) {
+    const result = await invoke([...flags, ...args, 'An invented tidal garden.'], {
+      inspect(input) { assert.equal(input.opId, 'test-operation-001'); assert.equal(input['op-id'], undefined); },
+    });
+    assert.equal(result.code, 0, result.stderr);
+  }
+  for (const opId of ['', 'short', '_test-001', 'test:001', 'x'.repeat(81)]) {
+    const result = await invoke([...flags, `--op-id=${opId}`, 'An invented tidal garden.']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /opId must match/);
+  }
+  assert.equal((await invoke([...flags, '--op-id'])).code, 1);
+  assert.match(renderHelp(), /--op-id ID/);
+});
+
+test('capture CLI returns exit 1 for an operation ID content conflict', async () => {
+  let stderr = '';
+  const code = await runCaptureCommand([...flags, '--op-id', 'test-operation-001', 'An invented tidal garden.'], {}, {
+    stdout: { write() { assert.fail('must not report saved'); } },
+    stderr: { write(value) { stderr += value; } },
+    capture() { throw new Error('this operation id was already used for different content'); },
+  });
+  assert.equal(code, 1);
+  assert.match(stderr, /this operation id was already used for different content/);
+});
+
 test('capture CLI reuses capture exit codes and rejects bad flags and input', async () => {
   for (const [code, raw] of [[0, { ok: true }], [2, { ok: false, routing: { plan: { ignored: true } }, error: 'A test rejection' }], [3, { ok: false, artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-06-22.md', outcome: 'saved_locally_sync_pending' }] } }]]) {
     const result = await invoke([...flags, 'A test thought about tidal gardens'], { raw });

@@ -2,6 +2,12 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
+## [Unreleased]
+
+### Features
+
+- `jarvos capture --op-id` / `jarvos_capture op_id`: replaying the same capture never saves it twice (exactly-once by operation id).
+
 ## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
 
 

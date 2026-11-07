@@ -4,9 +4,11 @@ const { captureWithJarvos, captureFailureMessage } = require('./universal-captur
 const { parseHardCaptureCommand } = require('../../routing/src/keyword-capture-router');
 const { SOURCE_TOOLS } = require('../../../packages/jarvos-ambient/src/intent/capture-contract');
 const { normalizeJournalEntry } = require('../../provenance/src/content-origin-contract');
+const { validateCaptureOpId } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 
 function buildSimpleCaptureEvent(input = {}) {
   const { kind, words, asked } = input;
+  if (input.opId !== undefined) validateCaptureOpId(input.opId);
   if (!['idea', 'journal', 'note'].includes(kind)) throw new Error('kind must be idea, journal, or note');
   if (typeof input.text !== 'string' || !input.text.trim()) throw new Error('text must be a non-empty string');
   if (kind !== 'note' && input.title !== undefined) throw new Error('title is only used for notes');
@@ -41,6 +43,7 @@ function buildSimpleCaptureEvent(input = {}) {
   const model = input.model?.trim() || 'unknown';
   return {
     trigger: kind,
+    ...(input.opId !== undefined ? { opId: input.opId } : {}),
     text: input.text.trim(),
     source: SOURCE_TOOLS.includes(source) || /^custom:[a-z0-9][a-z0-9-]*$/i.test(source)
       ? source : { tool: 'other', label: source },

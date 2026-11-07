@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
+const { createInternalReceipt, hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
 const { CAPABILITY_REASONS, CAPABILITY_STATES, createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('./vault-transform-registry');
 
@@ -158,6 +158,11 @@ function createConfiguredVaultMutationService({
     if (requestHash) {
       const replay = replayExisting();
       if (replay && replay !== true) return replay;
+      // An operation-ID replay returns its durable outcome even if later
+      // captures have extended the note or journal. It never reasserts old bytes.
+      if (replay && operation.operationId.startsWith('capture:op:') && adapter.ledger.get(operation.operationId)?.status === 'acknowledged') {
+        return createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' });
+      }
     }
     let receipt;
     try { receipt = adapter.submit(operation); } catch (error) {
@@ -183,6 +188,20 @@ function createConfiguredVaultMutationService({
   function execute(input) {
     boundSource(input?.source);
     return submitAuthorized(input, source);
+  }
+
+  function reserveCaptureOperation(request) {
+    const reservation = adapter.ledger.reserveCapture({ ...request, vaultId });
+    const { operations } = adapter.ledger.read();
+    // Readback may settle an interrupted effect; it cannot redispatch it or
+    // steal a live writer's fenced claim. Unsatisfied ambiguous writes stay held.
+    for (const suffix of ['note', 'journal:create', 'journal:section', 'note-link:create', 'note-link:section']) {
+      const record = operations[`${request.intentId}:${suffix}`];
+      if (record && ['dispatched', 'unknown_after_dispatch', 'local_mutating', 'local_applied'].includes(record.status)) {
+        adapter.acknowledgeIfSatisfied(record.operation);
+      }
+    }
+    return reservation;
   }
 
   function createWriteContext({ vaultRelativePath, operationId, intentId, requestHash, operationSource = source } = {}) {
@@ -305,7 +324,7 @@ function createConfiguredVaultMutationService({
     return typeof adapter.inspectFileExists === 'function' ? adapter.inspectFileExists(vaultRelativePath).status : 'unavailable';
   }
 
-  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, source, transforms, vaultFileState, vaultId, vaultRoot });
+  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, reserveCaptureOperation, source, transforms, vaultFileState, vaultId, vaultRoot });
 }
 
 module.exports = { PACKAGE_TEMPORARY_SHIMS, WRITER_INVENTORY, assertNoUnclassifiedVaultWrites, assertPackageImportBoundary, assertWriterInventory, configuredVaultId, createConfiguredVaultMutationService };

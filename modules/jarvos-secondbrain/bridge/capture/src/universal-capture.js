@@ -19,6 +19,7 @@ const {
   createStorageAdapter,
 } = require('../../../adapters');
 const { receiptIsAcknowledged } = require('../../../src/artifact-receipt');
+const { captureOperationRequest } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 
 function compact(value) {
   const out = {};
@@ -175,6 +176,7 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
   // Keep an explicitly supplied null visible to the normal validation/error
   // contract instead of silently dropping it with legacy empty fields.
   if (raw.captureIdentity !== undefined) normalized.captureIdentity = raw.captureIdentity;
+  if (raw.opId !== undefined) normalized.opId = raw.opId;
   const errors = validateCaptureEvent(normalized, { requireDeclaration: options.requireDeclaration === true });
   if (errors.length) {
     const error = new Error(`invalid CaptureEvent v2: ${errors.join('; ')}`);
@@ -227,9 +229,11 @@ function captureWithJarvos(rawInput = {}, options = {}) {
       : captureEvent.trigger,
     frontmatter,
   };
+  const routingOptions = { ...options, adapter,
+    ...(captureEvent.opId !== undefined ? { captureOperation: captureOperationRequest(captureEvent) } : {}) };
   const routing = hardCommand.matched
-    ? applyParsedStrictCommandPlan(routingInput, hardCommand, { ...options, adapter })
-    : applyRoutingPlan(routingInput, { ...options, adapter });
+    ? applyParsedStrictCommandPlan(routingInput, hardCommand, routingOptions)
+    : applyRoutingPlan(routingInput, routingOptions);
   const ignored = hardCommand.matched ? false : routing.plan.ignored;
 
   return {

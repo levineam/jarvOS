@@ -6,8 +6,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { captureWithJarvos } = require('../../bridge/capture/src/universal-capture');
+const { simpleCapture } = require('../../bridge/capture/src/simple-capture');
 const { createConfiguredVaultMutationService } = require('../../src/vault-mutation-service');
 const { createVaultStorageAdapter } = require('../../adapters/obsidian/src/vault-storage-adapter');
+const { createVaultMutationLedger } = require('../../adapters/obsidian/src/vault-mutation-ledger');
 
 const pendingCallbacks = [];
 // Explicit scheduling stands in for the other process's asynchronous vault API.
@@ -30,7 +32,7 @@ function flushAllCallbacks() {
   while (pendingCallbacks.length) flushCallbacks();
 }
 
-const { root, capture, fault, reconcile = false } = JSON.parse(fs.readFileSync(0, 'utf8'));
+const { root, capture, fault, reconcile = false, simple = false, ledgerNow } = JSON.parse(fs.readFileSync(0, 'utf8'));
 const vaultRoot = path.join(root, 'vault');
 const writes = [];
 const absolute = (relative) => {
@@ -53,20 +55,27 @@ const vault = {
     return file;
   }),
 };
-const context = vm.createContext({ app: { vault }, TextDecoder, Uint8Array,
-  atob: (value) => Buffer.from(value, 'base64').toString('binary') });
+const context = vm.createContext({ app: { vault }, TextDecoder, TextEncoder, Uint8Array,
+  atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+  btoa: (value) => Buffer.from(value, 'binary').toString('base64') });
 let faultTriggered = false;
 let pendingPolls = 0;
 const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capture-fixture',
   proveObsidianAbsent: () => fault === 'offline_stopped',
   adapterOptions: {
     ledgerPath: path.join(root, 'ledger.json'), maxPollAttempts: 3, pollIntervalMs: 0,
+    ...(ledgerNow !== undefined ? { ledger: createVaultMutationLedger({ filePath: path.join(root, 'ledger.json'), now: () => ledgerNow }) } : {}),
     ...(fault === 'poll_deadline' ? { pollTimeoutMs: 1 } : {}),
     probe: () => ({ state: fault === 'offline_stopped' ? 'app_stopped' : fault === 'before_write' || (fault === 'after_note_before_journal' && writes.some((name) => name.startsWith('Notes/'))) ? 'app_busy' : 'available', vaultId: 'capture-fixture' }),
     evaluate: (code) => {
       const encoded = code.match(/atob\('([^']+)'\)/)?.[1];
       const input = encoded ? JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) : null;
       const mutation = input && !input.inspectionToken;
+      if (mutation && fault === 'exit_after_effect' && (input.vaultRelativePath.startsWith('Notes/') || input.transformName === 'journal-section-line')) {
+        vm.runInContext(code, context);
+        flushAllCallbacks();
+        process.exit(73);
+      }
       if (mutation && fault === 'before_backlink' && input.transformName === 'journal-section-line') {
         faultTriggered = true;
         throw new Error('simulated ambiguous dispatch with no effect');
@@ -94,7 +103,10 @@ const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot,
 const recovery = reconcile ? service.reconciler.drain({ limit: 20, timeMs: 2000 }) : null;
 let result = null;
 let error = null;
-try { if (capture) result = captureWithJarvos(capture, { adapter }); } catch (caught) { error = caught.message; }
+try {
+  if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
+  if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
+} catch (caught) { error = caught.message; result = null; }
 // A timed-out app operation may complete after the caller has already returned.
 if (fault === 'poll_timeout' || fault === 'poll_deadline') flushAllCallbacks();
 const notesDir = path.join(vaultRoot, 'Notes');

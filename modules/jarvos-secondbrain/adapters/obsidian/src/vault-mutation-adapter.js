@@ -213,6 +213,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     active: () => mutationLedger.active(),
     get: (operationId) => mutationLedger.get(operationId),
     read: () => mutationLedger.read(),
+    reserveCapture: (request) => mutationLedger.reserveCapture(request),
     filePath: mutationLedger.filePath,
   });
   const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));

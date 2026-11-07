@@ -418,6 +418,7 @@ const TOOLS = [
         text: { type: 'string', minLength: 1, maxLength: 200_000 },
         words: { type: 'string', enum: ['user', 'assistant', 'mixed'] },
         asked: { type: 'string', enum: ['explicit', 'accepted_offer'] },
+        op_id: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$' },
         title: { type: 'string', minLength: 1, maxLength: 200, pattern: '^(?!\\.)[^/\\\\\\u0000-\\u001f\\u007f\\u0085\\u2028\\u2029]+$' },
         model: { type: 'string', minLength: 1, maxLength: 200, pattern: '^[^\\r\\n\\u0085\\u2028\\u2029]*$' },
         date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
@@ -1105,16 +1106,17 @@ async function callTool(name, args = {}, lifecycle = {}) {
     return textResult(result.markdown, !result.ok);
   }
   if (name === 'jarvos_capture') {
-    const allowed = new Set(['kind', 'text', 'words', 'asked', 'title', 'model', 'date']);
+    const allowed = new Set(['kind', 'text', 'words', 'asked', 'title', 'model', 'date', 'op_id']);
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some((key) => !allowed.has(key))) {
-      throw new Error('jarvos_capture accepts only kind, text, words, asked, title, model, and date');
+      throw new Error('jarvos_capture accepts only kind, text, words, asked, title, model, date, and op_id');
     }
     const harness = process.env[COMMON_WORK_HARNESS_ENV];
     const source = process.env.JARVOS_CAPTURE_SOURCE
       || (harness === 'claude' ? 'claude-code' : harness)
       || clientName || 'mcp';
     const { simpleCapture } = require('../src').loadSimpleCapture();
-    const result = simpleCapture({ ...args, source });
+    const { op_id: opId, ...input } = args;
+    const result = simpleCapture({ ...input, ...(opId !== undefined ? { opId } : {}), source });
     return textResult(result.message, !result.ok);
   }
   if (name === 'jarvos_create_note') {

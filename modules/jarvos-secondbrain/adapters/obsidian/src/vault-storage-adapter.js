@@ -74,6 +74,10 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
     return { journalPath, receipt };
   }
   return Object.freeze({
+    reserveCaptureOperation(request) {
+      if (typeof service.reserveCaptureOperation !== 'function') throw new Error('The configured storage service does not support capture operation IDs');
+      return service.reserveCaptureOperation({ ...request, plan: { ...request.plan, date: request.plan.date || todayDate() } });
+    },
     ensureJournal({ date = todayDate(), intentId, requestHash } = {}) {
       const journalPath = path.join(journalDir, `${date}.md`);
       const existed = fs.existsSync(journalPath);

@@ -595,7 +595,7 @@ test('Grok capture mirrors the MCP closed schema and rejects caller source or in
     assert.deepEqual(schemas.jarvos_capture, TOOLS.find(tool => tool.name === 'jarvos_capture').inputSchema);
     const base = { kind: 'idea', text: 'An invented tidal garden.', words: 'user', asked: 'explicit' };
     for (const kind of ['idea', 'journal', 'note']) {
-      const args = { ...base, kind, model: 'test-model', date: '2030-02-03', ...(kind === 'note' ? { title: 'Invented garden' } : {}) };
+      const args = { ...base, kind, model: 'test-model', date: '2030-02-03', op_id: 'test-operation-001', ...(kind === 'note' ? { title: 'Invented garden' } : {}) };
       assert.equal((await ctx.post(toolCall(90, 'jarvos_capture', args))).status, 200);
       assert.deepEqual(callsTo(ctx.bridge, 'jarvos_capture').at(-1).params.arguments, args);
     }
@@ -603,6 +603,7 @@ test('Grok capture mirrors the MCP closed schema and rejects caller source or in
       { ...base, source: 'forged' }, { ...base, kind: 'other' },
       { ...base, words: 'human' }, { ...base, asked: 'implicit' },
       { ...base, date: 'tomorrow' }, { ...base, title: '' }, { ...base, model: '' },
+      ...['short', 'x'.repeat(81), 'test:001', null].map(op_id => ({ ...base, op_id })),
     ];
     for (const field of ['kind', 'text', 'words', 'asked']) {
       const args = { ...base }; delete args[field]; rejected.push(args);
@@ -620,7 +621,7 @@ test('capture policy matches MCP and stamps the source through MCP dispatch with
   assert.deepEqual(spec.properties, canonical.properties);
   assert.deepEqual(spec.required, canonical.required);
   assert.equal(spec.writes, true);
-  const args = { kind: 'idea', text: 'An invented tidal garden.', words: 'user', asked: 'explicit' };
+  const args = { kind: 'idea', text: 'An invented tidal garden.', words: 'user', asked: 'explicit', op_id: 'test-operation-001' };
   assert.equal(gateway.readOnlyDecision(toolCall(95, 'jarvos_capture', args)).reject.body.error.code, -32602);
   const previousLoader = context.loadSimpleCapture;
   const previousSource = process.env.JARVOS_CAPTURE_SOURCE;
@@ -628,7 +629,8 @@ test('capture policy matches MCP and stamps the source through MCP dispatch with
   process.env.JARVOS_CAPTURE_SOURCE = grok.grokChildEnv({ JARVOS_CAPTURE_SOURCE: 'forged' }).JARVOS_CAPTURE_SOURCE;
   try {
     const result = await mcp.callTool('jarvos_capture', args);
-    assert.deepEqual(JSON.parse(result.content[0].text), { ...args, source: 'grok-bot' });
+    const { op_id, ...input } = args;
+    assert.deepEqual(JSON.parse(result.content[0].text), { ...input, opId: op_id, source: 'grok-bot' });
   } finally {
     context.loadSimpleCapture = previousLoader;
     if (previousSource === undefined) delete process.env.JARVOS_CAPTURE_SOURCE;
