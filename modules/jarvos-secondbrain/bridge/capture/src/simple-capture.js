@@ -92,14 +92,18 @@ function simpleCapture(input, options = {}) {
   const result = capture(event, captureOptions);
   const ok = result.ok === true;
   const kind = input.kind;
-  const when = input.date ? `for ${input.date}` : "today's";
+  // Report the day the capture actually landed: a retried, undated capture is
+  // pinned to its first attempt's day, which may no longer be today.
+  const planned = result?.routing?.plan?.date;
+  const day = input.date || (planned && planned !== require('../../../adapters/obsidian/src/vault-storage-adapter').todayDate() ? planned : null);
+  const when = day ? `for ${day}` : "today's";
   let message;
   const artifacts = result?.artifactReceipt?.artifacts || [];
   const noteSaved = kind === 'note' && artifacts.some((a) => a.kind === 'note' && ACKNOWLEDGED.has(a.outcome));
   if (!ok && noteSaved) {
     // The note exists; only its journal link is unconfirmed. Saying "not
     // saved" would invite a duplicate note.
-    const notesWhere = input.date ? `Notes for ${input.date}` : "today's Notes";
+    const notesWhere = day ? `Notes for ${day}` : "today's Notes";
     message = `Saved the note "${result.note?.title || input.title || 'untitled'}", but its link from ${notesWhere} is not confirmed (${captureFailureMessage(result)}). Do not save the note again.`;
   } else if (!ok && hasPending(result)) message = 'Not confirmed yet: the vault has not confirmed this save, and it may still be waiting. Check whether it is there before saving it again.';
   else if (!ok) message = `Not saved: ${captureFailureMessage(result)}`;
@@ -108,10 +112,10 @@ function simpleCapture(input, options = {}) {
     // policy may skip it (for example, operational notes).
     const linked = artifacts.some((a) => a.kind === 'journal' && ACKNOWLEDGED.has(a.outcome));
     message = linked
-      ? `Saved as the note "${result.note.title}", linked from ${input.date ? `Notes for ${input.date}` : "today's Notes"}.`
+      ? `Saved as the note "${result.note.title}", linked from ${day ? `Notes for ${day}` : "today's Notes"}.`
       : `Saved as the note "${result.note.title}".`;
   }
-  else message = input.date
+  else message = day
     ? `Saved to ${kind === 'idea' ? 'Ideas' : 'Journal'} ${when}.`
     : `Saved to ${when} ${kind === 'idea' ? 'Ideas' : 'Journal'}.`;
   return { ok, kind, message: message.replace(/[\r\n\u2028\u2029]+/g, ' '), result };
