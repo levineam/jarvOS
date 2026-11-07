@@ -39,6 +39,31 @@ function sanitizeTitle(title) {
   return String(title || '').trim().replace(/[/\\:*?"<>|]/g, '-');
 }
 
+// Reads a note only if it and every folder between it and the notes folder are
+// real (no symlinks) and it resolves inside the notes folder; otherwise null.
+function readContainedNote(filePath, notesDir) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  try {
+    const root = fs.realpathSync(notesDir);
+    const relative = path.relative(path.resolve(notesDir), path.resolve(filePath));
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    let current = path.resolve(notesDir);
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment);
+      const info = fs.lstatSync(current);
+      if (info.isSymbolicLink()) return null;
+    }
+    if (!fs.lstatSync(filePath).isFile()) return null;
+    const real = fs.realpathSync(filePath);
+    if (!real.startsWith(root + path.sep)) return null;
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try { return fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
+  } catch {
+    return null;
+  }
+}
+
 function noteFilePath(title, notesDir = getVaultNotesDir()) {
   return join(notesDir, `${sanitizeTitle(title)}.md`);
 }
@@ -401,8 +426,10 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   let knowledge = null;
   if (hasBytes) {
     // Historical acknowledgements do not describe newer appends or metadata edits.
-    const currentContent = receipt.replay ? readFileSync(filePath, 'utf8') : null;
-    knowledge = optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir, title: safeName,
+    const currentContent = receipt.replay ? readContainedNote(filePath, notesDir) : null;
+    // A replayed note that is no longer a plain file inside the notes folder
+    // (for example swapped for a link) is not read or indexed at all.
+    if (!receipt.replay || currentContent !== null) knowledge = optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir, title: safeName,
       body: currentContent === null ? body : rawBodyRemainder(currentContent),
       frontmatter: currentContent === null
         ? { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }
@@ -457,6 +484,7 @@ function main() {
 }
 
 module.exports = {
+  readContainedNote,
   main,
   NOTE_BODY_PRESERVATION_REFUSED,
   NoteBodyPreservationError,

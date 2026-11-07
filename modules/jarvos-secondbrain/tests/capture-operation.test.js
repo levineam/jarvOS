@@ -265,3 +265,41 @@ test('overlapping captures share one reservation; different requests have one wi
     assert.equal(recovered.journal.split('- An invented tidal garden.').length - 1, captures[winner].kind === 'idea' ? 1 : 0);
   }
 });
+
+test('a replayed note swapped for a link outside the vault is never read or indexed', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented garden' };
+  const first = run({ capture });
+  assert.equal(first.result.ok, true);
+  const notePath = first.result.result.note.path;
+  const outside = path.join(run.root, 'outside-private.md');
+  fs.writeFileSync(outside, '# Outside\n\nAN-INVENTED-PRIVATE-MARKER that must never be indexed.\n');
+  fs.rmSync(notePath);
+  fs.symlinkSync(outside, notePath);
+  const repeated = run({ capture });
+  // Either the writer refuses the escaped target outright, or the replay skips indexing.
+  if (repeated.result) assert.equal(repeated.result.result.note.knowledge, null);
+  else assert.match(repeated.error, /symlink/);
+  const knowledgeDir = path.join(run.root, 'knowledge');
+  const indexed = fs.existsSync(knowledgeDir)
+    ? fs.readdirSync(knowledgeDir, { recursive: true }).map((name) => path.join(knowledgeDir, String(name))).filter((file) => fs.statSync(file).isFile()).map((file) => fs.readFileSync(file, 'utf8')).join('\n')
+    : '';
+  assert.doesNotMatch(indexed, /AN-INVENTED-PRIVATE-MARKER/);
+});
+
+test('replay indexing reads a note only when it is a plain file inside the notes folder', () => {
+  const { readContainedNote } = require('../packages/jarvos-secondbrain-notes/src/write-to-vault');
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'contained-note-'));
+  try {
+    const notes = path.join(root, 'Notes');
+    fs.mkdirSync(path.join(notes, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(notes, 'plain.md'), 'An invented plain note.');
+    fs.writeFileSync(path.join(root, 'outside.md'), 'AN-INVENTED-PRIVATE-MARKER');
+    fs.symlinkSync(path.join(root, 'outside.md'), path.join(notes, 'link.md'));
+    fs.symlinkSync(root, path.join(notes, 'dirlink'));
+    assert.equal(readContainedNote(path.join(notes, 'plain.md'), notes), 'An invented plain note.');
+    assert.equal(readContainedNote(path.join(notes, 'link.md'), notes), null);
+    assert.equal(readContainedNote(path.join(notes, 'dirlink', 'outside.md'), notes), null);
+    assert.equal(readContainedNote(path.join(root, 'outside.md'), notes), null);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
