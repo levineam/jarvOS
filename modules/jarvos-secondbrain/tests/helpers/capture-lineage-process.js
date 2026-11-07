@@ -75,7 +75,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
     ledgerPath: path.join(root, 'ledger.json'), maxPollAttempts: 3, pollIntervalMs: 0,
     ...(ledgerNow !== undefined ? { ledger: createVaultMutationLedger({ filePath: path.join(root, 'ledger.json'), now: () => ledgerNow }) } : {}),
     ...(fault === 'poll_deadline' ? { pollTimeoutMs: 1 } : {}),
-    probe: () => ({ state: fault === 'offline_stopped' ? 'app_stopped' : fault === 'before_write' || (fault === 'before_receipt' && captureFinished) || (fault === 'after_note_before_journal' && writes.some((name) => name.startsWith('Notes/'))) ? 'app_busy' : 'available', vaultId: 'capture-fixture' }),
+    probe: () => ({ state: fault === 'offline_stopped' ? 'app_stopped' : fault === 'before_write' || (['before_receipt', 'after_backlink_before_receipt'].includes(fault) && captureFinished) || (fault === 'after_note_before_journal' && writes.some((name) => name.startsWith('Notes/'))) ? 'app_busy' : 'available', vaultId: 'capture-fixture' }),
     evaluate: (code) => {
       const encoded = code.match(/atob\('([^']+)'\)/)?.[1];
       const input = encoded ? JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) : null;
@@ -94,7 +94,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
       if (mutation && !faultTriggered && ((fault === 'after_note' && input.vaultRelativePath.startsWith('Notes/'))
-        || (fault === 'after_backlink' && input.transformName === 'journal-section-line'))) {
+        || (['after_backlink', 'after_backlink_before_receipt'].includes(fault) && input.transformName === 'journal-section-line'))) {
         flushAllCallbacks();
         faultTriggered = true;
         throw new Error('simulated lost acknowledgement after effect');

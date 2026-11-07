@@ -5,7 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { simpleCapture, buildSimpleCaptureEvent } = require('./simple-capture');
-const { OP_ID_PATTERN } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
+const { OP_ID_PATTERN, captureOperationRequest } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
+const { TERMINAL } = require('../../../adapters/obsidian/src/vault-mutation-ledger');
 const { createConfiguredVaultMutationService } = require('../../../src/vault-mutation-service');
 const { resolveConfig } = require('../../config');
 
@@ -117,16 +118,36 @@ function writeReceipt(service, vaultRoot, device, opId, kind, status, message, a
   if (info && !info.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
   const body = String(message).replace(/[\r\n\u0085\u2028\u2029]+/g, ' ').trim();
   const content = `---\nphanos_receipt: capture/v1\nop_id: ${ID.test(opId) ? opId : JSON.stringify(opId)}\nstatus: ${status}\n${kind ? `kind: ${kind}\n` : ''}applied: ${applied}\n---\n${body}\n`;
-  const expectedHash = expectedContent === null ? null : createHash('sha256').update(expectedContent).digest('hex');
-  const intentId = `inbox-receipt:${createHash('sha256').update(JSON.stringify([vaultRelativePath, status, expectedHash, body])).digest('hex')}`;
-  const existing = service.adapter?.ledger.get(intentId);
+  const receiptIntent = (before) => {
+    const expectedHash = before === null ? null : createHash('sha256').update(before).digest('hex');
+    return `inbox-receipt:${createHash('sha256').update(JSON.stringify([vaultRelativePath, status, expectedHash, body])).digest('hex')}`;
+  };
+  let intentId = receiptIntent(expectedContent);
+  const ledger = service.adapter?.ledger;
+  const prior = Object.values(ledger?.read().operations || {})
+    .filter(({ operation }) => operation.vaultId === service.vaultId && operation.vaultRelativePath === vaultRelativePath)
+    .sort((a, b) => a.operation.sequence - b.operation.sequence);
+  const pending = prior.filter(({ status }) => !TERMINAL.has(status));
+  for (const record of pending) {
+    service.reconciler.reconcileOne(record);
+    if (!TERMINAL.has(ledger.get(record.operation.operationId).status)) {
+      return { status: 'pending', obsidian: 'unacknowledged', message: 'receipt pending' };
+    }
+  }
+  const existing = ledger?.get(intentId);
   if (existing) {
-    // The first payload owns applied; reconcile that operation without allocating another FIFO slot.
-    if (!['acknowledged', 'superseded', 'abandoned'].includes(existing.status)) service.reconciler.reconcileOne(existing);
-    const settled = service.adapter.ledger.get(intentId);
-    const acknowledged = settled.status === 'acknowledged';
-    return { status: acknowledged ? 'already_satisfied' : settled.status,
+    // The first payload owns applied; keep its settled operation and FIFO slot.
+    const acknowledged = existing.status === 'acknowledged';
+    return { status: acknowledged ? 'already_satisfied' : existing.status,
       obsidian: acknowledged ? 'acknowledged' : 'unacknowledged' };
+  }
+  if (prior.length) {
+    const current = stat(path.join(vaultRoot, vaultRelativePath)) ? readFile(path.join(vaultRoot, vaultRelativePath)) : null;
+    // Capture's opportunistic drain may already have settled the earlier write.
+    if (pending.length || prior.some((record) => record.status === 'acknowledged' && record.operation.content === current)) {
+      expectedContent = current;
+      intentId = receiptIntent(expectedContent);
+    }
   }
   const mutation = { vaultRelativePath, nextContent: content, intentId };
   return expectedContent === null ? service.createMarkdownFile(mutation)
@@ -218,8 +239,13 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       if (!status) {
         try {
           const saved = await capture(input, { vaultRoot, journalDir, notesDir, mutationService });
+          const intentId = captureOperationRequest(buildSimpleCaptureEvent(input)).intentId;
+          const unresolved = Object.values(mutationService.adapter?.ledger.read().operations || {})
+            .some(({ operation, status }) => operation.vaultId === mutationService.vaultId
+              && operation.operationId.startsWith(`${intentId}:`)
+              && ['planned', 'dispatched', 'unknown_after_dispatch', 'local_mutating', 'local_applied', 'blocked'].includes(status));
           const pending = saved.result?.artifactReceipt?.artifacts?.some((artifact) => ['note', 'journal'].includes(artifact.kind)
-            && ['saved_locally_sync_pending', 'deferred'].includes(artifact.outcome));
+            && ['saved_locally_sync_pending', 'deferred'].includes(artifact.outcome)) || unresolved;
           status = saved.message.includes('this operation id was already used for different content') ? 'invalid'
             : pending ? 'not_confirmed' : saved.ok ? 'saved' : 'not_saved';
           message = saved.message;
@@ -230,7 +256,7 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       }
       const receipt = await writeReceipt(mutationService, vaultRoot, item.device, item.opId, input?.kind, status, message, applied, currentReceipt);
       if (!['committed', 'already_satisfied'].includes(receipt.status) || receipt.obsidian !== 'acknowledged') {
-        record.receipt = { status: receipt.status, obsidian: receipt.obsidian };
+        record.receipt = { status: receipt.status, obsidian: receipt.obsidian, ...(receipt.message ? { message: receipt.message } : {}) };
       }
       record.status = status;
       counts[status]++;

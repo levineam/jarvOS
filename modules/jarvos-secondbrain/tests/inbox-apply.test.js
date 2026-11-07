@@ -10,6 +10,7 @@ const { execFileSync } = require('node:child_process');
 const { applyInbox } = require('../bridge/capture/src/inbox-apply');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
 const { simpleCapture } = require('../bridge/capture/src/simple-capture');
+const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
 
 const device = 'phone-47ba92';
 const opId = '0f012026-caf1-4e59-99cd-5db5d4e5097f';
@@ -115,6 +116,120 @@ test('a planned receipt replacement resumes its original payload across runs', (
   assert.equal(replacements[0].status, 'acknowledged');
   assert.equal(f.receipt(), replacement.operation.content);
   assert.equal(Object.values(second.ledger.operations).every(({ status }) => status === 'acknowledged'), true);
+});
+
+test('a queued not_confirmed receipt settles before a saved receipt is submitted', (t) => {
+  const f = fixture(t); f.put();
+  const receiptPath = `phanos/receipts/${device}/${opId}.md`;
+  const first = runInbox(f, { fault: 'after_backlink_before_receipt' });
+  assert.equal(first.error, null);
+  assert.equal(first.result.counts.not_confirmed, 1);
+  const queued = Object.values(first.ledger.operations).find(({ operation }) => operation.vaultRelativePath === receiptPath);
+  assert.equal(queued.status, 'planned');
+  assert.match(queued.operation.content, /status: not_confirmed/);
+  assert.equal(fs.existsSync(path.join(f.receipts, `${opId}.md`)), false);
+
+  const recovered = runInbox(f);
+  assert.equal(recovered.error, null);
+  assert.equal(recovered.result.counts.saved, 1);
+  assert.equal(recovered.result.requests[0].receipt, undefined);
+  assert.match(f.receipt(), /status: saved/);
+  const receipts = Object.values(recovered.ledger.operations).filter(({ operation }) => operation.vaultRelativePath === receiptPath);
+  assert.equal(receipts.length, 2);
+  assert.equal(receipts[0].operation.operationId, queued.operation.operationId);
+  assert.equal(receipts[1].operation.operationKind, 'replace');
+  assert.equal(receipts[1].operation.expectedContent, queued.operation.content);
+  assert.ok(Object.values(recovered.ledger.operations).every(({ status }) => status === 'acknowledged'));
+  assert.equal(recovered.journal.split('An invented first line.').length - 1, 1);
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+  assert.deepEqual(fs.readdirSync(f.receipts), [`${opId}.md`]);
+});
+
+test('an unresolved earlier receipt reports receipt pending without allocating another operation', (t) => {
+  const f = fixture(t); f.put();
+  const receiptPath = `phanos/receipts/${device}/${opId}.md`;
+  const first = runInbox(f, { fault: 'after_backlink_before_receipt' });
+  const queued = Object.values(first.ledger.operations).find(({ operation }) => operation.vaultRelativePath === receiptPath);
+  const held = runInbox(f, { fault: 'before_receipt' });
+  assert.equal(held.error, null);
+  assert.equal(held.result.counts.saved, 1);
+  assert.equal(held.result.requests[0].receipt.message, 'receipt pending');
+  const receipts = Object.values(held.ledger.operations).filter(({ operation }) => operation.vaultRelativePath === receiptPath);
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].operation.operationId, queued.operation.operationId);
+  assert.equal(receipts[0].status, 'planned');
+  assert.equal(fs.existsSync(path.join(f.receipts, `${opId}.md`)), false);
+  const recovered = runInbox(f);
+  assert.equal(recovered.result.counts.saved, 1);
+  assert.equal(recovered.result.requests[0].receipt, undefined);
+  assert.match(f.receipt(), /status: saved/);
+  assert.ok(Object.values(recovered.ledger.operations).every(({ status }) => status === 'acknowledged'));
+  assert.equal(recovered.journal, held.journal);
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+});
+
+test('a dispatched capture with an active crashed-writer claim stays not_confirmed until recovery', (t) => {
+  const f = fixture(t); f.put();
+  assert.throws(() => runInbox(f, { inbox: false, simple: true, fault: 'exit_after_effect', ledgerNow: 100_000,
+    capture: { kind: 'journal', text: 'An invented first line.\nAn invented second line.', words: 'user', asked: 'explicit',
+      model: 'test-model', source: 'phanos-mobile', date: '2030-02-03', opId } }), (error) => error.status === 73);
+  const crashed = JSON.parse(fs.readFileSync(path.join(f.root, 'ledger.json'), 'utf8'));
+  const dispatched = Object.values(crashed.operations).find(({ status }) => status === 'dispatched');
+  assert.ok(dispatched);
+  const claim = crashed.claims[`${dispatched.operation.vaultId}\0${dispatched.operation.vaultRelativePath}`];
+  assert.equal(claim.operationId, dispatched.operation.operationId);
+  assert.ok(claim.expiresAt > 100_001);
+  const held = runInbox(f, { ledgerNow: 100_001 });
+  assert.equal(held.error, null);
+  assert.equal(held.result.counts.not_confirmed, 1, JSON.stringify(held));
+  assert.equal(held.ledger.operations[dispatched.operation.operationId].status, 'dispatched');
+  assert.match(f.receipt(), /status: not_confirmed/);
+  const recovered = runInbox(f, { ledgerNow: claim.expiresAt + 1 });
+  assert.equal(recovered.error, null);
+  assert.equal(recovered.result.counts.saved, 1);
+  assert.equal(recovered.result.requests[0].receipt, undefined);
+  assert.match(f.receipt(), /status: saved/);
+  assert.equal(recovered.journal, held.journal);
+  assert.equal(recovered.journal.split('An invented first line.').length - 1, 1);
+  assert.ok(Object.values(recovered.ledger.operations).every(({ status }) => status === 'acknowledged'));
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+  assert.deepEqual(fs.readdirSync(f.receipts), [`${opId}.md`]);
+});
+
+test('an unavailable planned capture stays not_confirmed and later saves once', (t) => {
+  const f = fixture(t); f.put();
+  const queued = runInbox(f, { fault: 'before_write' });
+  assert.equal(queued.error, null);
+  assert.equal(queued.result.counts.not_confirmed, 1);
+  assert.ok(Object.values(queued.ledger.operations).every(({ status }) => status === 'planned'));
+  const recovered = runInbox(f);
+  assert.equal(recovered.error, null);
+  assert.equal(recovered.result.counts.saved, 1);
+  assert.equal(recovered.result.requests[0].receipt, undefined);
+  assert.match(f.receipt(), /status: saved/);
+  assert.equal(recovered.journal.split('An invented first line.').length - 1, 1);
+  assert.ok(Object.values(recovered.ledger.operations).every(({ status }) => status === 'acknowledged'));
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+});
+
+test('a terminal capture conflict without unresolved artifacts stays not_saved', (t) => {
+  const f = fixture(t); f.put();
+  const queued = runInbox(f, { inbox: false, simple: true, fault: 'before_write', ledgerNow: 100_000,
+    capture: { kind: 'journal', text: 'An invented first line.\nAn invented second line.', words: 'user', asked: 'explicit',
+      model: 'test-model', source: 'phanos-mobile', date: '2030-02-03', opId } });
+  assert.equal(queued.error, null);
+  const [record] = Object.values(queued.ledger.operations);
+  const ledger = createVaultMutationLedger({ filePath: path.join(f.root, 'ledger.json'), now: () => 100_001 });
+  const claim = ledger.claim(record.operation, 'invented-conflict-writer');
+  assert.equal(claim.granted, true);
+  ledger.transition(record.operation.operationId, 'conflict', { ownerId: 'invented-conflict-writer', fence: claim.fence });
+  const failed = runInbox(f, { ledgerNow: 100_002 });
+  assert.equal(failed.error, null);
+  assert.equal(failed.result.counts.not_saved, 1);
+  assert.equal(failed.result.counts.not_confirmed, 0);
+  assert.match(f.receipt(), /status: not_saved/);
+  assert.equal(failed.ledger.operations[record.operation.operationId].status, 'conflict');
+  assert.equal(runInbox(f).result.counts.skipped, 1);
 });
 
 for (const created of ['2030-02-02T23:59:00-05:00', undefined]) {
