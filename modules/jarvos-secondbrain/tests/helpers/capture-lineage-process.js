@@ -32,7 +32,8 @@ function flushAllCallbacks() {
   while (pendingCallbacks.length) flushCallbacks();
 }
 
-const { root, capture, fault, reconcile = false, simple = false, ledgerNow, inbox = false } = JSON.parse(fs.readFileSync(0, 'utf8'));
+const { root, capture, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
+  inboxNow = '2030-02-03T12:00:00Z' } = JSON.parse(fs.readFileSync(0, 'utf8'));
 const vaultRoot = path.join(root, 'vault');
 const writes = [];
 const absolute = (relative) => {
@@ -106,7 +107,7 @@ async function main() {
   let error = null;
   try {
     if (inbox) result = await require('../../bridge/capture/src/inbox-apply').applyInbox({ vaultRoot,
-      capture: (input, options) => simpleCapture(input, { ...options, mutationService: service }), now: () => new Date('2030-02-03T12:00:00Z') });
+      mutationService: service, now: () => new Date(inboxNow) });
     if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
     if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
   } catch (caught) { error = caught.message; result = null; }

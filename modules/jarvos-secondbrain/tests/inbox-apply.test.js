@@ -8,6 +8,8 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const { applyInbox } = require('../bridge/capture/src/inbox-apply');
+const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
+const { simpleCapture } = require('../bridge/capture/src/simple-capture');
 
 const device = 'phone-47ba92';
 const opId = '0f012026-caf1-4e59-99cd-5db5d4e5097f';
@@ -32,10 +34,11 @@ function fixture(t) {
     fs.rmSync(root, { recursive: true, force: true });
   });
   const calls = [];
+  const mutationService = createAcknowledgedVaultMutationService(vaultRoot);
   const capture = (input, options) => { calls.push({ input, options }); return { ok: true, message: 'Saved an invented request.' }; };
   const put = (source = request(), name = opId) => fs.writeFileSync(path.join(folder, `${name}.md`), source);
-  return { root, vaultRoot, folder, receipts, put, calls,
-    apply: (options = {}) => applyInbox({ vaultRoot, capture, now, ...options }),
+  return { root, vaultRoot, folder, receipts, put, calls, mutationService,
+    apply: (options = {}) => applyInbox({ vaultRoot, capture, now, mutationService, ...options }),
     receipt: (id = opId) => fs.readFileSync(path.join(receipts, `${id}.md`), 'utf8') };
 }
 
@@ -56,7 +59,7 @@ for (const newline of ['\n', '\r\n']) {
       assert.equal(input.asked, 'explicit');
       assert.equal(input.date, '2030-02-03');
       assert.equal(input.text, input.kind === 'journal' ? `An invented first line.${newline}An invented second line.` : 'An invented tidal garden.');
-      assert.deepEqual(options, { vaultRoot: f.vaultRoot, journalDir: path.join(f.vaultRoot, 'Journal'), notesDir: path.join(f.vaultRoot, 'Notes') });
+      assert.deepEqual(options, { vaultRoot: f.vaultRoot, journalDir: path.join(f.vaultRoot, 'Journal'), notesDir: path.join(f.vaultRoot, 'Notes'), mutationService: f.mutationService });
       if (input.kind === 'note') { assert.equal(input.title, 'A test note'); assert.equal(input.model, undefined); }
       const receipt = f.receipt(input.opId);
       assert.match(receipt, new RegExp(`status: saved\nkind: ${input.kind}\napplied: .*[-+]\\d\\d:\\d\\d\n`));
@@ -76,8 +79,8 @@ test('real capture and persistent mutation ledger save exactly once, including a
       kind === 'journal' ? 'An invented first line.\nAn invented second line.' : `An invented ${kind} about tidal gardens.`), id);
   }
   const original = fs.readdirSync(f.folder).map((name) => [name, fs.readFileSync(path.join(f.folder, name), 'utf8'), fs.statSync(path.join(f.folder, name)).mtimeMs]);
-  const run = () => JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'helpers/capture-lineage-process.js')], {
-    input: JSON.stringify({ root: f.root, inbox: true }), encoding: 'utf8', env: { ...process.env,
+  const run = (inboxNow) => JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'helpers/capture-lineage-process.js')], {
+    input: JSON.stringify({ root: f.root, inbox: true, inboxNow }), encoding: 'utf8', env: { ...process.env,
       JARVOS_VAULT_DIR: f.vaultRoot, JARVOS_NOTES_DIR: path.join(f.root, 'wrong-notes'), VAULT_NOTES_DIR: path.join(f.root, 'wrong-notes'),
       JARVOS_JOURNAL_DIR: path.join(f.root, 'wrong-journal'), JOURNAL_DIR: path.join(f.root, 'wrong-journal'),
       JARVOS_KNOWLEDGE_DIR: path.join(f.root, 'knowledge'), JARVOS_CONFIG_PATH: path.join(f.root, 'missing-config.json'),
@@ -94,9 +97,16 @@ test('real capture and persistent mutation ledger save exactly once, including a
   assert.equal(second.result.counts.skipped, 3);
   assert.deepEqual(second.writes, []);
   fs.rmSync(f.receipts, { recursive: true });
-  const third = run();
+  const replay = run();
+  assert.deepEqual(replay.writes, []);
+  assert.ok(replay.result.requests.every((request) => request.receipt.obsidian === 'unacknowledged'));
+  assert.equal(fs.existsSync(f.receipts), false);
+  const third = run('2030-02-03T12:00:01Z');
   assert.equal(third.result.counts.saved, 3, JSON.stringify(third));
-  assert.deepEqual(third.writes, []);
+  assert.deepEqual(third.writes.sort(), ['fixture-operation-0', 'fixture-operation-1', 'fixture-operation-2']
+    .map((id) => `phanos/receipts/${device}/${id}.md`));
+  assert.ok(third.result.requests.every((request) => request.receipt === undefined));
+  assert.ok(fs.readdirSync(f.receipts).every((name) => /status: saved/.test(fs.readFileSync(path.join(f.receipts, name), 'utf8'))));
   assert.deepEqual(third.notes, first.notes);
   assert.equal(third.journal, first.journal);
   assert.equal(fs.existsSync(path.join(f.root, 'wrong-notes')), false);
@@ -106,12 +116,95 @@ test('real capture and persistent mutation ledger save exactly once, including a
 
 test('not_confirmed is retried with the same opId and receipt rewritten', async (t) => {
   const f = fixture(t); f.put();
-  assert.equal((await f.apply({ capture: () => ({ ok: false, message: 'Not confirmed yet: an invented delay.' }) })).counts.not_confirmed, 1);
+  assert.equal((await f.apply({ capture: () => ({ ok: false, message: 'An invented delay.',
+    result: { artifactReceipt: { artifacts: [{ kind: 'journal', outcome: 'deferred' }] } } }) })).counts.not_confirmed, 1);
   assert.match(f.receipt(), /status: not_confirmed/);
   assert.equal((await f.apply()).counts.saved, 1);
   assert.equal(f.calls[0].input.opId, opId);
   assert.match(f.receipt(), /status: saved/);
   assert.equal((await f.apply()).counts.skipped, 1);
+});
+
+for (const outcome of ['saved_locally_sync_pending', 'deferred', 'failed', 'conflict', 'committed', 'already_satisfied']) {
+  test(`saved note with ${outcome} journal link uses structured status`, async (t) => {
+    const f = fixture(t); f.put(request({ kind: 'note', title: '"A test note"' }));
+    const pending = ['saved_locally_sync_pending', 'deferred'].includes(outcome);
+    const ok = ['committed', 'already_satisfied'].includes(outcome);
+    let response;
+    const capture = (input) => (response = simpleCapture(input, { capture: () => ({ ok, note: { title: 'A test note' },
+      artifactReceipt: { artifacts: [{ kind: 'note', outcome: 'committed' }, { kind: 'journal', outcome }] } }) }));
+    const status = pending ? 'not_confirmed' : ok ? 'saved' : 'not_saved';
+    assert.equal((await f.apply({ capture })).counts[status], 1);
+    assert.match(f.receipt(), new RegExp(`status: ${status}`));
+    assert.ok(f.receipt().endsWith(`${response.message}\n`));
+    assert.equal((await f.apply()).counts[pending ? 'saved' : 'skipped'], 1);
+    assert.equal(f.calls.length, pending ? 1 : 0);
+    if (pending) assert.equal(f.calls[0].input.opId, opId);
+  });
+}
+
+test('pending artifact outcomes override ok and message wording does not set status', async (t) => {
+  const f = fixture(t); f.put();
+  assert.equal((await f.apply({ capture: () => ({ ok: true, message: 'Saved an invented request.',
+    result: { artifactReceipt: { artifacts: [{ kind: 'journal', outcome: 'deferred' }] } } }) })).counts.not_confirmed, 1);
+  assert.equal((await f.apply({ capture: () => ({ ok: false, message: 'Not confirmed yet: an invented failure.',
+    result: { artifactReceipt: { artifacts: [{ kind: 'journal', outcome: 'failed' }] } } }) })).counts.not_saved, 1);
+});
+
+test('receipt creates and exact-content replacements use stable mutation intents', async (t) => {
+  const f = fixture(t); f.put();
+  const creates = [];
+  const replacements = [];
+  const mutationService = { ...f.mutationService,
+    createMarkdownFile(input) { creates.push(input); return f.mutationService.createMarkdownFile(input); },
+    applyMarkdownMutation(input) { replacements.push(input); return f.mutationService.applyMarkdownMutation(input); },
+  };
+  const capture = () => ({ ok: false, message: 'An invented delay.',
+    result: { artifactReceipt: { artifacts: [{ kind: 'journal', outcome: 'deferred' }] } } });
+  await f.apply({ mutationService, capture });
+  const current = f.receipt();
+  await f.apply({ mutationService });
+  assert.equal(creates.length, 1);
+  assert.equal(replacements.length, 1);
+  assert.equal(replacements[0].expectedContent, current);
+  assert.equal(replacements[0].nextContent, f.receipt());
+  assert.equal(creates[0].vaultRelativePath, `phanos/receipts/${device}/${opId}.md`);
+  assert.ok(creates[0].intentId);
+  assert.notEqual(creates[0].intentId, replacements[0].intentId);
+  fs.unlinkSync(path.join(f.receipts, `${opId}.md`));
+  await f.apply({ mutationService, capture });
+  assert.deepEqual(creates[1], creates[0]);
+});
+
+for (const receipt of [{ status: 'deferred', obsidian: 'unacknowledged' },
+  { status: 'saved_locally_sync_pending', obsidian: 'unacknowledged' },
+  { status: 'committed', obsidian: 'unacknowledged' }]) {
+  test(`unacknowledged receipt write (${receipt.status}) is reported and retried`, async (t) => {
+    const f = fixture(t); f.put();
+    const writes = [];
+    const mutationService = { ...f.mutationService, createMarkdownFile(input) { writes.push(input); return receipt; } };
+    const first = await f.apply({ mutationService });
+    assert.deepEqual(first.requests[0].receipt, receipt);
+    assert.equal(fs.existsSync(f.receipts), false);
+    await f.apply({ mutationService });
+    assert.deepEqual(writes[1], writes[0]);
+    assert.equal((await f.apply()).counts.saved, 1);
+    assert.equal(f.calls.length, 3);
+    assert.ok(f.calls.every(({ input }) => input.opId === opId));
+  });
+}
+
+test('receipt replacement refuses a concurrent edit after the pending receipt was read', async (t) => {
+  const f = fixture(t); f.put();
+  await f.apply({ capture: () => ({ ok: false, message: 'An invented delay.',
+    result: { artifactReceipt: { artifacts: [{ kind: 'journal', outcome: 'deferred' }] } } }) });
+  const changed = f.receipt().replace('An invented delay.', 'An invented concurrent edit.');
+  const result = await f.apply({ capture: () => {
+    fs.writeFileSync(path.join(f.receipts, `${opId}.md`), changed);
+    return { ok: true, message: 'Saved an invented request.' };
+  } });
+  assert.equal(result.requests[0].receipt.status, 'conflict');
+  assert.equal(f.receipt(), changed);
 });
 
 test('partial, hidden, temp and non-Markdown files create no receipts', async (t) => {
@@ -184,6 +277,19 @@ test('limit applies oldest eligible requests first and skips terminal receipts w
   assert.equal(second.counts.saved, 1);
   assert.equal(second.counts.skipped, 1);
   assert.equal(f.calls[1].input.opId, 'fixture-middle');
+});
+
+test('an older incomplete request does not consume the limit for a complete request', async (t) => {
+  const f = fixture(t);
+  f.put(request({ op_id: 'fixture-incomplete' }).replace('<!-- phanos:end -->', ''), 'fixture-incomplete');
+  fs.utimesSync(path.join(f.folder, 'fixture-incomplete.md'), 1, 1);
+  f.put();
+  const result = await f.apply({ limit: 1 });
+  assert.equal(result.counts.incomplete, 1);
+  assert.equal(result.counts.saved, 1);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].input.opId, opId);
+  assert.equal(fs.existsSync(path.join(f.receipts, 'fixture-incomplete.md')), false);
 });
 
 for (const target of ['phanos', 'inbox', 'device', 'request', 'receipts', 'receipt-device', 'receipt']) {

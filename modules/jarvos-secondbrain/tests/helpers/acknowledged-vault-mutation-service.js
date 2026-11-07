@@ -25,6 +25,16 @@ function createAcknowledgedVaultMutationService(vaultRoot) {
         vaultRelativePath,
       };
     },
+    createMarkdownFile({ vaultRelativePath, nextContent, intentId }) {
+      const context = service.createWriteContext({ vaultRelativePath, intentId });
+      return context.mutationExecutor({ schemaVersion: 1, ...context, vaultRelativePath,
+        operationKind: 'create', content: nextContent });
+    },
+    applyMarkdownMutation({ vaultRelativePath, expectedContent, nextContent, intentId }) {
+      const context = service.createWriteContext({ vaultRelativePath, intentId });
+      return context.mutationExecutor({ schemaVersion: 1, ...context, vaultRelativePath,
+        operationKind: 'replace', expectedContent, expectedHash: hashUtf8(expectedContent), content: nextContent });
+    },
     execute(operation) {
       const target = path.join(vaultRoot, operation.vaultRelativePath);
       if (operation.operationKind === 'create') {

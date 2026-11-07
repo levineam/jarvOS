@@ -3,9 +3,10 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createHash, randomUUID } = require('node:crypto');
+const { createHash } = require('node:crypto');
 const { simpleCapture, buildSimpleCaptureEvent } = require('./simple-capture');
 const { OP_ID_PATTERN } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
+const { createConfiguredVaultMutationService } = require('../../../src/vault-mutation-service');
 
 const ID = new RegExp(OP_ID_PATTERN);
 const MAX_BYTES = 256 * 1024;
@@ -18,11 +19,10 @@ function stat(file) {
   }
 }
 
-function directory(root, parts, create = false) {
+function directory(root, parts) {
   let current = root;
   for (const part of parts) {
     current = path.join(current, part);
-    if (create && !stat(current)) fs.mkdirSync(current);
     const info = stat(current);
     if (!info) return null;
     if (!info.isDirectory()) throw new Error('inbox and receipt directories must be real directories, not symlinks');
@@ -91,38 +91,30 @@ function parseRequest(source, opId, device, today) {
   return input;
 }
 
-function receiptPending(vaultRoot, device, opId) {
+function pendingReceipt(vaultRoot, device, opId) {
   const folder = directory(vaultRoot, ['phanos', 'receipts', device]);
-  if (!folder) return true;
+  if (!folder) return null;
   const file = path.join(folder, `${opId}.md`);
   const info = stat(file);
-  if (!info) return true;
+  if (!info) return null;
   if (!info.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
-  const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(readFile(file));
+  const content = readFile(file);
+  const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
   const statuses = header?.[1].match(/^status: ([a-z_]+)\r?$/gm);
-  return statuses?.length === 1 && statuses[0].trim() === 'status: not_confirmed';
+  return statuses?.length === 1 && statuses[0].trim() === 'status: not_confirmed' ? content : false;
 }
 
-function writeReceipt(vaultRoot, device, opId, kind, status, message, applied) {
-  const folder = directory(vaultRoot, ['phanos', 'receipts', device], true);
-  const target = path.join(folder, `${opId}.md`);
-  const assertTarget = () => {
-    directory(vaultRoot, ['phanos', 'receipts', device]);
-    const info = stat(target);
-    if (info && !info.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
-  };
-  assertTarget();
-  const temporary = path.join(folder, `.${randomUUID()}.tmp`);
+function writeReceipt(service, vaultRoot, device, opId, kind, status, message, applied, expectedContent) {
+  directory(vaultRoot, ['phanos', 'receipts', device]);
+  const vaultRelativePath = `phanos/receipts/${device}/${opId}.md`;
+  const info = stat(path.join(vaultRoot, vaultRelativePath));
+  if (info && !info.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
   const body = String(message).replace(/[\r\n\u0085\u2028\u2029]+/g, ' ').trim();
   const content = `---\nphanos_receipt: capture/v1\nop_id: ${ID.test(opId) ? opId : JSON.stringify(opId)}\nstatus: ${status}\n${kind ? `kind: ${kind}\n` : ''}applied: ${applied}\n---\n${body}\n`;
-  try {
-    fs.writeFileSync(temporary, content, { flag: 'wx', mode: 0o600 });
-    assertTarget();
-    fs.renameSync(temporary, target);
-  } finally {
-    directory(vaultRoot, ['phanos', 'receipts', device]);
-    if (stat(temporary)?.isFile()) fs.unlinkSync(temporary);
-  }
+  const intentId = `inbox-receipt:${createHash('sha256').update(JSON.stringify([vaultRelativePath, status, expectedContent, content])).digest('hex')}`;
+  const mutation = { vaultRelativePath, nextContent: content, intentId };
+  return expectedContent === null ? service.createMarkdownFile(mutation)
+    : service.applyMarkdownMutation({ ...mutation, expectedContent });
 }
 
 function acquireLock(vaultRoot) {
@@ -155,7 +147,7 @@ function acquireLock(vaultRoot) {
   return null;
 }
 
-async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, now = () => new Date() } = {}) {
+async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, mutationService, now = () => new Date() } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be an absolute path');
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('limit must be a positive integer');
   if (!fs.statSync(vaultRoot).isDirectory()) throw new Error('vaultRoot must be a directory');
@@ -189,8 +181,8 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, now 
       if (!stat(item.file)?.isFile()) throw new Error('request file changed or is a symlink');
       const record = { device: item.device, opId: item.opId, status: 'skipped' };
       result.requests.push(record);
-      if (!receiptPending(vaultRoot, item.device, item.opId)) { counts.skipped++; continue; }
-      processed++;
+      const currentReceipt = pendingReceipt(vaultRoot, item.device, item.opId);
+      if (currentReceipt === false) { counts.skipped++; continue; }
       const applied = localTimestamp(now());
       let input;
       let status;
@@ -202,18 +194,25 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, now 
         status = 'invalid'; message = error.message;
       }
       if (!status && !input) { record.status = 'incomplete'; counts.incomplete++; continue; }
+      processed++;
+      mutationService ||= createConfiguredVaultMutationService({ vaultRoot, source: 'bridge.inbox-apply' });
       if (!status) {
         try {
-          const saved = await capture(input, { vaultRoot, journalDir: path.join(vaultRoot, 'Journal'), notesDir: path.join(vaultRoot, 'Notes') });
-          status = saved.ok ? 'saved' : saved.message.startsWith('Not confirmed yet') ? 'not_confirmed'
-            : saved.message.includes('this operation id was already used for different content') ? 'invalid' : 'not_saved';
+          const saved = await capture(input, { vaultRoot, journalDir: path.join(vaultRoot, 'Journal'), notesDir: path.join(vaultRoot, 'Notes'), mutationService });
+          const pending = saved.result?.artifactReceipt?.artifacts?.some((artifact) => ['note', 'journal'].includes(artifact.kind)
+            && ['saved_locally_sync_pending', 'deferred'].includes(artifact.outcome));
+          status = saved.message.includes('this operation id was already used for different content') ? 'invalid'
+            : pending ? 'not_confirmed' : saved.ok ? 'saved' : 'not_saved';
           message = saved.message;
         } catch (error) {
           if (error.code) throw error;
           status = 'invalid'; message = error.message;
         }
       }
-      writeReceipt(vaultRoot, item.device, item.opId, input?.kind, status, message, applied);
+      const receipt = await writeReceipt(mutationService, vaultRoot, item.device, item.opId, input?.kind, status, message, applied, currentReceipt);
+      if (!['committed', 'already_satisfied'].includes(receipt.status) || receipt.obsidian !== 'acknowledged') {
+        record.receipt = { status: receipt.status, obsidian: receipt.obsidian };
+      }
       record.status = status;
       counts[status]++;
     }

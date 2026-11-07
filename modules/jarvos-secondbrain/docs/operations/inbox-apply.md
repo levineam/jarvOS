@@ -8,15 +8,16 @@ jarvos inbox apply [--vault <abs path>] [--limit N] [--json]
 
 `--vault` selects an absolute vault path; otherwise the shared `resolveConfig`
 resolver selects the configured vault, just as for capture. The default limit
-is 50 eligible requests, oldest modification time first. Terminal receipts do
-not consume the limit. A host timer or desktop app decides when and where to
-run it; this command installs no timer or host policy.
+is 50 complete requests, oldest modification time first. Incomplete requests
+and terminal receipts do not consume the limit. A host timer or desktop app
+decides when and where to run it; this command installs no timer or host policy.
 
 The command reads `phanos/inbox/<device>/<opId>.md`, calls `simpleCapture` in
-process with source `phanos-mobile`, and atomically publishes
-`phanos/receipts/<device>/<opId>.md`. It never changes inbox files. Capture
-artifacts still go through the existing mutation service and its acknowledgement
-rules. A missing acknowledgement is not reported as saved.
+process with source `phanos-mobile`, and publishes
+`phanos/receipts/<device>/<opId>.md` through the configured vault mutation
+service. It never changes inbox files. Capture
+artifacts and receipt Markdown use the same service and its acknowledgement
+rules. A missing capture acknowledgement is not reported as saved.
 
 ## Request format
 
@@ -61,7 +62,9 @@ characters. Existing simple-capture text validation also applies.
 
 ## Receipt format and retries
 
-Receipts use LF, with a same-folder temporary file followed by rename:
+Receipts use LF. New receipts use the service's create operation; an existing
+`not_confirmed` receipt uses an exact-content guarded replacement. Each write
+has a stable mutation intent derived from its path and contents:
 
 ```markdown
 ---
@@ -74,9 +77,11 @@ applied: 2030-02-03T07:00:00-05:00
 Saved to Journal for 2030-02-03.
 ```
 
-Status is `saved` for an ok capture, `not_confirmed` for a message starting
-`Not confirmed yet`, `not_saved` for other not-ok results, or `invalid` for
-validation errors and operation-ID content conflicts. The body is the capture
+Status comes from structured capture outcomes. A note or journal artifact with
+`saved_locally_sync_pending` or `deferred` makes it `not_confirmed`, including
+a saved note with a deferred journal link. Otherwise it is `saved` for an ok
+capture, `not_saved` for other not-ok results (including failed links), or
+`invalid` for validation errors and operation-ID content conflicts. The body is the capture
 message or broken rule, flattened to one line. Invalid input may omit `kind`
 when no valid request could be parsed.
 
@@ -95,7 +100,10 @@ is stale and can be reclaimed. State must be outside the
 vault. This local lock is not a distributed lock between synced hosts.
 
 Normal output is one count summary line. `--json` returns `counts`,
-`requests` containing only `device`, `opId`, and `status`, and `inProgress`.
+`requests` containing `device`, `opId`, and `status`, and `inProgress`.
+An unacknowledged receipt write also adds `receipt: { status, obsidian }` to
+that request's run result. The command does not write a fallback receipt;
+an absent receipt is retried on the next run with the same capture operation ID.
 Incomplete requests appear only as counts/statuses, with no receipt or warning.
 A held lock returns `inProgress: true` and `another run is in progress`.
 Per-request failures and held locks exit 0; bad arguments or command-level
@@ -103,9 +111,11 @@ filesystem failures exit 1.
 
 Desktop callers may import
 `bridge/capture/src/inbox-apply.js` and await
-`applyInbox({ vaultRoot, limit, capture, now })`. `capture` defaults to
-`simpleCapture` and receives the selected vault, Notes, and Journal directories
-as its second argument; `now` defaults to a function returning a new Date.
+`applyInbox({ vaultRoot, limit, capture, mutationService, now })`.
+`capture` defaults to `simpleCapture` and receives the selected vault, Notes, and Journal directories
+and mutation service as its second argument. `mutationService` defaults to the
+configured vault mutation service for the selected vault; `now` defaults to a
+function returning a new Date.
 The fixed line-based parser uses Node's standard library and the existing
 capture contracts, with no new dependencies. Hosts without `O_NOFOLLOW`
 filesystem support fail closed.
