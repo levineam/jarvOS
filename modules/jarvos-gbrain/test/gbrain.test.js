@@ -157,6 +157,51 @@ test('createImportPlan maps curated manifest items to GBrain targets', () => {
   assert.equal(plan.warnings.length, 1);
 });
 
+test('createImportPlan rejects source paths outside the configured vault', () => {
+  const root = tempDir();
+  const vault = path.join(root, 'vault');
+  const brain = path.join(root, 'brain');
+  const outsideNote = path.join(root, 'secret.md');
+  const manifestPath = path.join(root, 'manifest.json');
+
+  fs.mkdirSync(vault, { recursive: true });
+  fs.writeFileSync(outsideNote, 'must not be imported', 'utf8');
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    version: 1,
+    items: [
+      { type: 'source', sourcePath: '../secret.md' },
+      { type: 'source', sourcePath: outsideNote },
+    ],
+  }), 'utf8');
+
+  const plan = gbrain.createImportPlan({ vaultDir: vault, brainDir: brain, manifestPath });
+
+  assert.equal(plan.itemCount, 0);
+  assert.equal(plan.warnings.length, 2);
+  assert.ok(plan.warnings.every((warning) => /out-of-vault/.test(warning)));
+});
+
+test('createImportPlan rejects symlinks that escape the configured vault', () => {
+  const root = tempDir();
+  const vault = path.join(root, 'vault');
+  const outsideNote = path.join(root, 'secret.md');
+  const link = path.join(vault, 'linked-secret.md');
+  const manifestPath = path.join(root, 'manifest.json');
+
+  fs.mkdirSync(vault, { recursive: true });
+  fs.writeFileSync(outsideNote, 'must not be imported', 'utf8');
+  fs.symlinkSync(outsideNote, link);
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    version: 1,
+    items: [{ type: 'source', sourcePath: 'linked-secret.md' }],
+  }), 'utf8');
+
+  const plan = gbrain.createImportPlan({ vaultDir: vault, manifestPath });
+
+  assert.equal(plan.itemCount, 0);
+  assert.match(plan.warnings[0], /outside the vault/);
+});
+
 test('importToBrain dry-run does not write generated pages', () => {
   const root = tempDir();
   const vault = path.join(root, 'vault');
