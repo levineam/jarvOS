@@ -173,17 +173,29 @@ function acquireLock(vaultRoot) {
     } catch (error) {
       if (error.code !== 'EEXIST') throw error;
       const before = stat(file);
-      if (!before?.isFile() || Date.now() - before.mtimeMs <= 600000) return null;
+      if (!before?.isFile()) return null;
+      // A lock is reclaimed only when its owner is gone: a live run on this
+      // host keeps it however long it takes; another host's lock (shared
+      // state dir) falls back to the age limit.
+      let owner = null;
+      try { owner = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* written but not yet filled, or foreign */ }
+      const sameHost = owner && owner.host === os.hostname() && Number.isSafeInteger(owner.pid);
+      if (sameHost ? processAlive(owner.pid) : Date.now() - before.mtimeMs <= 600000) return null;
       if (stat(file)?.ino !== before.ino) return null;
       fs.unlinkSync(file);
       continue;
     }
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, host: os.hostname() }));
     return () => {
       try { if (stat(file)?.ino === fs.fstatSync(fd).ino) fs.unlinkSync(file); }
       finally { fs.closeSync(fd); }
     };
   }
   return null;
+}
+
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
 
 async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, mutationService, now = () => new Date() } = {}) {

@@ -782,3 +782,22 @@ test('abandoned ten-minute lock is reclaimed; lock and state stay outside the va
   await assert.rejects(f.apply(), /outside the vault/);
   assert.equal(fs.existsSync(path.join(f.vaultRoot, 'state')), false);
 });
+
+test('a lock held by a live run on this host is kept however old; a dead owner\'s lock is reclaimed at once', async (t) => {
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+  const f = fixture(t); f.put();
+  const folder = path.join(f.root, 'state/jarvos/vault-mutations');
+  fs.mkdirSync(folder, { recursive: true });
+  const file = path.join(folder, `inbox-${createHash('sha256').update(fs.realpathSync(f.vaultRoot)).digest('hex')}.lock`);
+  // Live owner (this test process), lock file far older than ten minutes.
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname() }));
+  fs.utimesSync(file, new Date(0), new Date(0));
+  assert.equal((await f.apply()).inProgress, true);
+  assert.equal(fs.existsSync(f.receipts), false);
+  // Dead owner: a finished child process's pid, lock just written.
+  const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  fs.writeFileSync(file, JSON.stringify({ pid: Number(dead.stdout), host: os.hostname() }));
+  assert.equal((await f.apply()).counts.saved, 1);
+  assert.equal(fs.existsSync(file), false);
+});
