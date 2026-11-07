@@ -43,20 +43,98 @@ test('separate ledger instances fence stale claim owners and reject sequence col
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('malformed and permission-unsafe ledgers are quarantined fail-closed', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-quarantine-'));
-  try {
-    const filePath = path.join(root, 'ledger.json');
-    fs.writeFileSync(filePath, '{not-json}', { mode: 0o600 });
-    const ledger = createVaultMutationLedger({ filePath });
-    assert.deepEqual(ledger.read().operations, {});
-    assert.equal(fs.readdirSync(`${filePath}.quarantine`).length, 1);
-    fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, operations: {}, claims: {} }), { mode: 0o644 });
-    fs.chmodSync(filePath, 0o644);
-    assert.deepEqual(ledger.read().operations, {});
-    assert.equal(fs.readdirSync(`${filePath}.quarantine`).length, 2);
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
+for (const mode of [0o644, 0o640]) {
+  test(`normal mutations restore mode ${mode.toString(8)} without losing ledger records`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-mode-'));
+    try {
+      const filePath = path.join(root, 'ledger.json');
+      const ledger = createVaultMutationLedger({ filePath, now: () => 100 });
+      const first = ledger.planNext(op('op-mode-first')).operation;
+      assert.equal(ledger.claim(first, 'owner').granted, true);
+      ledger.planNext(op('op-mode-queued'));
+      ledger.nextSequence('vault', 'Notes/B.md');
+      const before = ledger.read();
+      fs.chmodSync(filePath, mode);
+      ledger.ensure(op('op-mode-new', 3));
+      const after = ledger.read();
+      for (const [id, record] of Object.entries(before.operations)) assert.deepEqual(after.operations[id], record);
+      assert.equal(Object.keys(after.operations).length, 3);
+      assert.deepEqual(after.claims, before.claims);
+      assert.deepEqual(after.sequences, before.sequences);
+      assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+      assert.equal(fs.existsSync(`${filePath}.quarantine`), false);
+      fs.chmodSync(filePath, mode);
+      assert.equal(ledger.planNext(op('op-mode-next')).operation.sequence, 4);
+      const planned = ledger.read();
+      for (const [id, record] of Object.entries(after.operations)) assert.deepEqual(planned.operations[id], record);
+      assert.deepEqual(planned.claims, before.claims);
+      assert.equal(planned.sequences['vault\0Notes/B.md'], before.sequences['vault\0Notes/B.md']);
+      assert.equal(fs.statSync(filePath).mode & 0o777, 0o600);
+      assert.equal(fs.existsSync(`${filePath}.quarantine`), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+for (const failure of ['throws', 'leaves unsafe bits']) {
+  test(`permission repair that ${failure} refuses mutation without changing ledger bytes`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-mode-failure-'));
+    try {
+      const filePath = path.join(root, 'ledger.json');
+      const original = createVaultMutationLedger({ filePath });
+      original.planNext(op('op-mode-existing'));
+      const before = fs.readFileSync(filePath);
+      fs.chmodSync(filePath, 0o644);
+      const fsImpl = { ...fs, chmodSync(target, mode) {
+        if (target !== filePath) return fs.chmodSync(target, mode);
+        if (failure === 'throws') throw new Error('synthetic chmod failure');
+      } };
+      const ledger = createVaultMutationLedger({ filePath, fsImpl });
+      assert.throws(() => ledger.ensure(op('op-mode-refused', 2)), /ledger permissions are unsafe and could not be restored to 0600/);
+      assert.throws(() => ledger.read(), /ledger permissions are unsafe and could not be restored to 0600/);
+      assert.deepEqual(fs.readFileSync(filePath), before);
+      assert.equal(fs.statSync(filePath).mode & 0o777, 0o644);
+      assert.equal(fs.existsSync(`${filePath}.quarantine`), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+for (const kind of ['directory', 'symlink']) {
+  test(`a ${kind} ledger path is refused without deleting or replacing anything`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-path-'));
+    try {
+      const filePath = path.join(root, 'ledger.json');
+      const target = path.join(root, 'target.json');
+      fs.writeFileSync(target, 'synthetic target', { mode: 0o644 });
+      if (kind === 'directory') fs.mkdirSync(filePath, { mode: 0o700 });
+      else fs.symlinkSync(target, filePath);
+      const ledger = createVaultMutationLedger({ filePath });
+      assert.throws(() => ledger.ensure(op('op-path-refused')), /ledger path must be a regular file/);
+      assert.throws(() => ledger.peek(), /ledger path must be a regular file/);
+      assert.equal(fs.lstatSync(filePath)[kind === 'directory' ? 'isDirectory' : 'isSymbolicLink'](), true);
+      assert.equal(fs.readFileSync(target, 'utf8'), 'synthetic target');
+      assert.equal(fs.statSync(target).mode & 0o777, 0o644);
+      assert.equal(fs.existsSync(`${filePath}.quarantine`), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+for (const rawText of ['{not-json}', JSON.stringify({ schemaVersion: 99, retained: 'synthetic data' })]) {
+  test(`corrupt ledger preserves ${rawText.startsWith('{not') ? 'raw text' : 'parsed data'} in owner-only quarantine`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-quarantine-'));
+    try {
+      const filePath = path.join(root, 'ledger.json');
+      fs.writeFileSync(filePath, rawText, { mode: 0o600 });
+      const ledger = createVaultMutationLedger({ filePath });
+      assert.deepEqual(ledger.read(), { schemaVersion: 1, operations: {}, claims: {}, sequences: {} });
+      const files = fs.readdirSync(`${filePath}.quarantine`);
+      assert.equal(files.length, 1);
+      const quarantinePath = path.join(`${filePath}.quarantine`, files[0]);
+      const quarantined = JSON.parse(fs.readFileSync(quarantinePath, 'utf8'));
+      assert.deepEqual(quarantined.record, rawText.startsWith('{not') ? { rawLedger: true, rawText } : JSON.parse(rawText));
+      assert.equal(fs.statSync(quarantinePath).mode & 0o777, 0o600);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
 
 test('local write-ahead states and auditable operator resolution survive restart', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-local-'));
