@@ -42,6 +42,138 @@ function fixture(t) {
     receipt: (id = opId) => fs.readFileSync(path.join(receipts, `${id}.md`), 'utf8') };
 }
 
+// Each run starts a new host process against the real configured service and ledger.
+function runInbox(f, options = {}, env = {}) {
+  return JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'helpers/capture-lineage-process.js')], {
+    input: JSON.stringify({ root: f.root, inbox: true, ...options }), encoding: 'utf8', env: { ...process.env,
+      JARVOS_VAULT_DIR: path.join(f.root, 'other-configured-vault'),
+      JARVOS_NOTES_DIR: path.join(f.root, 'wrong-notes'), VAULT_NOTES_DIR: path.join(f.root, 'wrong-notes'),
+      JARVOS_JOURNAL_DIR: path.join(f.root, 'wrong-journal'), JOURNAL_DIR: path.join(f.root, 'wrong-journal'),
+      JARVOS_KNOWLEDGE_DIR: path.join(f.root, 'knowledge'), JARVOS_CONFIG_PATH: path.join(f.root, 'missing-config.json'),
+      JARVOS_TIMEZONE: 'UTC', TZ: 'UTC', ...env },
+  }));
+}
+
+test('new-device receipts create missing parents before the Obsidian create operation', (t) => {
+  const f = fixture(t); f.put();
+  assert.equal(fs.existsSync(path.dirname(f.receipts)), false);
+  const run = runInbox(f);
+  assert.equal(run.error, null);
+  assert.equal(run.result.counts.saved, 1);
+  assert.equal(run.result.requests[0].receipt, undefined);
+  assert.match(f.receipt(), /status: saved/);
+  const receipts = Object.values(run.ledger.operations).filter(({ operation }) => operation.vaultRelativePath.startsWith('phanos/receipts/'));
+  assert.equal(receipts.length, 1);
+  assert.equal(receipts[0].status, 'acknowledged');
+});
+
+test('a planned receipt resumes across runs with one operation and no blocked queue', (t) => {
+  const f = fixture(t); f.put();
+  const first = runInbox(f, { fault: 'before_receipt' });
+  assert.equal(first.error, null);
+  assert.equal(first.result.counts.saved, 1);
+  assert.equal(first.result.requests[0].receipt.obsidian, 'app_busy');
+  assert.equal(fs.existsSync(path.join(f.receipts, `${opId}.md`)), false);
+  const receiptRecords = (run) => Object.values(run.ledger.operations)
+    .filter(({ operation }) => operation.vaultRelativePath.startsWith('phanos/receipts/'));
+  const planned = receiptRecords(first);
+  assert.equal(planned.length, 1);
+  assert.equal(planned[0].status, 'planned');
+  const second = runInbox(f, { inboxNow: '2030-02-04T12:00:00Z' });
+  assert.equal(second.error, null);
+  assert.equal(second.result.counts.saved, 1);
+  const completed = receiptRecords(second);
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].operation.operationId, planned[0].operation.operationId);
+  assert.equal(completed[0].operation.content, planned[0].operation.content);
+  assert.equal(completed[0].status, 'acknowledged');
+  assert.equal(second.result.requests[0].receipt, undefined);
+  assert.deepEqual(second.writes, [`phanos/receipts/${device}/${opId}.md`]);
+  assert.equal(Object.values(second.ledger.operations).every(({ status }) => status === 'acknowledged'), true);
+  assert.equal(runInbox(f).result.counts.skipped, 1);
+});
+
+test('a planned receipt replacement resumes its original payload across runs', (t) => {
+  const f = fixture(t); f.put();
+  const pending = runInbox(f, { fault: 'after_backlink' });
+  assert.equal(pending.result.counts.not_confirmed, 1);
+  const priorContent = f.receipt();
+  const first = runInbox(f, { fault: 'before_receipt', inboxNow: '2030-02-04T12:00:00Z' });
+  assert.equal(first.error, null);
+  assert.equal(first.result.counts.saved, 1);
+  assert.equal(first.result.requests[0].receipt.obsidian, 'app_busy');
+  assert.equal(f.receipt(), priorContent);
+  const replacement = Object.values(first.ledger.operations).find(({ operation }) => operation.operationKind === 'replace');
+  assert.equal(replacement.status, 'planned');
+  const second = runInbox(f, { inboxNow: '2030-02-05T12:00:00Z' });
+  assert.equal(second.error, null);
+  assert.equal(second.result.requests[0].receipt, undefined);
+  const replacements = Object.values(second.ledger.operations).filter(({ operation }) => operation.operationKind === 'replace');
+  assert.equal(replacements.length, 1);
+  assert.equal(replacements[0].operation.operationId, replacement.operation.operationId);
+  assert.equal(replacements[0].operation.content, replacement.operation.content);
+  assert.equal(replacements[0].status, 'acknowledged');
+  assert.equal(f.receipt(), replacement.operation.content);
+  assert.equal(Object.values(second.ledger.operations).every(({ status }) => status === 'acknowledged'), true);
+});
+
+for (const created of ['2030-02-02T23:59:00-05:00', undefined]) {
+  test(`undated not_confirmed request survives midnight (${created ? 'phone date' : 'reserved date'})`, (t) => {
+    const f = fixture(t);
+    f.put(request({ date: undefined, created }));
+    const firstClock = '2030-02-03T23:59:00Z';
+    const secondClock = '2030-02-04T00:01:00Z';
+    const day = created ? '2030-02-02' : '2030-02-03';
+    const first = runInbox(f, { fault: 'after_backlink', inboxNow: firstClock, clockNow: firstClock });
+    assert.equal(first.error, null);
+    assert.equal(first.result.counts.not_confirmed, 1, JSON.stringify(first));
+    assert.match(f.receipt(), /status: not_confirmed/);
+    const reservation = Object.values(first.ledger.captures);
+    assert.equal(reservation.length, 1);
+    assert.equal(reservation[0].plan.date, day);
+    const second = runInbox(f, { inboxNow: secondClock, clockNow: secondClock });
+    assert.equal(second.error, null);
+    assert.equal(second.result.counts.invalid, 0);
+    assert.equal(second.result.counts.saved, 1);
+    assert.deepEqual(second.ledger.captures, first.ledger.captures);
+    const journal = fs.readFileSync(path.join(f.vaultRoot, 'Journal', `${day}.md`), 'utf8');
+    assert.equal(journal.split('An invented first line.').length - 1, 1);
+    assert.deepEqual(fs.readdirSync(path.join(f.vaultRoot, 'Journal')).filter((name) => name.endsWith('.md')), [`${day}.md`]);
+    assert.equal(runInbox(f, { inboxNow: secondClock, clockNow: secondClock }).result.counts.skipped, 1);
+    assert.match(f.receipt(), /status: saved/);
+  });
+}
+
+for (const configured of [true, false]) {
+  test(`configured capture folders are ${configured ? 'used for the configured vault' : 'ignored for another vault'}`, (t) => {
+    const f = fixture(t);
+    f.put(request({ kind: 'note', title: '"An invented configured note"' }));
+    const configPath = path.join(f.root, 'jarvos.config.json');
+    const configuredVault = configured ? f.vaultRoot : path.join(f.root, 'other-configured-vault');
+    const journalFolder = configured ? 'Journal/Configured' : 'Journal';
+    const notesFolder = configured ? 'Notes/Configured' : 'Notes';
+    fs.writeFileSync(configPath, JSON.stringify({ paths: { vault: configuredVault,
+      journal: path.join(configuredVault, 'Journal/Configured'), notes: path.join(configuredVault, 'Notes/Configured') },
+      user: { timezone: 'UTC' } }));
+    const run = runInbox(f, { journalFolder, notesFolder }, {
+      JARVOS_CONFIG_PATH: configPath, JARVOS_VAULT_DIR: '', JARVOS_JOURNAL_DIR: '', JOURNAL_DIR: '',
+      JARVOS_NOTES_DIR: '', VAULT_NOTES_DIR: '',
+    });
+    assert.equal(run.error, null);
+    assert.equal(run.result.counts.saved, 1, JSON.stringify(run));
+    assert.equal(run.notes.length, 1);
+    assert.ok(run.notes[0].content.includes('An invented first line.'));
+    assert.match(run.journal, /\[\[An invented configured note\]\]/);
+    assert.ok(run.writes.includes(`${notesFolder}/An invented configured note.md`));
+    assert.ok(run.writes.includes(`${journalFolder}/2030-02-03.md`));
+    assert.equal(Object.values(run.ledger.operations).every(({ status }) => status === 'acknowledged'), true);
+    if (configured) {
+      assert.equal(fs.existsSync(path.join(f.vaultRoot, 'Notes/An invented configured note.md')), false);
+      assert.equal(fs.existsSync(path.join(f.vaultRoot, 'Journal/2030-02-03.md')), false);
+    } else assert.equal(fs.existsSync(configuredVault), false);
+  });
+}
+
 for (const newline of ['\n', '\r\n']) {
   test(`phone fixtures pass exact text and declarations (${JSON.stringify(newline)})`, async (t) => {
     const f = fixture(t);
@@ -79,13 +211,7 @@ test('real capture and persistent mutation ledger save exactly once, including a
       kind === 'journal' ? 'An invented first line.\nAn invented second line.' : `An invented ${kind} about tidal gardens.`), id);
   }
   const original = fs.readdirSync(f.folder).map((name) => [name, fs.readFileSync(path.join(f.folder, name), 'utf8'), fs.statSync(path.join(f.folder, name)).mtimeMs]);
-  const run = (inboxNow) => JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'helpers/capture-lineage-process.js')], {
-    input: JSON.stringify({ root: f.root, inbox: true, inboxNow }), encoding: 'utf8', env: { ...process.env,
-      JARVOS_VAULT_DIR: f.vaultRoot, JARVOS_NOTES_DIR: path.join(f.root, 'wrong-notes'), VAULT_NOTES_DIR: path.join(f.root, 'wrong-notes'),
-      JARVOS_JOURNAL_DIR: path.join(f.root, 'wrong-journal'), JOURNAL_DIR: path.join(f.root, 'wrong-journal'),
-      JARVOS_KNOWLEDGE_DIR: path.join(f.root, 'knowledge'), JARVOS_CONFIG_PATH: path.join(f.root, 'missing-config.json'),
-      JARVOS_TIMEZONE: 'UTC' },
-  }));
+  const run = (inboxNow) => runInbox(f, { inboxNow });
   const first = run();
   assert.equal(first.error, null);
   assert.equal(first.result.counts.saved, 3, fs.readdirSync(f.receipts).map((name) => fs.readFileSync(path.join(f.receipts, name), 'utf8')).join('\n'));
@@ -99,14 +225,13 @@ test('real capture and persistent mutation ledger save exactly once, including a
   fs.rmSync(f.receipts, { recursive: true });
   const replay = run();
   assert.deepEqual(replay.writes, []);
-  assert.ok(replay.result.requests.every((request) => request.receipt.obsidian === 'unacknowledged'));
-  assert.equal(fs.existsSync(f.receipts), false);
+  assert.ok(replay.result.requests.every((request) => request.receipt === undefined));
+  assert.deepEqual(fs.readdirSync(f.receipts), []);
   const third = run('2030-02-03T12:00:01Z');
   assert.equal(third.result.counts.saved, 3, JSON.stringify(third));
-  assert.deepEqual(third.writes.sort(), ['fixture-operation-0', 'fixture-operation-1', 'fixture-operation-2']
-    .map((id) => `phanos/receipts/${device}/${id}.md`));
+  assert.deepEqual(third.writes, []);
   assert.ok(third.result.requests.every((request) => request.receipt === undefined));
-  assert.ok(fs.readdirSync(f.receipts).every((name) => /status: saved/.test(fs.readFileSync(path.join(f.receipts, name), 'utf8'))));
+  assert.deepEqual(fs.readdirSync(f.receipts), []);
   assert.deepEqual(third.notes, first.notes);
   assert.equal(third.journal, first.journal);
   assert.equal(fs.existsSync(path.join(f.root, 'wrong-notes')), false);
@@ -185,7 +310,7 @@ for (const receipt of [{ status: 'deferred', obsidian: 'unacknowledged' },
     const mutationService = { ...f.mutationService, createMarkdownFile(input) { writes.push(input); return receipt; } };
     const first = await f.apply({ mutationService });
     assert.deepEqual(first.requests[0].receipt, receipt);
-    assert.equal(fs.existsSync(f.receipts), false);
+    assert.equal(fs.existsSync(path.join(f.receipts, `${opId}.md`)), false);
     await f.apply({ mutationService });
     assert.deepEqual(writes[1], writes[0]);
     assert.equal((await f.apply()).counts.saved, 1);
@@ -255,14 +380,13 @@ test('capture validation exceptions and opId conflicts are invalid; other not-ok
   }
 });
 
-test('missing date uses host local today, trims one separator blank line and keeps other bytes', async (t) => {
+test('missing dates defer the day to capture reservation and keep body bytes', async (t) => {
   const f = fixture(t);
   const text = '  An invented first line.  \n\nAn invented second line.  \n';
-  f.put(request({ date: undefined, created: 'informational' }, text) + '\n\n');
+  f.put(request({ date: undefined, created: undefined }, text) + '\n\n');
   await f.apply();
   assert.equal(f.calls[0].input.text, text);
-  const date = now();
-  assert.equal(f.calls[0].input.date, `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
+  assert.equal(Object.hasOwn(f.calls[0].input, 'date'), false);
 });
 
 test('limit applies oldest eligible requests first and skips terminal receipts without consuming it', async (t) => {
@@ -306,6 +430,24 @@ for (const target of ['phanos', 'inbox', 'device', 'request', 'receipts', 'recei
     assert.equal(f.calls.length, 0);
     assert.deepEqual(fs.readdirSync(outside), []);
   });
+}
+
+for (const segment of ['receipts', 'receipt-device']) {
+  for (const kind of ['symlink', 'file']) {
+    test(`real receipt writer refuses a ${kind} at ${segment}`, (t) => {
+      const f = fixture(t); f.put();
+      const outside = path.join(f.root, 'outside'); fs.mkdirSync(outside);
+      const target = segment === 'receipts' ? path.dirname(f.receipts) : f.receipts;
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      if (kind === 'symlink') fs.symlinkSync(outside, target);
+      else fs.writeFileSync(target, 'An invented non-directory.');
+      const run = runInbox(f);
+      assert.match(run.error, /real directories|symlink/);
+      assert.deepEqual(run.writes, []);
+      assert.deepEqual(run.ledger.operations, {});
+      assert.deepEqual(fs.readdirSync(outside), []);
+    });
+  }
 }
 
 test('exclusive per-vault lock blocks overlapping runs and is released afterward', async (t) => {

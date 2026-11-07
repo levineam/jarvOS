@@ -15,7 +15,8 @@ decides when and where to run it; this command installs no timer or host policy.
 The command reads `phanos/inbox/<device>/<opId>.md`, calls `simpleCapture` in
 process with source `phanos-mobile`, and publishes
 `phanos/receipts/<device>/<opId>.md` through the configured vault mutation
-service. It never changes inbox files. Capture
+service, creating missing receipt folders one segment at a time after checking
+each with `lstat`. It never changes inbox files. Capture
 artifacts and receipt Markdown use the same service and its acknowledgement
 rules. A missing capture acknowledgement is not reported as saved.
 
@@ -52,8 +53,10 @@ duplicate keys are invalid. `op_id` and `device` must match their filename stem
 and folder respectively, and match `^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$`.
 `kind` is `idea`, `journal`, or `note`; `words` must be `user` and `asked`
 must be `explicit`. These declarations do not manufacture verified human
-provenance. `model` is optional and `created` is informational. `date` is an
-optional valid `YYYY-MM-DD`, defaulting to host local today.
+provenance. `model` is optional. `date` is an optional valid `YYYY-MM-DD`;
+when absent, the date before `T` in `created` is used without timezone conversion.
+If both are absent, the capture reservation chooses the day once and reuses it
+on retries.
 
 Only notes may supply `title`, encoded as a JSON double-quoted string, for
 example `title: "A test note"`. It must be nonblank, at most 200 characters,
@@ -64,7 +67,9 @@ characters. Existing simple-capture text validation also applies.
 
 Receipts use LF. New receipts use the service's create operation; an existing
 `not_confirmed` receipt uses an exact-content guarded replacement. Each write
-has a stable mutation intent derived from its path and contents:
+has a stable mutation intent derived from its path, status, expected prior-content
+hash, and body message, excluding the `applied` timestamp. Pending writes resume
+the same ledger operation and original payload; acknowledged writes stay satisfied:
 
 ```markdown
 ---
@@ -88,9 +93,9 @@ when no valid request could be parsed.
 An existing receipt is skipped unless its status is `not_confirmed`; that
 status is retried with the same operation ID and its receipt rewritten.
 Deleting a receipt also retries through the capture layer's durable `opId`
-guard. Keep request content and IDs stable; an ID reused for changed content
-is invalid. When date is omitted, a retry on a later local day can conflict
-with the earlier date; phone clients should send an explicit date.
+guard. An acknowledged receipt operation is not recreated if its file is later
+deleted. Keep request content and IDs stable; an ID reused for changed content
+is invalid. Retrying after midnight preserves the original capture day.
 
 Symlinked inbox/receipt directory components, request files, and receipt
 targets are refused. One local run per vault holds an exclusive lock under
@@ -113,7 +118,9 @@ Desktop callers may import
 `bridge/capture/src/inbox-apply.js` and await
 `applyInbox({ vaultRoot, limit, capture, mutationService, now })`.
 `capture` defaults to `simpleCapture` and receives the selected vault, Notes, and Journal directories
-and mutation service as its second argument. `mutationService` defaults to the
+and mutation service as its second argument. For the configured vault, these
+directories come from `resolveConfig().paths.notes` and `paths.journal`; another
+vault defaults to its `Notes` and `Journal` folders. `mutationService` defaults to the
 configured vault mutation service for the selected vault; `now` defaults to a
 function returning a new Date.
 The fixed line-based parser uses Node's standard library and the existing

@@ -33,7 +33,14 @@ function flushAllCallbacks() {
 }
 
 const { root, capture, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
-  inboxNow = '2030-02-03T12:00:00Z' } = JSON.parse(fs.readFileSync(0, 'utf8'));
+  inboxNow = '2030-02-03T12:00:00Z', clockNow, journalFolder = 'Journal', notesFolder = 'Notes' } = JSON.parse(fs.readFileSync(0, 'utf8'));
+if (clockNow) {
+  const RealDate = Date;
+  global.Date = class extends RealDate {
+    constructor(...args) { super(...(args.length ? args : [clockNow])); }
+    static now() { return new RealDate(clockNow).getTime(); }
+  };
+}
 const vaultRoot = path.join(root, 'vault');
 const writes = [];
 const absolute = (relative) => {
@@ -45,7 +52,7 @@ const vault = {
   getFileByPath: (relative) => fs.existsSync(absolute(relative)) ? { path: relative } : null,
   read: (file) => deferred(() => fs.readFileSync(absolute(file.path), 'utf8')),
   create: (relative, content) => deferred(() => {
-    fs.mkdirSync(path.dirname(absolute(relative)), { recursive: true });
+    if (!relative.startsWith('phanos/receipts/')) fs.mkdirSync(path.dirname(absolute(relative)), { recursive: true });
     fs.writeFileSync(absolute(relative), content, { flag: 'wx' });
     writes.push(relative);
     return { path: relative };
@@ -60,6 +67,7 @@ const context = vm.createContext({ app: { vault }, TextDecoder, TextEncoder, Uin
   atob: (value) => Buffer.from(value, 'base64').toString('binary'),
   btoa: (value) => Buffer.from(value, 'binary').toString('base64') });
 let faultTriggered = false;
+let captureFinished = false;
 let pendingPolls = 0;
 const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capture-fixture',
   proveObsidianAbsent: () => fault === 'offline_stopped',
@@ -67,7 +75,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
     ledgerPath: path.join(root, 'ledger.json'), maxPollAttempts: 3, pollIntervalMs: 0,
     ...(ledgerNow !== undefined ? { ledger: createVaultMutationLedger({ filePath: path.join(root, 'ledger.json'), now: () => ledgerNow }) } : {}),
     ...(fault === 'poll_deadline' ? { pollTimeoutMs: 1 } : {}),
-    probe: () => ({ state: fault === 'offline_stopped' ? 'app_stopped' : fault === 'before_write' || (fault === 'after_note_before_journal' && writes.some((name) => name.startsWith('Notes/'))) ? 'app_busy' : 'available', vaultId: 'capture-fixture' }),
+    probe: () => ({ state: fault === 'offline_stopped' ? 'app_stopped' : fault === 'before_write' || (fault === 'before_receipt' && captureFinished) || (fault === 'after_note_before_journal' && writes.some((name) => name.startsWith('Notes/'))) ? 'app_busy' : 'available', vaultId: 'capture-fixture' }),
     evaluate: (code) => {
       const encoded = code.match(/atob\('([^']+)'\)/)?.[1];
       const input = encoded ? JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) : null;
@@ -107,16 +115,20 @@ async function main() {
   let error = null;
   try {
     if (inbox) result = await require('../../bridge/capture/src/inbox-apply').applyInbox({ vaultRoot,
-      mutationService: service, now: () => new Date(inboxNow) });
+      mutationService: service, now: () => new Date(inboxNow), capture: (input, options) => {
+        const saved = simpleCapture(input, options);
+        captureFinished = true;
+        return saved;
+      } });
     if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
     if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
   } catch (caught) { error = caught.message; result = null; }
   // A timed-out app operation may complete after the caller has already returned.
   if (fault === 'poll_timeout' || fault === 'poll_deadline') flushAllCallbacks();
-  const notesDir = path.join(vaultRoot, 'Notes');
+  const notesDir = path.join(vaultRoot, notesFolder);
   const notes = fs.existsSync(notesDir) ? fs.readdirSync(notesDir).filter((name) => name.endsWith('.md'))
     .map((name) => ({ name, content: fs.readFileSync(path.join(notesDir, name), 'utf8') })) : [];
-  const journalPath = path.join(vaultRoot, 'Journal', '2030-02-03.md');
+  const journalPath = path.join(vaultRoot, journalFolder, '2030-02-03.md');
   process.stdout.write(JSON.stringify({ result, error, recovery, writes, faultTriggered, pendingPolls, notes,
     journal: fs.existsSync(journalPath) ? fs.readFileSync(journalPath, 'utf8') : null,
     ledger: service.adapter.ledger.read() }));

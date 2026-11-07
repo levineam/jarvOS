@@ -7,6 +7,7 @@ const { createHash } = require('node:crypto');
 const { simpleCapture, buildSimpleCaptureEvent } = require('./simple-capture');
 const { OP_ID_PATTERN } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 const { createConfiguredVaultMutationService } = require('../../../src/vault-mutation-service');
+const { resolveConfig } = require('../../config');
 
 const ID = new RegExp(OP_ID_PATTERN);
 const MAX_BYTES = 256 * 1024;
@@ -19,11 +20,15 @@ function stat(file) {
   }
 }
 
-function directory(root, parts) {
+function directory(root, parts, create = false) {
   let current = root;
   for (const part of parts) {
     current = path.join(current, part);
-    const info = stat(current);
+    let info = stat(current);
+    if (!info && create) {
+      try { fs.mkdirSync(current); } catch (error) { if (error.code !== 'EEXIST') throw error; }
+      info = stat(current);
+    }
     if (!info) return null;
     if (!info.isDirectory()) throw new Error('inbox and receipt directories must be real directories, not symlinks');
   }
@@ -52,7 +57,7 @@ function localTimestamp(date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${offset < 0 ? '-' : '+'}${pad(Math.floor(Math.abs(offset) / 60))}:${pad(Math.abs(offset) % 60)}`;
 }
 
-function parseRequest(source, opId, device, today) {
+function parseRequest(source, opId, device) {
   const lines = [...source.matchAll(/[^\n]*(?:\n|$)/g)].filter((line) => line[0]);
   const value = (line) => line[0].replace(/\r?\n$/, '');
   while (lines.length && /^[ \t]*$/.test(value(lines.at(-1)))) lines.pop();
@@ -84,8 +89,9 @@ function parseRequest(source, opId, device, today) {
   }
   const start = lines[end].index + lines[end][0].length;
   const text = source.slice(start, marker.index).replace(/\r?\n$/, '').replace(/(?:^|\r?\n)[ \t]*$/, '');
+  const date = fields.date ?? fields.created?.split('T')[0];
   const input = { kind: fields.kind, text, words: 'user', asked: 'explicit', source: 'phanos-mobile',
-    date: fields.date ?? today, opId };
+    ...(date !== undefined ? { date } : {}), opId };
   for (const key of ['title', 'model']) if (fields[key] !== undefined) input[key] = fields[key];
   buildSimpleCaptureEvent(input);
   return input;
@@ -105,13 +111,23 @@ function pendingReceipt(vaultRoot, device, opId) {
 }
 
 function writeReceipt(service, vaultRoot, device, opId, kind, status, message, applied, expectedContent) {
-  directory(vaultRoot, ['phanos', 'receipts', device]);
+  directory(vaultRoot, ['phanos', 'receipts', device], true);
   const vaultRelativePath = `phanos/receipts/${device}/${opId}.md`;
   const info = stat(path.join(vaultRoot, vaultRelativePath));
   if (info && !info.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
   const body = String(message).replace(/[\r\n\u0085\u2028\u2029]+/g, ' ').trim();
   const content = `---\nphanos_receipt: capture/v1\nop_id: ${ID.test(opId) ? opId : JSON.stringify(opId)}\nstatus: ${status}\n${kind ? `kind: ${kind}\n` : ''}applied: ${applied}\n---\n${body}\n`;
-  const intentId = `inbox-receipt:${createHash('sha256').update(JSON.stringify([vaultRelativePath, status, expectedContent, content])).digest('hex')}`;
+  const expectedHash = expectedContent === null ? null : createHash('sha256').update(expectedContent).digest('hex');
+  const intentId = `inbox-receipt:${createHash('sha256').update(JSON.stringify([vaultRelativePath, status, expectedHash, body])).digest('hex')}`;
+  const existing = service.adapter?.ledger.get(intentId);
+  if (existing) {
+    // The first payload owns applied; reconcile that operation without allocating another FIFO slot.
+    if (!['acknowledged', 'superseded', 'abandoned'].includes(existing.status)) service.reconciler.reconcileOne(existing);
+    const settled = service.adapter.ledger.get(intentId);
+    const acknowledged = settled.status === 'acknowledged';
+    return { status: acknowledged ? 'already_satisfied' : settled.status,
+      obsidian: acknowledged ? 'acknowledged' : 'unacknowledged' };
+  }
   const mutation = { vaultRelativePath, nextContent: content, intentId };
   return expectedContent === null ? service.createMarkdownFile(mutation)
     : service.applyMarkdownMutation({ ...mutation, expectedContent });
@@ -152,6 +168,9 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('limit must be a positive integer');
   if (!fs.statSync(vaultRoot).isDirectory()) throw new Error('vaultRoot must be a directory');
   vaultRoot = path.resolve(vaultRoot);
+  const { paths } = resolveConfig();
+  const journalDir = vaultRoot === path.resolve(paths.vault) ? paths.journal : path.join(vaultRoot, 'Journal');
+  const notesDir = vaultRoot === path.resolve(paths.vault) ? paths.notes : path.join(vaultRoot, 'Notes');
   if (!fs.constants.O_NOFOLLOW) throw new Error('inbox apply requires filesystem support for O_NOFOLLOW');
   const counts = { saved: 0, not_confirmed: 0, not_saved: 0, invalid: 0, incomplete: 0, skipped: 0 };
   const result = { counts, requests: [], inProgress: false };
@@ -188,7 +207,7 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       let status;
       let message;
       try {
-        input = parseRequest(readFile(item.file), item.opId, item.device, applied.slice(0, 10));
+        input = parseRequest(readFile(item.file), item.opId, item.device);
       } catch (error) {
         if (error.code) throw error;
         status = 'invalid'; message = error.message;
@@ -198,7 +217,7 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       mutationService ||= createConfiguredVaultMutationService({ vaultRoot, source: 'bridge.inbox-apply' });
       if (!status) {
         try {
-          const saved = await capture(input, { vaultRoot, journalDir: path.join(vaultRoot, 'Journal'), notesDir: path.join(vaultRoot, 'Notes'), mutationService });
+          const saved = await capture(input, { vaultRoot, journalDir, notesDir, mutationService });
           const pending = saved.result?.artifactReceipt?.artifacts?.some((artifact) => ['note', 'journal'].includes(artifact.kind)
             && ['saved_locally_sync_pending', 'deferred'].includes(artifact.outcome));
           status = saved.message.includes('this operation id was already used for different content') ? 'invalid'
