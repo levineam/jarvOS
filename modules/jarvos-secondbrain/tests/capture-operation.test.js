@@ -163,12 +163,35 @@ test('replaying an acknowledged capture preserves later additions to the same no
   const added = run({ capture: { ...capture, text: 'Another invented garden detail.', opId: 'test-operation-002' } });
   assert.equal(added.result.ok, true, JSON.stringify(added));
   assert.match(added.notes[0].content, /Another invented garden detail/);
+  const knowledge = added.result.result.note.knowledge;
+  const paths = Object.entries(knowledge).filter(([key]) => key.endsWith('Path')).map(([, value]) => value);
+  const derived = paths.map((file) => fs.readFileSync(file, 'utf8'));
+  for (const file of [knowledge.queuePath, knowledge.memoryWikiQueuePath]) {
+    assert.match(JSON.parse(fs.readFileSync(file, 'utf8')).entries['Notes/Invented garden.md'].summary, /Another invented garden detail/);
+  }
   const repeated = run({ capture });
   assert.equal(repeated.result.ok, true, JSON.stringify(repeated));
   assert.equal(repeated.result.message, first.result.message);
   assert.deepEqual(repeated.notes, added.notes);
   assert.equal(repeated.journal, added.journal);
   assert.deepEqual(repeated.writes, []);
+  assert.deepEqual(paths.map((file) => fs.readFileSync(file, 'utf8')), derived);
+  assert.equal(repeated.result.result.note.receipt.replay, true);
+  assert.equal(repeated.result.result.note.knowledge, null);
+});
+
+test('an offline capture replay leaves its derived records unchanged while pending', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented garden' };
+  const first = run({ capture, fault: 'offline_stopped' });
+  assert.equal(first.result.result.note.receipt.status, 'saved_locally_sync_pending');
+  const paths = Object.entries(first.result.result.note.knowledge).filter(([key]) => key.endsWith('Path')).map(([, value]) => value);
+  const derived = paths.map((file) => fs.readFileSync(file, 'utf8'));
+  const repeated = run({ capture, fault: 'offline_stopped' });
+  assert.equal(repeated.result.result.note.receipt.status, 'saved_locally_sync_pending');
+  assert.deepEqual(paths.map((file) => fs.readFileSync(file, 'utf8')), derived);
+  assert.equal(repeated.result.result.note.receipt.replay, true);
+  assert.equal(repeated.result.result.note.knowledge, null);
 });
 
 test('same ID is independent across source labels, and omitted date stays pinned', (t) => {

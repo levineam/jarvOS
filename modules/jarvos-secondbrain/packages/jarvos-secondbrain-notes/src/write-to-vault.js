@@ -315,7 +315,7 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, notesDir = getVaultNotesDir(), sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, notesDir = getVaultNotesDir(), knowledgeDir, sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
   const collectedDrafting = collectDraftingDeclarations(drafting, content_origin_drafting);
   if (!collectedDrafting.ok) throw new Error(`Invalid note frontmatter: content_origin_drafting rejected: invalid_drafting:${collectedDrafting.reason}`);
   const draftingDeclaration = collectedDrafting.entries;
@@ -398,8 +398,8 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     }],
   });
   const journal = { status: 'pending', linked: false, deferred: false, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' };
-  const knowledge = hasBytes
-    ? optimizeNoteKnowledge({ filePath, notesDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }, created, journal })
+  const knowledge = hasBytes && !receipt.replay
+    ? optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }, created, journal })
     : null;
 
   return {

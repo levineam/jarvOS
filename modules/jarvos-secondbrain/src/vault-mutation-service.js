@@ -162,11 +162,11 @@ function createConfiguredVaultMutationService({
       // An operation-ID replay returns its durable outcome even if later
       // captures have extended the note or journal. It never reasserts old bytes.
       if (replay && operation.operationId.startsWith('capture:op:') && adapter.ledger.get(operation.operationId)?.status === 'acknowledged') {
-        return createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' });
+        return { ...createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' }), replay: true };
       }
       // Offline effects already exist; only app readback may confirm them.
       if (replay && operation.operationId.startsWith('capture:op:') && adapter.ledger.get(operation.operationId)?.status === 'local_applied') {
-        return createInternalReceipt({ operation, status: 'saved_locally_sync_pending', lifecycleState: 'local_applied', persistence: 'pending', obsidian: 'unacknowledged' });
+        return { ...createInternalReceipt({ operation, status: 'saved_locally_sync_pending', lifecycleState: 'local_applied', persistence: 'pending', obsidian: 'unacknowledged' }), replay: true };
       }
     }
     let receipt;

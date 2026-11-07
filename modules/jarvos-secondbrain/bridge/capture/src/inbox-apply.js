@@ -191,8 +191,10 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
   if (!fs.statSync(vaultRoot).isDirectory()) throw new Error('vaultRoot must be a directory');
   vaultRoot = path.resolve(vaultRoot);
   const { paths } = resolveConfig();
-  const journalDir = vaultRoot === path.resolve(paths.vault) ? paths.journal : path.join(vaultRoot, 'Journal');
-  const notesDir = vaultRoot === path.resolve(paths.vault) ? paths.notes : path.join(vaultRoot, 'Notes');
+  const configuredVault = vaultRoot === path.resolve(paths.vault);
+  const journalDir = configuredVault ? paths.journal : path.join(vaultRoot, 'Journal');
+  const notesDir = configuredVault ? paths.notes : path.join(vaultRoot, 'Notes');
+  const knowledgeDir = configuredVault ? undefined : path.join(vaultRoot, '.jarvos', 'knowledge');
   if (!fs.constants.O_NOFOLLOW) throw new Error('inbox apply requires filesystem support for O_NOFOLLOW');
   const counts = { saved: 0, not_confirmed: 0, not_saved: 0, invalid: 0, incomplete: 0, skipped: 0 };
   const result = { counts, requests: [], inProgress: false };
@@ -239,7 +241,7 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       mutationService ||= createConfiguredVaultMutationService({ vaultRoot, source: 'bridge.inbox-apply' });
       if (!status) {
         try {
-          const saved = await capture(input, { vaultRoot, journalDir, notesDir, mutationService });
+          const saved = await capture(input, { vaultRoot, journalDir, notesDir, knowledgeDir, mutationService });
           const intentId = captureOperationRequest(buildSimpleCaptureEvent(input)).intentId;
           const unresolved = Object.values(mutationService.adapter?.ledger.read().operations || {})
             .some(({ operation, status }) => operation.vaultId === mutationService.vaultId

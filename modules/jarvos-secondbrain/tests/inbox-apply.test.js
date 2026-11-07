@@ -368,12 +368,38 @@ for (const configured of [true, false]) {
     assert.ok(run.writes.includes(`${notesFolder}/An invented configured note.md`));
     assert.ok(run.writes.includes(`${journalFolder}/2030-02-03.md`));
     assert.equal(Object.values(run.ledger.operations).every(({ status }) => status === 'acknowledged'), true);
+    const knowledgeDir = configured ? path.join(f.root, 'knowledge') : path.join(f.vaultRoot, '.jarvos/knowledge');
+    assert.equal(fs.existsSync(path.join(knowledgeDir, 'gbrain-import-queue.json')), true);
     if (configured) {
       assert.equal(fs.existsSync(path.join(f.vaultRoot, 'Notes/An invented configured note.md')), false);
       assert.equal(fs.existsSync(path.join(f.vaultRoot, 'Journal/2030-02-03.md')), false);
     } else assert.equal(fs.existsSync(configuredVault), false);
   });
 }
+
+test('a second vault capture leaves primary knowledge for the same note path unchanged', (t) => {
+  const f = fixture(t);
+  const capture = { kind: 'note', title: 'X', text: 'An invented primary garden detail.', words: 'user',
+    asked: 'explicit', source: 'codex', date: '2030-02-03', opId };
+  const primary = runInbox(f, { inbox: false, simple: true, capture }, {
+    JARVOS_VAULT_DIR: f.vaultRoot, JARVOS_NOTES_DIR: path.join(f.vaultRoot, 'Notes'),
+    JARVOS_JOURNAL_DIR: path.join(f.vaultRoot, 'Journal'),
+  });
+  assert.equal(primary.result.ok, true, JSON.stringify(primary));
+  const knowledge = primary.result.result.note.knowledge;
+  const paths = Object.entries(knowledge).filter(([key]) => key.endsWith('Path')).map(([, value]) => value);
+  const derived = paths.map((file) => fs.readFileSync(file, 'utf8'));
+  assert.match(JSON.parse(fs.readFileSync(knowledge.queuePath, 'utf8')).entries['Notes/X.md'].summary, /primary garden/);
+  const second = { root: path.join(f.root, 'second') };
+  const folder = path.join(second.root, 'vault/phanos/inbox', device);
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, `${opId}.md`), request({ kind: 'note', title: '"X"' }, 'An invented second garden detail.'));
+  const saved = runInbox(second, {}, { JARVOS_VAULT_DIR: f.vaultRoot, JARVOS_KNOWLEDGE_DIR: path.join(f.root, 'knowledge') });
+  assert.equal(saved.result.counts.saved, 1, JSON.stringify(saved));
+  assert.deepEqual(paths.map((file) => fs.readFileSync(file, 'utf8')), derived);
+  const queue = JSON.parse(fs.readFileSync(path.join(second.root, 'vault/.jarvos/knowledge/gbrain-import-queue.json'), 'utf8'));
+  assert.match(queue.entries['Notes/X.md'].summary, /second garden/);
+});
 
 for (const newline of ['\n', '\r\n']) {
   test(`phone fixtures pass exact text and declarations (${JSON.stringify(newline)})`, async (t) => {
@@ -392,7 +418,7 @@ for (const newline of ['\n', '\r\n']) {
       assert.equal(input.asked, 'explicit');
       assert.equal(input.date, '2030-02-03');
       assert.equal(input.text, input.kind === 'journal' ? `An invented first line.${newline}An invented second line.` : 'An invented tidal garden.');
-      assert.deepEqual(options, { vaultRoot: f.vaultRoot, journalDir: path.join(f.vaultRoot, 'Journal'), notesDir: path.join(f.vaultRoot, 'Notes'), mutationService: f.mutationService });
+      assert.deepEqual(options, { vaultRoot: f.vaultRoot, journalDir: path.join(f.vaultRoot, 'Journal'), notesDir: path.join(f.vaultRoot, 'Notes'), knowledgeDir: path.join(f.vaultRoot, '.jarvos/knowledge'), mutationService: f.mutationService });
       if (input.kind === 'note') { assert.equal(input.title, 'A test note'); assert.equal(input.model, undefined); }
       const receipt = f.receipt(input.opId);
       assert.match(receipt, new RegExp(`status: saved\nkind: ${input.kind}\napplied: .*[-+]\\d\\d:\\d\\d\n`));
