@@ -113,6 +113,8 @@ function pendingReceipt(vaultRoot, device, opId) {
 }
 
 function writeReceipt(service, vaultRoot, device, opId, kind, status, message, applied, expectedContent) {
+  const ledger = service.adapter?.ledger;
+  const snapshot = ledger?.verify();
   directory(vaultRoot, ['phanos', 'receipts', device], true);
   const vaultRelativePath = `phanos/receipts/${device}/${opId}.md`;
   const info = stat(path.join(vaultRoot, vaultRelativePath));
@@ -124,8 +126,7 @@ function writeReceipt(service, vaultRoot, device, opId, kind, status, message, a
     return `inbox-receipt:${createHash('sha256').update(JSON.stringify([vaultRelativePath, status, expectedHash, body])).digest('hex')}`;
   };
   let intentId = receiptIntent(expectedContent);
-  const ledger = service.adapter?.ledger;
-  const prior = Object.values(ledger?.read().operations || {})
+  const prior = Object.values(snapshot?.operations || {})
     .filter(({ operation }) => operation.vaultId === service.vaultId && operation.vaultRelativePath === vaultRelativePath)
     .sort((a, b) => a.operation.sequence - b.operation.sequence);
   const pending = prior.filter(({ status }) => !TERMINAL.has(status));
@@ -201,6 +202,8 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
   const release = acquireLock(fs.realpathSync(vaultRoot));
   if (!release) return { ...result, inProgress: true, message: 'another run is in progress' };
   try {
+    mutationService ||= createConfiguredVaultMutationService({ vaultRoot, source: 'bridge.inbox-apply' });
+    mutationService.adapter?.ledger.verify();
     const inbox = directory(vaultRoot, ['phanos', 'inbox']);
     const items = [];
     if (inbox) for (const device of fs.readdirSync(inbox)) {
@@ -238,12 +241,11 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       }
       if (!status && !input) { record.status = 'incomplete'; counts.incomplete++; continue; }
       processed++;
-      mutationService ||= createConfiguredVaultMutationService({ vaultRoot, source: 'bridge.inbox-apply' });
       if (!status) {
         try {
           const saved = await capture(input, { vaultRoot, journalDir, notesDir, knowledgeDir, mutationService });
           const intentId = captureOperationRequest(buildSimpleCaptureEvent(input)).intentId;
-          const unresolved = Object.values(mutationService.adapter?.ledger.read().operations || {})
+          const unresolved = Object.values(mutationService.adapter?.ledger.verify().operations || {})
             .some(({ operation, status }) => operation.vaultId === mutationService.vaultId
               && operation.operationId.startsWith(`${intentId}:`)
               && ['planned', 'dispatched', 'unknown_after_dispatch', 'local_mutating', 'local_applied', 'blocked'].includes(status));
@@ -252,6 +254,7 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
           status = pending ? 'not_confirmed' : saved.ok ? 'saved' : 'not_saved';
           message = saved.message;
         } catch (error) {
+          if (error.ledgerIntegrity === true) throw error;
           status = error.validation === true ? 'invalid' : 'not_confirmed';
           message = error.validation === true ? error.message : TEMPORARY_PROBLEM;
         }
@@ -264,6 +267,9 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       counts[status]++;
     }
     return result;
+  } catch (error) {
+    if (error.ledgerIntegrity !== true) throw error;
+    return { ...result, stopped: 'ledger integrity', reason: 'The mutation ledger failed its integrity or permission check; no further requests were applied.' };
   } finally { release(); }
 }
 

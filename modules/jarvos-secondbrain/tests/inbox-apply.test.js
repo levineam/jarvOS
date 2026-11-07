@@ -11,6 +11,7 @@ const { applyInbox } = require('../bridge/capture/src/inbox-apply');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
 const { CaptureValidationError, simpleCapture } = require('../bridge/capture/src/simple-capture');
 const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
+const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
 
 const device = 'phone-47ba92';
 const opId = '0f012026-caf1-4e59-99cd-5db5d4e5097f';
@@ -54,6 +55,84 @@ function runInbox(f, options = {}, env = {}) {
       JARVOS_TIMEZONE: 'UTC', TZ: 'UTC', ...env },
   }));
 }
+
+for (const damage of ['invalid JSON', 'malformed record', 'unreadable file']) {
+  test(`ledger integrity preflight refuses ${damage} without repair or receipts`, async (t) => {
+    const f = fixture(t); f.put();
+    const ledgerPath = path.join(f.root, 'ledger.json');
+    const ledger = createVaultMutationLedger({ filePath: ledgerPath });
+    if (damage === 'unreadable file') fs.mkdirSync(ledgerPath);
+    else fs.writeFileSync(ledgerPath, damage === 'invalid JSON' ? '{invented broken ledger}'
+      : JSON.stringify({ schemaVersion: 1, operations: { invented: { status: 'invented' } }, claims: {} }), { mode: 0o600 });
+    const before = damage === 'unreadable file' ? null : fs.readFileSync(ledgerPath);
+    const service = createConfiguredVaultMutationService({ vaultRoot: f.vaultRoot, proveObsidianAbsent: () => false,
+      adapterOptions: { ledger, probe: () => ({ state: 'app_busy' }) } });
+    const result = await f.apply({ mutationService: service });
+    assert.equal(result.stopped, 'ledger integrity');
+    assert.deepEqual(result.requests, []);
+    assert.deepEqual(f.calls, []);
+    assert.equal(fs.existsSync(path.dirname(f.receipts)), false);
+    assert.equal(fs.existsSync(`${ledgerPath}.quarantine`), false);
+    if (before) assert.deepEqual(fs.readFileSync(ledgerPath), before);
+    else assert.ok(fs.statSync(ledgerPath).isDirectory());
+  });
+}
+
+for (const during of ['capture', 'receipt']) {
+  test(`ledger permission failure during ${during} stops before receipts or the next request`, async (t) => {
+    const f = fixture(t); f.put();
+    f.put(request({ op_id: 'invented-next-001' }), 'invented-next-001');
+    const ledgerPath = path.join(f.root, 'ledger.json');
+    const ledger = createVaultMutationLedger({ filePath: ledgerPath });
+    const reservation = { intentId: `capture:op:${'a'.repeat(64)}`, requestHash: 'b'.repeat(64), vaultId: 'invented-vault', plan: {} };
+    ledger.reserveCapture(reservation);
+    const before = fs.readFileSync(ledgerPath);
+    const configured = createConfiguredVaultMutationService({ vaultRoot: f.vaultRoot, proveObsidianAbsent: () => false,
+      adapterOptions: { ledger, probe: () => ({ state: 'app_busy' }) } });
+    const damageLedger = () => {
+      fs.chmodSync(ledgerPath, 0o644);
+      configured.reserveCaptureOperation({ ...reservation, intentId: `capture:op:${'c'.repeat(64)}` });
+    };
+    const service = during === 'receipt' ? { ...configured, createMarkdownFile: damageLedger } : configured;
+    let calls = 0;
+    const result = await f.apply({ mutationService: service, capture: () => {
+      calls++;
+      if (during === 'capture') damageLedger();
+      return { ok: true, message: 'Saved an invented capture.' };
+    } });
+    assert.equal(result.stopped, 'ledger integrity');
+    assert.equal(calls, 1);
+    assert.equal(result.requests.length, 1);
+    assert.ok(Object.values(result.counts).every((count) => count === 0));
+    assert.deepEqual(fs.readFileSync(ledgerPath), before);
+    assert.equal(fs.existsSync(path.join(f.receipts, `${opId}.md`)), false);
+    assert.equal(fs.existsSync(path.join(f.receipts, 'invented-next-001.md')), false);
+    assert.equal(fs.existsSync(`${ledgerPath}.quarantine`), false);
+  });
+}
+
+test('a ledger lock permission error during capture stops without trying a receipt', async (t) => {
+  const f = fixture(t); f.put();
+  const ledgerPath = path.join(f.root, 'ledger.json');
+  let denied = false;
+  const ledger = createVaultMutationLedger({ filePath: ledgerPath, fsImpl: { ...fs, openSync(file, ...args) {
+    if (denied && file === `${ledgerPath}.lock`) throw Object.assign(new Error('An invented ledger permission denial.'),
+      { code: 'EACCES', path: file });
+    return fs.openSync(file, ...args);
+  } } });
+  const reservation = { intentId: `capture:op:${'a'.repeat(64)}`, requestHash: 'b'.repeat(64), vaultId: 'invented-vault', plan: {} };
+  ledger.reserveCapture(reservation);
+  const before = fs.readFileSync(ledgerPath);
+  const service = createConfiguredVaultMutationService({ vaultRoot: f.vaultRoot, proveObsidianAbsent: () => false,
+    adapterOptions: { ledger, probe: () => ({ state: 'app_busy' }) } });
+  const result = await f.apply({ mutationService: service, capture: () => {
+    denied = true;
+    return service.reserveCaptureOperation(reservation);
+  } });
+  assert.equal(result.stopped, 'ledger integrity');
+  assert.deepEqual(fs.readFileSync(ledgerPath), before);
+  assert.equal(fs.existsSync(path.dirname(f.receipts)), false);
+});
 
 test('an offline local_applied capture stays pending on replay and acknowledges once Obsidian returns', (t) => {
   const f = fixture(t);

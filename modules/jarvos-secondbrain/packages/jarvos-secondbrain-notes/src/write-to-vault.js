@@ -398,9 +398,17 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     }],
   });
   const journal = { status: 'pending', linked: false, deferred: false, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' };
-  const knowledge = hasBytes && !receipt.replay
-    ? optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }, created, journal })
-    : null;
+  let knowledge = null;
+  if (hasBytes) {
+    // Historical acknowledgements do not describe newer appends or metadata edits.
+    const currentContent = receipt.replay ? readFileSync(filePath, 'utf8') : null;
+    knowledge = optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir, title: safeName,
+      body: currentContent === null ? body : rawBodyRemainder(currentContent),
+      frontmatter: currentContent === null
+        ? { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }
+        : frontmatterToObject(parseFrontmatter(currentContent)),
+      created, journal });
+  }
 
   return {
     written: ['committed', 'already_satisfied'].includes(receipt?.status),

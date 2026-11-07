@@ -30,6 +30,7 @@ function fixture(t) {
     });
     child.stdin.end(options.input);
   })));
+  run.root = root;
   return run;
 }
 
@@ -164,8 +165,6 @@ test('replaying an acknowledged capture preserves later additions to the same no
   assert.equal(added.result.ok, true, JSON.stringify(added));
   assert.match(added.notes[0].content, /Another invented garden detail/);
   const knowledge = added.result.result.note.knowledge;
-  const paths = Object.entries(knowledge).filter(([key]) => key.endsWith('Path')).map(([, value]) => value);
-  const derived = paths.map((file) => fs.readFileSync(file, 'utf8'));
   for (const file of [knowledge.queuePath, knowledge.memoryWikiQueuePath]) {
     assert.match(JSON.parse(fs.readFileSync(file, 'utf8')).entries['Notes/Invented garden.md'].summary, /Another invented garden detail/);
   }
@@ -175,23 +174,63 @@ test('replaying an acknowledged capture preserves later additions to the same no
   assert.deepEqual(repeated.notes, added.notes);
   assert.equal(repeated.journal, added.journal);
   assert.deepEqual(repeated.writes, []);
-  assert.deepEqual(paths.map((file) => fs.readFileSync(file, 'utf8')), derived);
   assert.equal(repeated.result.result.note.receipt.replay, true);
-  assert.equal(repeated.result.result.note.knowledge, null);
+  const refreshed = repeated.result.result.note.knowledge;
+  assert.equal(refreshed?.optimized, true);
+  for (const file of [refreshed.queuePath, refreshed.memoryWikiQueuePath]) {
+    const entry = JSON.parse(fs.readFileSync(file, 'utf8')).entries['Notes/Invented garden.md'];
+    assert.match(entry.summary, /An invented tidal garden/);
+    assert.match(entry.summary, /Another invented garden detail/);
+  }
 });
 
-test('an offline capture replay leaves its derived records unchanged while pending', (t) => {
+test('an acknowledged note whose indexing threw is indexed from current bytes on replay', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented garden' };
+  const knowledgeDir = path.join(run.root, 'knowledge');
+  fs.writeFileSync(knowledgeDir, 'An invented indexing obstruction.');
+  const interrupted = run({ capture });
+  assert.match(interrupted.error, /EEXIST|ENOTDIR/);
+  const note = Object.values(interrupted.ledger.operations).find(({ operation }) => operation.vaultRelativePath.startsWith('Notes/'));
+  assert.equal(note.status, 'acknowledged');
+  fs.unlinkSync(knowledgeDir);
+  const file = path.join(run.root, 'vault/Notes/Invented garden.md');
+  const current = fs.readFileSync(file, 'utf8').replace(/^---\n/, '---\naliases: ["Invented current alias"]\n')
+    + '\nAn invented later orchard detail.\n';
+  fs.writeFileSync(file, current);
+  const recovered = run({ capture });
+  assert.equal(recovered.result.ok, true, JSON.stringify(recovered));
+  assert.equal(recovered.result.result.note.receipt.replay, true);
+  assert.equal(recovered.notes[0].content, current);
+  assert.equal(recovered.writes.some((name) => name.startsWith('Notes/')), false);
+  const knowledge = recovered.result.result.note.knowledge;
+  assert.equal(knowledge?.optimized, true);
+  for (const queue of [knowledge.queuePath, knowledge.memoryWikiQueuePath]) {
+    const entry = JSON.parse(fs.readFileSync(queue, 'utf8')).entries['Notes/Invented garden.md'];
+    assert.match(entry.summary, /An invented later orchard detail/);
+    assert.ok(entry.aliases.includes('Invented current alias'));
+  }
+});
+
+test('an offline capture replay indexes current local bytes while remaining pending', (t) => {
   const run = fixture(t);
   const capture = { ...base, kind: 'note', title: 'Invented garden' };
   const first = run({ capture, fault: 'offline_stopped' });
   assert.equal(first.result.result.note.receipt.status, 'saved_locally_sync_pending');
-  const paths = Object.entries(first.result.result.note.knowledge).filter(([key]) => key.endsWith('Path')).map(([, value]) => value);
-  const derived = paths.map((file) => fs.readFileSync(file, 'utf8'));
+  const file = path.join(run.root, 'vault/Notes/Invented garden.md');
+  const current = fs.readFileSync(file, 'utf8') + '\nAn invented later orchard detail.\n';
+  fs.writeFileSync(file, current);
   const repeated = run({ capture, fault: 'offline_stopped' });
   assert.equal(repeated.result.result.note.receipt.status, 'saved_locally_sync_pending');
-  assert.deepEqual(paths.map((file) => fs.readFileSync(file, 'utf8')), derived);
+  assert.equal(repeated.notes[0].content, current);
+  assert.deepEqual(repeated.writes, []);
   assert.equal(repeated.result.result.note.receipt.replay, true);
-  assert.equal(repeated.result.result.note.knowledge, null);
+  const knowledge = repeated.result.result.note.knowledge;
+  assert.equal(knowledge?.optimized, true);
+  for (const queue of [knowledge.queuePath, knowledge.memoryWikiQueuePath]) {
+    assert.match(JSON.parse(fs.readFileSync(queue, 'utf8')).entries['Notes/Invented garden.md'].summary,
+      /An invented later orchard detail/);
+  }
 });
 
 test('same ID is independent across source labels, and omitted date stays pinned', (t) => {
