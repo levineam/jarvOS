@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
+const { createInternalReceipt, hashUtf8, validateVaultRelativeMarkdownPath } = require('../adapters/obsidian/src/vault-mutation-contract');
 const { CAPABILITY_REASONS, CAPABILITY_STATES, createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { createJarvosVaultTransforms } = require('./vault-transform-registry');
 
@@ -12,6 +12,7 @@ const WRITER_INVENTORY = Object.freeze([
   ['secondbrain', 'adapters/obsidian/src/vault-mutation-ledger.js', 'operational-out-of-vault', 'U2', 'Writes the owner-only reconciliation ledger under the host state directory, never vault Markdown.'],
   ['secondbrain', 'adapters/obsidian/src/vault-mutation-reconciler.js', 'mutation-owned', 'U3', 'Performs the explicitly authorized offline fallback and bounded Obsidian reconciliation.'],
   ['secondbrain', 'bridge/config/src/shared-vault-onboarding.js', 'operational-out-of-vault', 'U1', 'Writes jarvos.config.json, never vault Markdown.'],
+  ['secondbrain', 'bridge/capture/src/inbox-apply.js', 'mutation-owned-with-operational-locks', 'U4', 'Receipt Markdown uses configured create or exact-content replacement operations; the per-vault run lock lives in the owner-only state directory outside the vault.'],
   ['secondbrain', 'bridge/provenance/src/journal-note-audit.js', 'mutation-owned', 'U4', 'Audit repairs use one exact-content guarded replacement through the configured mutation service.'],
   ['secondbrain', 'bridge/provenance/src/link-to-journal.js', 'mutation-owned-with-operational-queue', 'U4', 'Journal Markdown dispatches through the configured service; only the deferred backlink JSON queue is written directly outside the vault.'],
   ['secondbrain', 'bridge/provenance/src/notes-section-normalizer.js', 'mutation-owned', 'U4', 'Normalizes notes through canonical note operations and applies the journal rewrite through one exact-content guarded replacement.'],
@@ -158,6 +159,15 @@ function createConfiguredVaultMutationService({
     if (requestHash) {
       const replay = replayExisting();
       if (replay && replay !== true) return replay;
+      // An operation-ID replay returns its durable outcome even if later
+      // captures have extended the note or journal. It never reasserts old bytes.
+      if (replay && operation.operationId.startsWith('capture:op:') && adapter.ledger.get(operation.operationId)?.status === 'acknowledged') {
+        return { ...createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' }), replay: true };
+      }
+      // Offline effects already exist; only app readback may confirm them.
+      if (replay && operation.operationId.startsWith('capture:op:') && adapter.ledger.get(operation.operationId)?.status === 'local_applied') {
+        return { ...createInternalReceipt({ operation, status: 'saved_locally_sync_pending', lifecycleState: 'local_applied', persistence: 'pending', obsidian: 'unacknowledged' }), replay: true };
+      }
     }
     let receipt;
     try { receipt = adapter.submit(operation); } catch (error) {
@@ -183,6 +193,20 @@ function createConfiguredVaultMutationService({
   function execute(input) {
     boundSource(input?.source);
     return submitAuthorized(input, source);
+  }
+
+  function reserveCaptureOperation(request) {
+    const reservation = adapter.ledger.reserveCapture({ ...request, vaultId });
+    const { operations } = adapter.ledger.read();
+    // Readback may settle an interrupted effect; it cannot redispatch it or
+    // steal a live writer's fenced claim. Unsatisfied ambiguous writes stay held.
+    for (const suffix of ['note', 'journal:create', 'journal:section', 'note-link:create', 'note-link:section']) {
+      const record = operations[`${request.intentId}:${suffix}`];
+      if (record && ['dispatched', 'unknown_after_dispatch', 'local_mutating', 'local_applied'].includes(record.status)) {
+        adapter.acknowledgeIfSatisfied(record.operation);
+      }
+    }
+    return reservation;
   }
 
   function createWriteContext({ vaultRelativePath, operationId, intentId, requestHash, operationSource = source } = {}) {
@@ -305,7 +329,7 @@ function createConfiguredVaultMutationService({
     return typeof adapter.inspectFileExists === 'function' ? adapter.inspectFileExists(vaultRelativePath).status : 'unavailable';
   }
 
-  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, source, transforms, vaultFileState, vaultId, vaultRoot });
+  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, reserveCaptureOperation, source, transforms, vaultFileState, vaultId, vaultRoot });
 }
 
 module.exports = { PACKAGE_TEMPORARY_SHIMS, WRITER_INVENTORY, assertNoUnclassifiedVaultWrites, assertPackageImportBoundary, assertWriterInventory, configuredVaultId, createConfiguredVaultMutationService };

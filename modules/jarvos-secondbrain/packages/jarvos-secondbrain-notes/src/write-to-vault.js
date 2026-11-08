@@ -39,8 +39,33 @@ function sanitizeTitle(title) {
   return String(title || '').trim().replace(/[/\\:*?"<>|]/g, '-');
 }
 
-function noteFilePath(title) {
-  return join(getVaultNotesDir(), `${sanitizeTitle(title)}.md`);
+// Reads a note only if every path segment from the vault root down to it is
+// real (no symlinks, including the notes folder itself) and it resolves inside
+// the vault; otherwise null. Without a known vault root nothing is read.
+function readContainedNote(filePath, vaultRoot) {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  if (typeof vaultRoot !== 'string' || !vaultRoot) return null;
+  try {
+    const rootReal = fs.realpathSync(vaultRoot);
+    const relative = path.relative(path.resolve(vaultRoot), path.resolve(filePath));
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    let current = path.resolve(vaultRoot);
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment);
+      if (fs.lstatSync(current).isSymbolicLink()) return null;
+    }
+    if (!fs.lstatSync(filePath).isFile()) return null;
+    if (!fs.realpathSync(filePath).startsWith(rootReal + path.sep)) return null;
+    const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try { return fs.readFileSync(fd, 'utf8'); } finally { fs.closeSync(fd); }
+  } catch {
+    return null;
+  }
+}
+
+function noteFilePath(title, notesDir = getVaultNotesDir()) {
+  return join(notesDir, `${sanitizeTitle(title)}.md`);
 }
 
 function buildNoteBody(title, content) {
@@ -315,7 +340,7 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, notesDir = getVaultNotesDir(), knowledgeDir, sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
   const collectedDrafting = collectDraftingDeclarations(drafting, content_origin_drafting);
   if (!collectedDrafting.ok) throw new Error(`Invalid note frontmatter: content_origin_drafting rejected: invalid_drafting:${collectedDrafting.reason}`);
   const draftingDeclaration = collectedDrafting.entries;
@@ -330,8 +355,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   }
 
   const safeName = sanitizeTitle(title);
-  const notesDir = getVaultNotesDir();
-  const filePath = noteFilePath(safeName);
+  const filePath = noteFilePath(safeName, notesDir);
   const created = !existsSync(filePath);
   // The fresh read below is only ever grounds for refusal, never proof that the
   // caller's state still holds: the operation is built from the caller's bytes
@@ -399,9 +423,19 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
     }],
   });
   const journal = { status: 'pending', linked: false, deferred: false, disabled: false, failed: false, reason: 'backlink dispatch is composed separately' };
-  const knowledge = hasBytes
-    ? optimizeNoteKnowledge({ filePath, notesDir, title: safeName, body, frontmatter: { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }, created, journal })
-    : null;
+  let knowledge = null;
+  if (hasBytes) {
+    // Historical acknowledgements do not describe newer appends or metadata edits.
+    const currentContent = receipt.replay ? readContainedNote(filePath, vaultRoot) : null;
+    // A replayed note that is no longer a plain file inside the vault
+    // (for example swapped for a link) is not read or indexed at all.
+    if (!receipt.replay || currentContent !== null) knowledge = optimizeNoteKnowledge({ filePath, notesDir, knowledgeDir, title: safeName,
+      body: currentContent === null ? body : rawBodyRemainder(currentContent),
+      frontmatter: currentContent === null
+        ? { ...normalizedFrontmatter, jarvos_note_id: persistedOperation.noteId }
+        : frontmatterToObject(parseFrontmatter(currentContent)),
+      created, journal });
+  }
 
   return {
     written: ['committed', 'already_satisfied'].includes(receipt?.status),
@@ -450,6 +484,7 @@ function main() {
 }
 
 module.exports = {
+  readContainedNote,
   main,
   NOTE_BODY_PRESERVATION_REFUSED,
   NoteBodyPreservationError,

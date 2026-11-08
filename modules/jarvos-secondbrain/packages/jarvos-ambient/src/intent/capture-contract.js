@@ -1,6 +1,7 @@
 'use strict';
 
 const { validateCaptureIdentity } = require('./capture-identity');
+const { validateCaptureOpId } = require('./capture-operation');
 const {
   CONTENT_ORIGINS,
   CONTENT_ORIGIN_BASES,
@@ -297,6 +298,11 @@ function validateContentOriginDeclaration(event = {}, errors, options = {}) {
 
 function validateCaptureEvent(event = {}, options = {}) {
   const errors = [];
+
+  if (event.opId !== undefined) {
+    try { validateCaptureOpId(event.opId); } catch (error) { errors.push(error.message); }
+    if (event.captureIdentity !== undefined) errors.push('opId and captureIdentity cannot be combined');
+  }
 
   if (event.captureIdentity !== undefined) {
     try { validateCaptureIdentity(event.captureIdentity); } catch (error) { errors.push(error.message); }

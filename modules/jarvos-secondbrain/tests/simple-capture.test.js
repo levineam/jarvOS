@@ -201,3 +201,12 @@ test('title and model must be single lines', () => {
   assert.throws(() => buildSimpleCaptureEvent({ ...base, kind: 'note', title: 'A test\ntitle' }), /single line/);
   assert.throws(() => buildSimpleCaptureEvent({ ...base, model: 'test\rmodel' }), /single line/);
 });
+
+test('an undated capture pinned to an earlier day reports that day, not today', () => {
+  const pinned = (date) => () => ({ ok: true, routing: { plan: { date } }, note: { title: 'Tidal gardens' }, artifactReceipt: { artifacts: [
+    { kind: 'journal', vaultRelativePath: `Journal/${date}.md`, outcome: 'committed' },
+  ] } });
+  assert.equal(simpleCapture({ ...base, kind: 'journal' }, { capture: pinned('2000-01-01') }).message, 'Saved to Journal for 2000-01-01.');
+  const today = require('../adapters/obsidian/src/vault-storage-adapter').todayDate();
+  assert.equal(simpleCapture({ ...base, kind: 'journal' }, { capture: pinned(today) }).message, "Saved to today's Journal.");
+});

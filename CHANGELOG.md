@@ -300,6 +300,9 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ### Features
 
+* **capture (prj_unified_capture):** `jarvos inbox apply` applies phone capture requests from `phanos/inbox/` exactly once and writes receipts the phone reads.
+* **capture (prj_unified_capture):** `jarvos capture --op-id` / `jarvos_capture op_id`: replaying the same capture never saves it twice (exactly-once by operation id).
+
 * **capture (prj_unified_capture):** adapters keep the capture guideline current in each harness's instructions through a managed block (backup first, nothing else touched); replace Claude's old "Secondbrain Capture Rule", add Grok Bot `jarvos_capture`, and save bundled Desktop agent journal entries through the capture path.
 
 * **capture (prj_unified_capture):** add `jarvos_capture` (MCP) and `jarvos capture` (CLI), one way for every harness to save to Ideas, Journal or a linked note, with provenance filled in by the tool; the shared capture guideline ships in `jarvos_capture`'s description and the session-start packet. `jarvos_create_note` is deprecated and kept for one release.

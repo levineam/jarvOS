@@ -2973,8 +2973,9 @@ test('MCP capture shares the guideline and rejects invalid input before capture'
   assert.deepEqual(tool.inputSchema.properties.kind.enum, ['idea', 'journal', 'note']);
   assert.deepEqual(tool.inputSchema.properties.words.enum, ['user', 'assistant', 'mixed']);
   assert.deepEqual(tool.inputSchema.properties.asked.enum, ['explicit', 'accepted_offer']);
+  assert.equal(tool.inputSchema.properties.op_id.pattern, '^[A-Za-z0-9][A-Za-z0-9._-]{7,79}$');
   const input = { kind: 'idea', text: 'A test thought about tidal gardens', words: 'user', asked: 'explicit' };
-  for (const [key, value] of [['kind', 'project'], ['words', 'human'], ['asked', 'unasked'], ['title', 'Tidal gardens'], ['source', 'forged']]) {
+  for (const [key, value] of [['kind', 'project'], ['words', 'human'], ['asked', 'unasked'], ['title', 'Tidal gardens'], ['source', 'forged'], ['op_id', 'short'], ['op_id', 'x'.repeat(81)], ['op_id', null]]) {
     await assert.rejects(() => callTool('jarvos_capture', { ...input, [key]: value }));
   }
   assert.match(TOOLS.find((entry) => entry.name === 'jarvos_create_note').description, /^Deprecated:/);
@@ -2989,10 +2990,12 @@ test('MCP capture source precedence and client initialize fallback use the host 
     const { handle, callTool } = require('../scripts/jarvos-mcp');
     (async () => {
       await handle({ id: 1, method: 'initialize', params: { clientInfo: { name: 'Test Harness' } } });
-      const input = { kind: 'idea', words: 'user', asked: 'explicit', text: 'A test thought about tidal gardens' };
+      const input = { kind: 'idea', words: 'user', asked: 'explicit', text: 'A test thought about tidal gardens', op_id: 'test-operation-001' };
       delete process.env.JARVOS_CAPTURE_SOURCE; delete process.env.JARVOS_COMMON_WORK_HARNESS;
       const response = await callTool('jarvos_capture', input);
       assert.equal(received.source, 'test harness');
+      assert.equal(received.opId, input.op_id);
+      assert.equal(received.op_id, undefined);
       assert.equal(response.isError, true);
       assert.equal(response.content[0].text, 'Not saved: test pending receipt');
       for (const [harness, source] of [['claude', 'claude-code'], ['codex', 'codex'], ['hermes', 'hermes'], ['test-other', 'test-other']]) {

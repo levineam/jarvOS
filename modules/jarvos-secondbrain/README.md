@@ -247,6 +247,13 @@ terminal owner.
 The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
 guessed daily journal files under `Notes/`.
 
+## Synced Phone Inbox
+
+`jarvos inbox apply [--vault <abs path>] [--limit N] [--json]` applies complete
+phone capture requests from `phanos/inbox/` through simple capture in process,
+using `opId` for exactly-once saves, and writes receipts the phone reads.
+See [request/receipt formats and operation](docs/operations/inbox-apply.md).
+
 ## Journal Backlink Recovery
 
 When a note is written but its daily journal backlink is deferred, use the

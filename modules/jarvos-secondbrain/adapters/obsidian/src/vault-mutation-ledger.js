@@ -59,11 +59,17 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     throw new Error('Timed out acquiring vault mutation ledger lock');
   }
   function transaction(fn) {
-    const held = lock();
-    try { return fn(); }
+    let held;
+    try { held = lock(); return fn(); }
+    catch (error) {
+      if (['EACCES', 'EPERM'].includes(error.code)) error.ledgerIntegrity = true;
+      throw error;
+    }
     finally {
-      try { fsImpl.closeSync(held.fd); } catch {}
-      try { if (JSON.parse(fsImpl.readFileSync(lockPath, 'utf8'))?.ownerId === held.ownerId) fsImpl.unlinkSync(lockPath); } catch {}
+      if (held) {
+        try { fsImpl.closeSync(held.fd); } catch {}
+        try { if (JSON.parse(fsImpl.readFileSync(lockPath, 'utf8'))?.ownerId === held.ownerId) fsImpl.unlinkSync(lockPath); } catch {}
+      }
     }
   }
   function quarantineUnlocked(raw, reason) {
@@ -134,6 +140,35 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (evidence !== undefined) record.evidence = evidence;
   }
   function ensure(operation) { return transaction(() => { const data = readUnlocked({ repair: true }); const { record, created } = ensureUnlocked(data, operation); if (created) writeAtomic(filePath, data, fsImpl); return record; }); }
+  // Atomic ledger replacements permit strict verification without a repair or lock write.
+  function verify() {
+    try {
+      const data = readUnlocked();
+      if (Object.hasOwn(data, 'captures') && (!data.captures || typeof data.captures !== 'object' || Array.isArray(data.captures))) {
+        throw new Error('Invalid capture operation reservations');
+      }
+      return data;
+    } catch (error) { throw Object.assign(error, { ledgerIntegrity: true }); }
+  }
+  function reserveCapture({ intentId, requestHash, vaultId, plan }) { return transaction(() => {
+    if (typeof intentId !== 'string' || !/^capture:op:[a-f0-9]{64}$/.test(intentId)
+      || typeof requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(requestHash)
+      || typeof vaultId !== 'string' || !vaultId || !plan || typeof plan !== 'object') throw new Error('Invalid capture operation reservation');
+    // Unlike repair reads, a corrupt ledger must never forget an operation ID
+    // and admit another capture. The reservation precedes every vault mutation.
+    const data = verify();
+    if (!Object.hasOwn(data, 'captures')) data.captures = {};
+    const existing = data.captures[intentId];
+    if (existing) {
+      if (existing.requestHash !== requestHash || existing.vaultId !== vaultId) throw Object.assign(new Error('this operation id was already used for different content'), { validation: true });
+      if (!existing.plan || typeof existing.plan !== 'object') throw Object.assign(new Error('Invalid stored capture operation plan'), { ledgerIntegrity: true });
+      return existing;
+    }
+    const reservation = { requestHash, vaultId, plan };
+    data.captures[intentId] = reservation;
+    writeAtomic(filePath, data, fsImpl);
+    return reservation;
+  }); }
   // Allocate the FIFO sequence and persist the complete operation in one
   // transaction. Callers may use any positive placeholder sequence; an
   // existing operationId keeps its original durable sequence on retry.
@@ -224,7 +259,7 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     return { ...data, operations, sequences: data.sequences && typeof data.sequences === 'object' && !Array.isArray(data.sequences) ? data.sequences : {} };
   }
   function active() { return Object.values(read().operations).filter((record) => !TERMINAL.has(record.status) && !isNonBlockingQuarantine(record)).sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
-  function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
-  return Object.freeze({ active, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, peek, planNext, read, resolve, transition, quarantine, pruneRetained, filePath });
+  function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (!id.startsWith('capture:op:') && TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
+  return Object.freeze({ active, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, peek, planNext, read, verify, reserveCapture, resolve, transition, quarantine, pruneRetained, filePath });
 }
 module.exports = { BLOCKING, STATES, TERMINAL, isNonBlockingQuarantine, createVaultMutationLedger };
