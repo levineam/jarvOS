@@ -821,3 +821,22 @@ test('a ledger with a wrong file mode is restored to 0600 with its records kept,
   assert.equal(fs.statSync(ledgerPath).mode & 0o777, 0o600);
   assert.ok(JSON.parse(fs.readFileSync(ledgerPath, 'utf8')).captures[reservation.intentId]);
 });
+
+test('a symlinked alias of the configured vault keeps the configured journal and notes folders', async (t) => {
+  const f = fixture(t);
+  const alias = path.join(f.root, 'vault-alias');
+  fs.symlinkSync(f.vaultRoot, alias);
+  const journalDir = path.join(f.vaultRoot, 'Custom Journal');
+  const notesDir = path.join(f.vaultRoot, 'Custom Notes');
+  const keys = ['JARVOS_VAULT_DIR', 'JARVOS_JOURNAL_DIR', 'JARVOS_NOTES_DIR', 'JARVOS_CONFIG_PATH'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { JARVOS_VAULT_DIR: f.vaultRoot, JARVOS_JOURNAL_DIR: journalDir, JARVOS_NOTES_DIR: notesDir, JARVOS_CONFIG_PATH: path.join(f.root, 'missing-config.json') });
+  t.after(() => { for (const key of keys) { if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key]; } });
+  f.put();
+  await f.apply({ vaultRoot: alias });
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].options.vaultRoot, f.vaultRoot);
+  assert.equal(f.calls[0].options.journalDir, journalDir);
+  assert.equal(f.calls[0].options.notesDir, notesDir);
+  assert.equal(f.calls[0].options.knowledgeDir, undefined);
+});

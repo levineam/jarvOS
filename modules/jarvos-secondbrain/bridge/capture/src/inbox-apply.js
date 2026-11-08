@@ -204,7 +204,11 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
   if (!fs.statSync(vaultRoot).isDirectory()) throw new Error('vaultRoot must be a directory');
   vaultRoot = path.resolve(vaultRoot);
   const { paths } = resolveConfig();
-  const configuredVault = vaultRoot === path.resolve(paths.vault);
+  // Compare real paths so a symlinked alias of the configured vault keeps its configured folders.
+  const realOrResolved = (value) => { try { return fs.realpathSync(value); } catch { return path.resolve(value); } };
+  const configuredVault = realOrResolved(vaultRoot) === realOrResolved(paths.vault);
+  // Use the configured spelling of the root too, so root and destinations stay lexically consistent for the storage adapter.
+  if (configuredVault) vaultRoot = path.resolve(paths.vault);
   const journalDir = configuredVault ? paths.journal : path.join(vaultRoot, 'Journal');
   const notesDir = configuredVault ? paths.notes : path.join(vaultRoot, 'Notes');
   const knowledgeDir = configuredVault ? undefined : path.join(vaultRoot, '.jarvos', 'knowledge');
