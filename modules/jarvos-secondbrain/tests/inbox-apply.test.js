@@ -835,6 +835,7 @@ test('a symlinked alias of the configured vault keeps the configured journal and
   f.put();
   await f.apply({ vaultRoot: alias });
   assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].options.vaultRoot, f.vaultRoot);
   assert.equal(f.calls[0].options.journalDir, journalDir);
   assert.equal(f.calls[0].options.notesDir, notesDir);
   assert.equal(f.calls[0].options.knowledgeDir, undefined);
