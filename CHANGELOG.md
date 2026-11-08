@@ -315,6 +315,8 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ### Bug Fixes
 
+* **secondbrain:** restore unsafe ledger permissions without dropping records; refuse unrecoverable modes and non-file paths, and preserve corrupt ledger text in quarantine.
+
 * **secondbrain:** reject invalid mutations before ledger planning and let journal writes proceed past pre-dispatch quarantine while preserving ambiguous-operation guards.
 
 * **secondbrain:** omit origin markers from journal Ideas while retaining ledger provenance; add guarded marker cleanup and restore.

@@ -80,14 +80,29 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     try { fsImpl.chmodSync(file, 0o600); } catch {}
   }
   function readUnlocked({ repair = false } = {}) {
-    let data;
+    let stat;
     try {
-      const stat = fsImpl.statSync(filePath);
-      if (unsafeMode(stat)) throw new Error('ledger permissions are unsafe');
-      data = JSON.parse(fsImpl.readFileSync(filePath, 'utf8'));
+      stat = fsImpl.lstatSync(filePath);
     } catch (error) {
       if (error.code === 'ENOENT') return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} };
-      if (repair) { quarantineUnlocked({ rawLedger: true }, error.message); return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} }; }
+      throw error;
+    }
+    if (!stat.isFile()) throw new Error('ledger path must be a regular file');
+    if (unsafeMode(stat)) {
+      try {
+        fsImpl.chmodSync(filePath, 0o600);
+        stat = fsImpl.lstatSync(filePath);
+        if (!stat.isFile() || unsafeMode(stat)) throw new Error('unsafe ledger mode');
+      } catch {
+        throw new Error('ledger permissions are unsafe and could not be restored to 0600');
+      }
+    }
+    const rawText = fsImpl.readFileSync(filePath, 'utf8');
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (error) {
+      if (repair) { quarantineUnlocked({ rawLedger: true, rawText }, error.message); return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} }; }
       throw error;
     }
     if (data?.schemaVersion !== 1 || !data.operations || !data.claims || typeof data.operations !== 'object') {
@@ -224,7 +239,9 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
   function peek() {
     let data;
     try {
-      if (unsafeMode(fsImpl.statSync(filePath))) throw new Error('ledger permissions are unsafe');
+      const stat = fsImpl.lstatSync(filePath);
+      if (!stat.isFile()) throw new Error('ledger path must be a regular file');
+      if (unsafeMode(stat)) throw new Error('ledger permissions are unsafe');
       data = JSON.parse(fsImpl.readFileSync(filePath, 'utf8'));
     } catch (error) {
       if (error.code === 'ENOENT') return { schemaVersion: 1, operations: {}, claims: {}, sequences: {} };
