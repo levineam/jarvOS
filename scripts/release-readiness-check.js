@@ -236,10 +236,10 @@ function checkReleaseReadiness(opts = {}) {
     if (missing.length) fail('release notes draft', `Missing sections in ${releaseNotesPath}: ${missing.join(', ')}`);
     else if (/ISSUE\b|VERSION\b/.test(notes)) fail('release notes draft', `${releaseNotesPath} still contains placeholders`);
     else pass('release notes draft', releaseNotesPath);
-  } else if (opts.allowUnreleased) {
-    pass('release notes draft', `${releaseNotesPath} deferred for unreleased candidate`);
   } else {
-    fail('release notes draft', `${releaseNotesPath} missing`);
+    // Release Please writes the notes (CHANGELOG.md section and GitHub Release);
+    // a hand-written docs/releases file is optional and checked only when present.
+    pass('release notes draft', `${releaseNotesPath} not present; Release Please notes in CHANGELOG.md`);
   }
 
   const gbrainNarrativeFiles = [

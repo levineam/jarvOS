@@ -58,8 +58,12 @@ test('requires matching valid release versions without pinning the current versi
 test('pins the Release Please config to the public baseline and root package identity', () => {
   const config = readJson('release-please-config.json');
   assert.equal(config['bootstrap-sha'], BASELINE);
-  assert.equal(config['last-release-sha'], BASELINE);
+  // Release Please finds the last release from the package tag; a fixed
+  // last-release-sha would keep re-reading history from that old commit.
+  assert.equal(Object.hasOwn(config, 'last-release-sha'), false);
   assert.equal(config['include-v-in-tag'], true);
+  // Before 1.0 a breaking change is a minor bump; a major version needs an explicit decision.
+  assert.equal(config['bump-minor-pre-major'], true);
   assert.equal(config.packages['.']['release-type'], 'node');
   assert.equal(config.packages['.']['package-name'], 'jarvos-bootstrap');
   assert.match(createHash('sha256').update(JSON.stringify(config)).digest('hex'), /^[a-f0-9]{64}$/);
