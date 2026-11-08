@@ -295,3 +295,14 @@ test('candidate release gate passes as unreleased work without authorizing a ver
   assert.equal(report.results.find((result) => result.label === 'CHANGELOG.md version section').ok, true);
   assert.equal(report.results.find((result) => result.label === 'git tag preflight').ok, true);
 });
+
+test('strict release gate does not require a hand-written docs/releases file that Release Please never writes', () => {
+  const report = checkReleaseReadiness({
+    allowDirty: true,
+    allowExistingTag: true,
+    skipSmoke: true,
+  });
+  const notes = report.results.find((result) => result.label === 'release notes draft');
+  assert.equal(notes.ok, true);
+  assert.match(notes.detail, /not present; Release Please notes in CHANGELOG\.md|docs\/releases\//);
+});

@@ -24,6 +24,8 @@ release-level decision.
 - Release Please is the sole version authority. It derives the next SemVer
   from the immutable last release and conventional commits on `main`. No routine
   `Release-As` footer or manually selected target is valid.
+- Before 1.0, a breaking change is a minor bump (`bump-minor-pre-major`). A
+  major version (1.0 or above) needs the owner's explicit approval.
 
 ## Unreleased Work and Drift
 
@@ -118,7 +120,10 @@ A release is not ready while any of these are true:
 - The smoke test fails.
 - `package.json` and the git tag disagree.
 - `CHANGELOG.md` has no section for the release.
-- `docs/releases/<version>.md` is missing or still contains placeholders.
+- A hand-written `docs/releases/<version>.md`, when one exists, is missing
+  sections or still contains placeholders. Release Please writes the release
+  notes (the `CHANGELOG.md` section and the GitHub Release), so the file is
+  optional.
 - README or release-process prose still describes a prior current release or a
   guessed target instead of the observed published release/proposal.
 - Install or update instructions do not match the shipped files.
@@ -153,7 +158,7 @@ Closeout evidence should use this shape:
 
 ```text
 Documentation impact: README, release-notes
-Evidence: README release-status section updated; docs/releases/vX.Y.Z.md updated.
+Evidence: README release-status section updated; Release Please notes reviewed.
 Follow-up: none.
 ```
 
