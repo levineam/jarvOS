@@ -2,13 +2,6 @@
 
 Release sections describe user-facing jarvOS changes. Historical public-doc sync entries are preserved below for traceability.
 
-## [Unreleased]
-
-### Features
-
-- `jarvos inbox apply`: applies phone capture requests from `phanos/inbox/` exactly once and writes receipts the phone reads.
-- `jarvos capture --op-id` / `jarvos_capture op_id`: replaying the same capture never saves it twice (exactly-once by operation id).
-
 ## [0.11.0](https://github.com/levineam/jarvOS/compare/jarvos-bootstrap-v0.10.0...jarvos-bootstrap-v0.11.0) (2026-09-19)
 
 
@@ -306,6 +299,9 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 * **journal (prj_unified_capture):** the daily journal section "📓 Journal Entry" is now "📓 Journal". Both headings are still read and written into, so nothing breaks; `scripts/rename-journal-heading.js` renames the heading in existing daily files with a dry run, a backup outside the vault, and restore. Anything that matches the old heading text directly must accept the new one.
 
 ### Features
+
+* **capture (prj_unified_capture):** `jarvos inbox apply` applies phone capture requests from `phanos/inbox/` exactly once and writes receipts the phone reads.
+* **capture (prj_unified_capture):** `jarvos capture --op-id` / `jarvos_capture op_id`: replaying the same capture never saves it twice (exactly-once by operation id).
 
 * **capture (prj_unified_capture):** adapters keep the capture guideline current in each harness's instructions through a managed block (backup first, nothing else touched); replace Claude's old "Secondbrain Capture Rule", add Grok Bot `jarvos_capture`, and save bundled Desktop agent journal entries through the capture path.
 
