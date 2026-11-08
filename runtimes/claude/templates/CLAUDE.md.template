@@ -50,11 +50,11 @@ do not apply to Claude Code:
 | Sessions-spawn model parameter rules | Claude Code uses the `Agent` tool (`subagent_type`), not `sessions_spawn`. |
 | Default subagent model rules (gpt-5.x, GLM) | Claude Code runs Anthropic models. Map equivalents: Opus for high-judgment, Sonnet for standard, Haiku for fast. |
 | ACP-first / PTY-fallback coding rules | Claude Code has its own coding loop; ACP routing is not exposed here. |
-| Agent-specific Paperclip routing rules (e.g., Michael) | Not applicable when Charlie/Claude Code is the executor. |
 
 All other rules apply directly. In particular: external-message approval,
 plan-first, fix-immediately, tiered auto-merge for safety-rail files,
-retry-with-context for subagents, Paperclip blocker routing, QMD-first (mapped
+retry-with-context for subagents, blocker routing through the PMS project file
+(record the owner and blocker in the Plan or Log), QMD-first (mapped
 to `jarvos_recall` here), read-before-acting under ambiguity, rule-wiring
 auto-trigger, and enforcement assessment for HARD rules.
 
@@ -82,8 +82,9 @@ use `!` to signal importance.
   fixes, smoke-test gaps; `feat:` for new capabilities, new MCP tools,
   new runtime adapters, new skills, workflow improvements.
 - **Branch naming and PR titles** — mirror the commit type, e.g.
-  `fix/SUP-XXXX/...` / `fix(SUP-XXXX): …` or `feat/SUP-XXXX/...` /
-  `feat(SUP-XXXX): …`.
+  `fix/<project-id>/<plan-step>` / `fix(<project-id>): …` or
+  `feat/<project-id>/<plan-step>` / `feat(<project-id>): …`.
+  Reference the PMS project file and Plan step.
 - **CHANGELOG.md** — release-please maintains this file; do not hand-edit
   version headers.
 - **Scope discipline** — reject scope creep that crosses release lane
@@ -134,8 +135,8 @@ When a candidate is found, raise it inline using this format:
 > config var, write template]
 > **Recommend:** [ship now / queue for later / pass]
 
-Do not open PRs, branches, or Paperclip issues unilaterally — surface the
-candidate and let the user decide.
+Do not open PRs or branches, or add upstream work as a Plan step in the PMS
+project file unilaterally — surface the candidate and let the user decide.
 
 ### What not to do
 
@@ -148,14 +149,16 @@ candidate and let the user decide.
 
 Every Claude Code session in this workspace starts with a hydrated Working
 Context Packet, injected by the jarvOS `SessionStart` hook (configured in
-`~/.claude/settings.json`). It includes current Paperclip work, today's
-journal, linked notes, the jarvOS ontology context packet, and a Hydration
+`~/.claude/settings.json`). It includes current project state from the PMS
+project files when the host sets `JARVOS_PROJECTS_DIR`, today's journal,
+linked notes, the jarvOS ontology context packet, and a Hydration
 Report. The same hook re-fires after compact and resume with a smaller packet
 so the session can re-orient without a full re-brief.
 
 ### MCP tools (registered as `jarvos`)
 
-- `jarvos_current_work` — compact Paperclip current-work summary
+- `jarvos_current_work` — diagnostic compatibility tool that still reads
+  Paperclip; being retired in favour of `jarvos_projects_context`.
 - `jarvos_recall` — GBrain/graph recall bundle (use in place of QMD; same brain)
 - `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
 - `jarvos_create_note` (deprecated; use jarvos_capture with kind note).
@@ -195,7 +198,7 @@ node {{JARVOS_CAPTURE_SCRIPT}}
   is the surface that carries judgment.
 - `jarvos_capture` — save requested Ideas, Journal entries, or linked notes with declared provenance.
 - `jarvos_create_note` (deprecated; use jarvos_capture with kind note).
-- `jarvos_current_work` / `jarvos_projects_context` — consult at the start
+- `jarvos_projects_context` — consult at the start
   of substantive work to orient on what is already in flight, before
   proposing new work.
 - `jarvos_todo_*` — claim an item before starting work another agent might

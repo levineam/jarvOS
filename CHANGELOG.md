@@ -311,6 +311,8 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ### Bug Fixes
 
+* **claude:** route work and blockers through PMS project files and Plan steps instead of Paperclip in the generated baseline; describe project-file hydration and the retiring current-work tool.
+
 * **secondbrain:** restore unsafe ledger permissions without dropping records; refuse unrecoverable modes and non-file paths, and preserve corrupt ledger text in quarantine.
 
 * **secondbrain:** reject invalid mutations before ledger planning and let journal writes proceed past pre-dispatch quarantine while preserving ambiguous-operation guards.
