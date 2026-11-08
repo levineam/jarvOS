@@ -102,6 +102,8 @@ function parseRequest(source, opId, device) {
   return input;
 }
 
+const TRANSIENT_READ_ERRORS = ['EIO', 'ETIMEDOUT', 'ETIME', 'EAGAIN', 'EBUSY', 'EINTR', 'ENODATA', 'ENOENT', 'ENXIO', 'EACCES', 'EPERM'];
+
 function pendingReceipt(inboxRoot, device, opId, external) {
   const folder = directory(inboxRoot, ['receipts', device]);
   if (!folder) return null;
@@ -313,7 +315,14 @@ async function applyInbox({ vaultRoot, inboxRoot, limit = 50, capture = simpleCa
       if (!stat(item.file)?.isFile()) throw new Error('request file changed or is a symlink');
       const record = { device: item.device, opId: item.opId, status: 'skipped' };
       result.requests.push(record);
-      const currentReceipt = pendingReceipt(inboxRoot, item.device, item.opId, external);
+      let currentReceipt;
+      try {
+        currentReceipt = pendingReceipt(inboxRoot, item.device, item.opId, external);
+      } catch (error) {
+        // A synced receipt that isn't readable yet (cloud placeholder) only delays this request.
+        if (TRANSIENT_READ_ERRORS.includes(error.code)) { record.status = 'incomplete'; counts.incomplete++; continue; }
+        throw error;
+      }
       if (currentReceipt === false) { counts.skipped++; continue; }
       const applied = localTimestamp(now());
       let input;
@@ -322,7 +331,7 @@ async function applyInbox({ vaultRoot, inboxRoot, limit = 50, capture = simpleCa
       try {
         input = parseRequest(readFile(item.file), item.opId, item.device);
       } catch (error) {
-        if (['EIO', 'ETIMEDOUT', 'ETIME', 'EAGAIN', 'EBUSY', 'EINTR', 'ENODATA', 'ENOENT', 'ENXIO', 'EACCES', 'EPERM'].includes(error.code)) {
+        if (TRANSIENT_READ_ERRORS.includes(error.code)) {
           record.status = 'incomplete'; counts.incomplete++; continue;
         }
         status = error.validation === true ? 'invalid' : 'not_confirmed';

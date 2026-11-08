@@ -1087,3 +1087,26 @@ test('an invalid request with a very long filename still gets an invalid receipt
   assert.equal(result.counts.invalid, 1);
   assert.match(fs.readFileSync(path.join(inboxRoot, 'receipts', device, `${stem}.md`), 'utf8'), /status: invalid/);
 });
+
+for (const code of ['EIO', 'ETIMEDOUT']) {
+  test(`an unreadable synced receipt (${code}) delays only its own request and the batch continues`, async (t) => {
+    const f = fixture(t);
+    const e = externalInbox(f);
+    fs.utimesSync(path.join(e.folder, `${opId}.md`), 1, 1);
+    fs.mkdirSync(path.dirname(e.receipt), { recursive: true });
+    fs.writeFileSync(e.receipt, '---\nphanos_receipt: capture/v1\nstatus: not_confirmed\n---\nInvented earlier attempt.\n');
+    const laterId = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+    fs.writeFileSync(path.join(e.folder, `${laterId}.md`), request({ op_id: laterId }, 'A later invented line.'));
+    const open = fs.openSync;
+    const receiptPath = fs.realpathSync(e.receipt);
+    t.mock.method(fs, 'openSync', function(file, ...args) {
+      if (file === receiptPath) throw Object.assign(new Error('Invented unavailable receipt.'), { code });
+      return open.call(this, file, ...args);
+    });
+    const result = await f.apply({ inboxRoot: e.inboxRoot });
+    assert.equal(result.counts.incomplete, 1);
+    assert.equal(result.counts.saved, 1);
+    assert.equal(result.requests.find((r) => r.opId === opId).status, 'incomplete');
+    assert.equal(fs.readFileSync(e.receipt, 'utf8').includes('Invented earlier attempt.'), true);
+  });
+}
