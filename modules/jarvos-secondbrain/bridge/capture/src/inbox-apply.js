@@ -247,6 +247,7 @@ async function applyInbox({ vaultRoot, inboxRoot, limit = 50, capture = simpleCa
     inboxRoot = path.join(vaultRoot, 'phanos');
   }
   if (typeof inboxRoot !== 'string' || !path.isAbsolute(inboxRoot)) throw new Error('inboxRoot must be an absolute path');
+  const requestedInboxRoot = inboxRoot;
   inboxRoot = realPath(inboxRoot);
   const stateRoot = stateDirectory();
   const ledgerRoot = realPath(path.join(stateRoot, 'vault-mutations'));
@@ -255,6 +256,20 @@ async function applyInbox({ vaultRoot, inboxRoot, limit = 50, capture = simpleCa
     throw new Error('inboxRoot must not be the vault root, a filesystem root, or the jarvOS state directory');
   }
   const external = !inboxRoot.startsWith(realVault + path.sep);
+  // Identity of the inbox root as resolved now. Before each external receipt
+  // write it must still resolve to the same directory, outside the vault, so a
+  // parent swapped for a link mid-run can't redirect receipts into the vault.
+  const rootIdentity = external ? fs.statSync(inboxRoot) : null;
+  const assertRootUnchanged = () => {
+    if (!external) return;
+    const resolved = realPath(requestedInboxRoot);
+    const now = stat(resolved);
+    if (resolved !== inboxRoot || !now?.isDirectory() || now.dev !== rootIdentity.dev || now.ino !== rootIdentity.ino
+      || resolved === realVault || resolved.startsWith(realVault + path.sep)
+      || realVault.startsWith(path.join(resolved, 'receipts') + path.sep)) {
+      throw Object.assign(new Error('inbox root changed during the run; stopped before writing receipts'), { ledgerIntegrity: true });
+    }
+  };
   const receiptsRoot = path.join(inboxRoot, 'receipts');
   if (external && (realVault === receiptsRoot || realVault.startsWith(receiptsRoot + path.sep))) {
     throw new Error('external receipt directory must not overlap the vault');
@@ -328,6 +343,7 @@ async function applyInbox({ vaultRoot, inboxRoot, limit = 50, capture = simpleCa
           message = error.validation === true ? error.message : TEMPORARY_PROBLEM;
         }
       }
+      assertRootUnchanged();
       const receipt = await writeReceipt(mutationService, vaultRoot, inboxRoot, external, item.device, item.opId, input?.kind, status, message, applied, currentReceipt);
       if (!['committed', 'already_satisfied'].includes(receipt.status) || receipt.obsidian !== 'acknowledged') {
         record.receipt = { status: receipt.status, obsidian: receipt.obsidian, ...(receipt.message ? { message: receipt.message } : {}) };

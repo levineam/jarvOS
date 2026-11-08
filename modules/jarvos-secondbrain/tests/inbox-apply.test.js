@@ -1057,3 +1057,21 @@ test('an external receipt tree cannot contain the vault', async (t) => {
   }
   assert.deepEqual(f.calls, []);
 });
+
+test('an external inbox whose parent is swapped for a link into the vault mid-run writes no receipts there', async (t) => {
+  const f = fixture(t);
+  const cloud = path.join(f.root, 'cloud');
+  const inboxRoot = path.join(cloud, 'phone', 'root');
+  fs.mkdirSync(path.join(inboxRoot, 'inbox', device), { recursive: true });
+  fs.writeFileSync(path.join(inboxRoot, 'inbox', device, `${opId}.md`), request());
+  // The vault gets a same-shaped tree so a followed link would "work".
+  fs.mkdirSync(path.join(f.vaultRoot, 'root'), { recursive: true });
+  const result = await f.apply({ inboxRoot, capture: () => {
+    fs.renameSync(path.join(cloud, 'phone'), path.join(cloud, 'phone-moved'));
+    fs.symlinkSync(f.vaultRoot, path.join(cloud, 'phone'));
+    return { ok: true, message: 'Saved an invented capture.' };
+  } });
+  assert.equal(result.stopped, 'ledger integrity');
+  assert.equal(fs.existsSync(path.join(f.vaultRoot, 'root', 'receipts')), false);
+  assert.equal(fs.existsSync(path.join(cloud, 'phone-moved', 'root', 'receipts')), false);
+});
