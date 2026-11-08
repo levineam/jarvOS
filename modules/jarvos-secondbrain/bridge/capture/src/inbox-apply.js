@@ -126,7 +126,8 @@ function writeReceipt(service, vaultRoot, inboxRoot, external, device, opId, kin
   const body = String(message).replace(/[\r\n\u0085\u2028\u2029]+/g, ' ').trim();
   const content = `---\nphanos_receipt: capture/v1\nop_id: ${ID.test(opId) ? opId : JSON.stringify(opId)}\nstatus: ${status}\n${kind ? `kind: ${kind}\n` : ''}applied: ${applied}\n---\n${body}\n`;
   if (external) {
-    const temporary = path.join(folder, `.${opId}.${randomUUID()}.tmp`);
+    // UUID-only name: a long request name must not push the temp name past filename limits.
+    const temporary = path.join(folder, `.${randomUUID()}.tmp`);
     const fd = fs.openSync(temporary, 'wx', 0o644);
     try {
       fs.writeFileSync(fd, content);

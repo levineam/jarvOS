@@ -1075,3 +1075,15 @@ test('an external inbox whose parent is swapped for a link into the vault mid-ru
   assert.equal(fs.existsSync(path.join(f.vaultRoot, 'root', 'receipts')), false);
   assert.equal(fs.existsSync(path.join(cloud, 'phone-moved', 'root', 'receipts')), false);
 });
+
+test('an invalid request with a very long filename still gets an invalid receipt in an external inbox', async (t) => {
+  const f = fixture(t);
+  const inboxRoot = path.join(f.root, 'long-names');
+  const folder = path.join(inboxRoot, 'inbox', device);
+  fs.mkdirSync(folder, { recursive: true });
+  const stem = 'a'.repeat(220);
+  fs.writeFileSync(path.join(folder, `${stem}.md`), request());
+  const result = await f.apply({ inboxRoot });
+  assert.equal(result.counts.invalid, 1);
+  assert.match(fs.readFileSync(path.join(inboxRoot, 'receipts', device, `${stem}.md`), 'utf8'), /status: invalid/);
+});
