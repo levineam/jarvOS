@@ -115,7 +115,7 @@ function pendingReceipt(inboxRoot, device, opId, external) {
   return statuses?.length === 1 && statuses[0].trim() === 'status: not_confirmed' ? content : false;
 }
 
-function writeReceipt(service, vaultRoot, inboxRoot, external, device, opId, kind, status, message, applied, expectedContent) {
+function writeReceipt(service, vaultRoot, inboxRoot, external, device, opId, kind, status, message, applied, expectedContent, assertRootUnchanged = () => {}) {
   const ledger = service.adapter?.ledger;
   const snapshot = ledger?.verify();
   const folder = directory(inboxRoot, ['receipts', device], true);
@@ -138,7 +138,11 @@ function writeReceipt(service, vaultRoot, inboxRoot, external, device, opId, kin
         return { status: 'conflict', obsidian: 'unacknowledged', message: 'receipt changed before replacement' };
       }
       // Compare immediately before rename; the local lock excludes another applier for this pair.
+      // Node has no openat/renameat, so the root's identity is rechecked right
+      // before and right after the rename; a change stops the run.
+      assertRootUnchanged();
       fs.renameSync(temporary, file);
+      assertRootUnchanged();
       return { status: 'committed', obsidian: 'acknowledged' };
     } finally {
       fs.closeSync(fd);
@@ -344,7 +348,7 @@ async function applyInbox({ vaultRoot, inboxRoot, limit = 50, capture = simpleCa
         }
       }
       assertRootUnchanged();
-      const receipt = await writeReceipt(mutationService, vaultRoot, inboxRoot, external, item.device, item.opId, input?.kind, status, message, applied, currentReceipt);
+      const receipt = await writeReceipt(mutationService, vaultRoot, inboxRoot, external, item.device, item.opId, input?.kind, status, message, applied, currentReceipt, assertRootUnchanged);
       if (!['committed', 'already_satisfied'].includes(receipt.status) || receipt.obsidian !== 'acknowledged') {
         record.receipt = { status: receipt.status, obsidian: receipt.obsidian, ...(receipt.message ? { message: receipt.message } : {}) };
       }
