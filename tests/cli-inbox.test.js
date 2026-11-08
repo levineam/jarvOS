@@ -101,12 +101,25 @@ test('inbox CLI resolves config, honors explicit vault, parses limit and returns
   assert.match(result.stdout, /saved 1.*invalid 1/);
 });
 
+test('inbox CLI passes an explicit inbox root with either flag syntax', async (t) => {
+  const f = fixture(t);
+  const inboxRoot = path.join(f.root, 'phone-captures');
+  for (const args of [['--inbox', inboxRoot], [`--inbox=${inboxRoot}`]]) {
+    const result = await invoke(['apply', ...args], f.env, (options) => {
+      assert.deepEqual(options, { vaultRoot: f.vaultRoot, inboxRoot, limit: 50 });
+      return summary;
+    });
+    assert.equal(result.code, 0, result.stderr);
+  }
+});
+
 test('inbox CLI help appears next to capture and works without accessing storage', async () => {
-  assert.match(renderHelp(), /jarvos capture[^\n]*\n  jarvos inbox apply \[--vault <abs path>\] \[--limit N\] \[--json\]/);
+  assert.match(renderHelp(), /jarvos capture[^\n]*\n  jarvos inbox apply \[--vault <abs path>\] \[--inbox <abs path>\] \[--limit N\] \[--json\]/);
   for (const args of [['--help'], ['apply', '--help'], ['apply', '-h']]) {
     const result = await invoke(args, {}, () => assert.fail('help must not apply'));
     assert.equal(result.code, 0);
     assert.match(result.stdout, /jarvos inbox apply/);
+    assert.match(result.stdout, /a folder synced by your phone's cloud drive/);
   }
   assert.deepEqual(normalizeArgvForInvocation(['inbox', 'apply'], 'jarvos-bootstrap'), ['inbox', 'apply']);
 });
@@ -114,7 +127,7 @@ test('inbox CLI help appears next to capture and works without accessing storage
 test('inbox CLI bad arguments exit 1 before applying', async (t) => {
   const f = fixture(t);
   for (const args of [[], ['other'], ['apply', 'extra'], ['apply', '--unknown'], ['apply', '--vault'], ['apply', '--vault', 'relative'],
-    ['apply', '--vault='], ['apply', '--limit'], ...['0', '-1', '1.5', 'NaN', '1e2', '', '9007199254740992'].map((n) => ['apply', `--limit=${n}`])]) {
+    ['apply', '--vault='], ['apply', '--inbox'], ['apply', '--inbox='], ['apply', '--inbox', 'relative'], ['apply', '--limit'], ...['0', '-1', '1.5', 'NaN', '1e2', '', '9007199254740992'].map((n) => ['apply', `--limit=${n}`])]) {
     const result = await invoke(args, f.env, () => assert.fail('bad args must not apply'));
     assert.equal(result.code, 1, JSON.stringify(args));
     assert.match(result.stderr, /^jarvos inbox apply failed:/);

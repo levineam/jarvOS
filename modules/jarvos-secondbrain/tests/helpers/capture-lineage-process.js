@@ -33,7 +33,7 @@ function flushAllCallbacks() {
 }
 
 const { root, capture, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
-  inboxNow = '2030-02-03T12:00:00Z', clockNow, journalFolder = 'Journal', notesFolder = 'Notes' } = JSON.parse(fs.readFileSync(0, 'utf8'));
+  inboxNow = '2030-02-03T12:00:00Z', inboxRoot, clockNow, journalFolder = 'Journal', notesFolder = 'Notes' } = JSON.parse(fs.readFileSync(0, 'utf8'));
 if (clockNow) {
   const RealDate = Date;
   global.Date = class extends RealDate {
@@ -114,7 +114,7 @@ async function main() {
   let result = null;
   let error = null;
   try {
-    if (inbox) result = await require('../../bridge/capture/src/inbox-apply').applyInbox({ vaultRoot,
+    if (inbox) result = await require('../../bridge/capture/src/inbox-apply').applyInbox({ vaultRoot, inboxRoot,
       mutationService: service, now: () => new Date(inboxNow), capture: (input, options) => {
         const lockPath = path.join(root, 'ledger.json.lock');
         if (fault === 'ledger_lock') fs.writeFileSync(lockPath, '{}', { flag: 'wx' });

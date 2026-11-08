@@ -3,7 +3,7 @@
 Run on a host that has the vault and the existing capture service configured:
 
 ```sh
-jarvos inbox apply [--vault <abs path>] [--limit N] [--json]
+jarvos inbox apply [--vault <abs path>] [--inbox <abs path>] [--limit N] [--json]
 ```
 
 `--vault` selects an absolute vault path; otherwise the shared `resolveConfig`
@@ -12,13 +12,22 @@ is 50 complete requests, oldest modification time first. Incomplete requests
 and terminal receipts do not consume the limit. A host timer or desktop app
 decides when and where to run it; this command installs no timer or host policy.
 
-The command reads `phanos/inbox/<device>/<opId>.md`, calls `simpleCapture` in
-process with source `phanos-mobile`, and publishes
-`phanos/receipts/<device>/<opId>.md` through the configured vault mutation
-service, creating missing receipt folders one segment at a time after checking
-each with `lstat`. It never changes inbox files. Capture
-artifacts and receipt Markdown use the same service and its acknowledgement
-rules. A missing capture acknowledgement is not reported as saved.
+`--inbox` selects an absolute inbox root, such as a folder synced by your phone's
+cloud drive in the background. Without it, the root is `<vault>/phanos`.
+For example: `jarvos inbox apply --vault /data/vault --inbox /data/phone-captures`.
+Requests are read from `<root>/inbox/<device>/<opId>.md` and receipts go to
+`<root>/receipts/<device>/<opId>.md`. Requests are never changed. Captures still
+save into the vault through `simpleCapture`, with source `phanos-mobile` and the
+configured vault mutation service. A missing capture acknowledgement is not
+reported as saved.
+
+Root containment uses resolved real paths. Receipts inside the vault use the
+configured mutation service; receipts outside it are operational files written
+directly using an exclusive hidden temporary file in the same folder, then
+rename. Missing receipt folders are created one segment at a time with `lstat`
+checks. The inbox root cannot be the vault root, a filesystem root, or the jarvOS
+state directory (including its descendants). An external root's receipt directory
+must not overlap the vault.
 
 ## Request format
 
@@ -46,7 +55,10 @@ LF and CRLF are accepted. The final non-empty line must be exactly
 `<!-- phanos:end -->`; a request without it is incomplete and gets no receipt.
 Trailing blank lines after the marker and one separator blank line before it
 are removed; the remaining text is passed verbatim to the capture layer.
-Hidden files and non-`.md` files are ignored. Files over 256 KB are invalid.
+Hidden files (including `.name.icloud` placeholders and temporary files) and
+non-`.md` files are ignored. Requests are read fully up to the 256 KB validation
+limit. A timeout, I/O error, or currently unreadable placeholder leaves a request
+incomplete, with no receipt, to retry next run. Files over 256 KB are invalid.
 
 The frontmatter is closed: only the keys above plus `title` are accepted;
 duplicate keys are invalid. `op_id` and `device` must match their filename stem
@@ -65,11 +77,16 @@ characters. Existing simple-capture text validation also applies.
 
 ## Receipt format and retries
 
-Receipts use LF. New receipts use the service's create operation; an existing
+Receipts use LF. Inside the vault, new receipts use the service's create operation; an existing
 `not_confirmed` receipt uses an exact-content guarded replacement. Each write
 has a stable mutation intent derived from its path, status, expected prior-content
 hash, and body message, excluding the `applied` timestamp. Pending writes resume
-the same ledger operation and original payload; acknowledged writes stay satisfied:
+the same ledger operation and original payload; earlier pending receipt operations
+settle first, and acknowledged writes stay satisfied. Outside the vault, a
+`not_confirmed` replacement compares the current receipt bytes with those read
+before capture immediately before rename; a concurrent edit produces a receipt
+conflict and is preserved. This compare-then-rename is not a distributed
+compare-and-swap against cloud writers.
 
 ```markdown
 ---
@@ -93,15 +110,18 @@ when no valid request could be parsed.
 An existing receipt is skipped unless its status is `not_confirmed`; that
 status is retried with the same operation ID and its receipt rewritten.
 Deleting a receipt also retries through the capture layer's durable `opId`
-guard. An acknowledged receipt operation is not recreated if its file is later
-deleted. Keep request content and IDs stable; an ID reused for changed content
+guard. Inside the vault, an acknowledged receipt operation is not recreated if
+its file is later deleted; external receipts can be recreated without duplicating
+the capture. Keep request content and IDs stable; an ID reused for changed content
 is invalid. Retrying after midnight preserves the original capture day.
 
 Symlinked inbox/receipt directory components, request files, and receipt
-targets are refused. One local run per vault holds an exclusive lock under
+targets below the inbox root are refused. One local run per vault and inbox root holds an exclusive lock under
 `$XDG_STATE_HOME/jarvos/vault-mutations/` (default `~/.local/state/`), keyed
-by the canonical vault path hash. A lock older than ten minutes
-is stale and can be reclaimed. State must be outside the
+by the canonical vault and inbox path pair hash. Different inbox roots for the
+same vault do not block each other. A lock belonging to a live local process is
+kept; a dead local owner's lock is reclaimed, and other locks expire after ten
+minutes. State must be outside the
 vault. This local lock is not a distributed lock between synced hosts.
 
 Normal output is one count summary line. `--json` returns `counts`,
@@ -116,7 +136,7 @@ filesystem failures exit 1.
 
 Desktop callers may import
 `bridge/capture/src/inbox-apply.js` and await
-`applyInbox({ vaultRoot, limit, capture, mutationService, now })`.
+`applyInbox({ vaultRoot, inboxRoot, limit, capture, mutationService, now })`.
 `capture` defaults to `simpleCapture` and receives the selected vault, Notes, and Journal directories
 and mutation service as its second argument. For the configured vault, these
 directories come from `resolveConfig().paths.notes` and `paths.journal`; another

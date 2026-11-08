@@ -778,7 +778,7 @@ test('abandoned ten-minute lock is reclaimed; lock and state stay outside the va
   const f = fixture(t); f.put();
   const folder = path.join(f.root, 'state/jarvos/vault-mutations');
   fs.mkdirSync(folder, { recursive: true });
-  const file = path.join(folder, `inbox-${createHash('sha256').update(fs.realpathSync(f.vaultRoot)).digest('hex')}.lock`);
+  const file = path.join(folder, `inbox-${createHash('sha256').update(JSON.stringify([fs.realpathSync(f.vaultRoot), fs.realpathSync(path.join(f.vaultRoot, 'phanos'))])).digest('hex')}.lock`);
   fs.writeFileSync(file, '{}');
   fs.utimesSync(file, new Date(0), new Date(0));
   assert.equal((await f.apply()).counts.saved, 1);
@@ -794,7 +794,7 @@ test('a lock held by a live run on this host is kept however old; a dead owner\'
   const f = fixture(t); f.put();
   const folder = path.join(f.root, 'state/jarvos/vault-mutations');
   fs.mkdirSync(folder, { recursive: true });
-  const file = path.join(folder, `inbox-${createHash('sha256').update(fs.realpathSync(f.vaultRoot)).digest('hex')}.lock`);
+  const file = path.join(folder, `inbox-${createHash('sha256').update(JSON.stringify([fs.realpathSync(f.vaultRoot), fs.realpathSync(path.join(f.vaultRoot, 'phanos'))])).digest('hex')}.lock`);
   // Live owner (this test process), lock file far older than ten minutes.
   fs.writeFileSync(file, JSON.stringify({ pid: process.pid, host: os.hostname() }));
   fs.utimesSync(file, new Date(0), new Date(0));
@@ -839,4 +839,221 @@ test('a symlinked alias of the configured vault keeps the configured journal and
   assert.equal(f.calls[0].options.journalDir, journalDir);
   assert.equal(f.calls[0].options.notesDir, notesDir);
   assert.equal(f.calls[0].options.knowledgeDir, undefined);
+});
+
+function externalInbox(f, name = 'phone-captures') {
+  const inboxRoot = path.join(f.root, name);
+  const folder = path.join(inboxRoot, 'inbox', device);
+  const receipt = path.join(inboxRoot, 'receipts', device, `${opId}.md`);
+  fs.mkdirSync(folder, { recursive: true });
+  fs.writeFileSync(path.join(folder, `${opId}.md`), request());
+  return { inboxRoot, folder, receipt };
+}
+
+for (const location of ['external', 'explicit default', 'nested vault', 'alias into vault']) {
+  test(`${location} inbox uses real captures exactly once and the correct receipt writer`, (t) => {
+    const f = fixture(t);
+    let inboxRoot;
+    if (location === 'external') ({ inboxRoot } = externalInbox(f));
+    else if (location === 'nested vault') {
+      inboxRoot = path.join(f.vaultRoot, 'phone', 'captures');
+      fs.mkdirSync(path.join(inboxRoot, 'inbox', device), { recursive: true });
+      fs.writeFileSync(path.join(inboxRoot, 'inbox', device, `${opId}.md`), request());
+    } else {
+      f.put();
+      inboxRoot = path.join(f.vaultRoot, 'phanos');
+      if (location === 'alias into vault') {
+        const alias = path.join(f.root, 'inbox-alias');
+        fs.symlinkSync(inboxRoot, alias);
+        inboxRoot = alias;
+      }
+    }
+    const receipt = path.join(inboxRoot, 'receipts', device, `${opId}.md`);
+    const first = runInbox(f, { inboxRoot });
+    assert.equal(first.error, null);
+    assert.equal(first.result.counts.saved, 1);
+    assert.match(fs.readFileSync(receipt, 'utf8'), /status: saved/);
+    assert.equal(first.journal.split('An invented first line.').length - 1, 1);
+    const receiptOps = Object.values(JSON.parse(fs.readFileSync(path.join(f.root, 'ledger.json'), 'utf8')).operations)
+      .filter(({ operation }) => operation.operationId.startsWith('inbox-receipt:'));
+    assert.equal(receiptOps.length, location === 'external' ? 0 : 1);
+    if (location === 'external') assert.equal(fs.existsSync(f.receipts), false);
+    const second = runInbox(f, { inboxRoot });
+    assert.equal(second.result.counts.skipped, 1);
+    assert.deepEqual(second.writes, []);
+    assert.equal(second.journal, first.journal);
+    fs.unlinkSync(receipt);
+    const replay = runInbox(f, { inboxRoot });
+    assert.equal(replay.error, null);
+    assert.equal(replay.journal, first.journal);
+    if (location === 'external') assert.match(fs.readFileSync(receipt, 'utf8'), /status: saved/);
+  });
+}
+
+test('external not_confirmed receipt retries a real capture without duplication', (t) => {
+  const f = fixture(t);
+  const e = externalInbox(f);
+  const first = runInbox(f, { inboxRoot: e.inboxRoot, fault: 'capture_io' });
+  assert.equal(first.result.counts.not_confirmed, 1);
+  assert.match(fs.readFileSync(e.receipt, 'utf8'), /status: not_confirmed/);
+  const second = runInbox(f, { inboxRoot: e.inboxRoot });
+  assert.equal(second.result.counts.saved, 1);
+  assert.match(fs.readFileSync(e.receipt, 'utf8'), /status: saved/);
+  assert.equal(second.journal, first.journal);
+  assert.deepEqual(fs.readdirSync(path.dirname(e.receipt)), [`${opId}.md`]);
+});
+
+for (const change of ['edited', 'deleted', 'created']) {
+  test(`external receipt preserves a concurrently ${change} target`, async (t) => {
+    const f = fixture(t);
+    const e = externalInbox(f);
+    if (change !== 'created') await f.apply({ inboxRoot: e.inboxRoot, capture: () => { throw new Error('Invented delay.'); } });
+    const edited = '---\nstatus: not_confirmed\n---\nAn invented concurrent change.\n';
+    const result = await f.apply({ inboxRoot: e.inboxRoot, capture: () => {
+      if (change === 'deleted') fs.unlinkSync(e.receipt);
+      else {
+        fs.mkdirSync(path.dirname(e.receipt), { recursive: true });
+        fs.writeFileSync(e.receipt, edited);
+      }
+      return { ok: true, message: 'Saved an invented request.' };
+    } });
+    assert.equal(result.requests[0].receipt.status, 'conflict');
+    if (change === 'deleted') assert.equal(fs.existsSync(e.receipt), false);
+    else assert.equal(fs.readFileSync(e.receipt, 'utf8'), edited);
+    assert.ok(fs.readdirSync(path.dirname(e.receipt)).every((name) => !name.startsWith('.')));
+  });
+}
+
+for (const target of ['inbox', 'device', 'request', 'receipts', 'receipt-device', 'receipt']) {
+  test(`external symlinked ${target} is rejected without following it`, async (t) => {
+    const f = fixture(t);
+    const e = externalInbox(f);
+    const outside = path.join(f.root, 'untouched');
+    fs.mkdirSync(outside);
+    const targetPath = { inbox: path.dirname(e.folder), device: e.folder,
+      request: path.join(e.folder, `${opId}.md`), receipts: path.join(e.inboxRoot, 'receipts'),
+      'receipt-device': path.dirname(e.receipt), receipt: e.receipt }[target];
+    fs.rmSync(targetPath, { force: true, recursive: true });
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.symlinkSync(outside, targetPath);
+    await assert.rejects(f.apply({ inboxRoot: e.inboxRoot }), /symlink|real director/);
+    assert.deepEqual(fs.readdirSync(outside), []);
+    assert.deepEqual(f.calls, []);
+  });
+}
+
+for (const target of ['vault', 'filesystem', 'state', 'ledger state', 'relative']) {
+  test(`refuses ${target} as an inbox root`, async (t) => {
+    const f = fixture(t);
+    const inboxRoot = { vault: f.vaultRoot, filesystem: path.parse(f.root).root,
+      state: path.join(f.root, 'state/jarvos'), 'ledger state': path.join(f.root, 'state/jarvos/vault-mutations'), relative: 'relative-inbox' }[target];
+    await assert.rejects(f.apply({ inboxRoot }), /inboxRoot/);
+    assert.deepEqual(f.calls, []);
+    assert.equal(fs.existsSync(f.receipts), false);
+  });
+}
+
+for (const code of ['EIO', 'ETIMEDOUT', 'EAGAIN', 'ENODATA', 'EACCES']) {
+  test(`an unreadable external request (${code}) is incomplete without a receipt and retries`, async (t) => {
+    const f = fixture(t);
+    const e = externalInbox(f);
+    fs.writeFileSync(path.join(e.folder, '.x.md.icloud'), 'Invented placeholder.');
+    const open = fs.openSync;
+    const requestPath = fs.realpathSync(path.join(e.folder, `${opId}.md`));
+    t.mock.method(fs, 'openSync', function(file, ...args) {
+      if (file === requestPath) throw Object.assign(new Error('Invented unavailable file.'), { code });
+      return open.call(this, file, ...args);
+    });
+    const first = await f.apply({ inboxRoot: e.inboxRoot });
+    assert.equal(first.counts.incomplete, 1);
+    assert.equal(first.requests.length, 1);
+    assert.deepEqual(f.calls, []);
+    assert.equal(fs.existsSync(e.receipt), false);
+    t.mock.restoreAll();
+    assert.equal((await f.apply({ inboxRoot: e.inboxRoot })).counts.saved, 1);
+  });
+}
+
+test('locks isolate vault and inbox pairs, including aliases of the same root', async (t) => {
+  const f = fixture(t);
+  const firstRoot = externalInbox(f, 'first-captures');
+  const secondRoot = externalInbox(f, 'second-captures');
+  const alias = path.join(f.root, 'first-alias');
+  fs.symlinkSync(firstRoot.inboxRoot, alias);
+  let finish;
+  const first = f.apply({ inboxRoot: firstRoot.inboxRoot, capture: () => new Promise((resolve) => { finish = resolve; }) });
+  try {
+    assert.equal((await f.apply({ inboxRoot: firstRoot.inboxRoot })).inProgress, true);
+    assert.equal((await f.apply({ inboxRoot: alias })).inProgress, true);
+    const separate = await f.apply({ inboxRoot: secondRoot.inboxRoot });
+    assert.equal(separate.inProgress, false);
+    assert.equal(separate.counts.saved, 1);
+  } finally { finish({ ok: true, message: 'Saved an invented capture.' }); await first; }
+  assert.equal((await f.apply({ inboxRoot: firstRoot.inboxRoot })).inProgress, false);
+});
+
+test('external receipts still require a healthy capture ledger before any writes', async (t) => {
+  const f = fixture(t);
+  const e = externalInbox(f);
+  const ledgerPath = path.join(f.root, 'ledger.json');
+  fs.writeFileSync(ledgerPath, '{invented broken ledger}', { mode: 0o600 });
+  const mutationService = createConfiguredVaultMutationService({ vaultRoot: f.vaultRoot,
+    adapterOptions: { ledgerPath, probe: () => ({ state: 'app_busy' }) } });
+  const result = await f.apply({ inboxRoot: e.inboxRoot, mutationService });
+  assert.equal(result.stopped, 'ledger integrity');
+  assert.deepEqual(f.calls, []);
+  assert.equal(fs.existsSync(path.join(e.inboxRoot, 'receipts')), false);
+  assert.equal(fs.readFileSync(ledgerPath, 'utf8'), '{invented broken ledger}');
+});
+
+test('a read failure after opening a request stays incomplete and does not consume the limit', async (t) => {
+  const f = fixture(t);
+  const e = externalInbox(f);
+  const next = 'invented-next-001';
+  fs.writeFileSync(path.join(e.folder, `${next}.md`), request({ op_id: next }));
+  const requestPath = fs.realpathSync(path.join(e.folder, `${opId}.md`));
+  fs.utimesSync(requestPath, new Date(0), new Date(0));
+  const open = fs.openSync;
+  const read = fs.readSync;
+  let unavailable;
+  t.mock.method(fs, 'openSync', function(file, ...args) {
+    const fd = open.call(this, file, ...args);
+    if (file === requestPath) unavailable = fd;
+    return fd;
+  });
+  t.mock.method(fs, 'readSync', function(fd, ...args) {
+    if (fd === unavailable) {
+      unavailable = undefined;
+      throw Object.assign(new Error('Invented hydration timeout.'), { code: 'ETIMEDOUT' });
+    }
+    return read.call(this, fd, ...args);
+  });
+  const result = await f.apply({ inboxRoot: e.inboxRoot, limit: 1 });
+  assert.equal(result.counts.incomplete, 1);
+  assert.equal(result.counts.saved, 1);
+  assert.equal(fs.existsSync(e.receipt), false);
+  assert.ok(fs.existsSync(path.join(path.dirname(e.receipt), `${next}.md`)));
+});
+
+test('an external receipt directory replaced by a symlink during capture is rejected', async (t) => {
+  const f = fixture(t);
+  const e = externalInbox(f);
+  const outside = path.join(f.root, 'untouched');
+  fs.mkdirSync(outside);
+  await assert.rejects(f.apply({ inboxRoot: e.inboxRoot, capture: () => {
+    fs.symlinkSync(outside, path.join(e.inboxRoot, 'receipts'));
+    return { ok: true, message: 'Saved an invented capture.' };
+  } }), /symlink|real directories/);
+  assert.deepEqual(fs.readdirSync(outside), []);
+});
+
+test('an external receipt tree cannot contain the vault', async (t) => {
+  const f = fixture(t);
+  for (const suffix of ['receipts', 'receipts/phone-invented']) {
+    const vaultRoot = path.join(f.root, suffix);
+    fs.mkdirSync(vaultRoot, { recursive: true });
+    await assert.rejects(f.apply({ vaultRoot, inboxRoot: f.root }), /receipt directory must not overlap the vault/);
+    assert.deepEqual(fs.readdirSync(vaultRoot), []);
+  }
+  assert.deepEqual(f.calls, []);
 });

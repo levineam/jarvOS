@@ -300,6 +300,7 @@ Release sections describe user-facing jarvOS changes. Historical public-doc sync
 
 ### Features
 
+* `jarvos inbox apply --inbox <folder>`: read phone capture requests from (and write receipts to) a folder outside the vault, such as a cloud-drive folder that syncs in the background.
 * **capture (prj_unified_capture):** `jarvos inbox apply` applies phone capture requests from `phanos/inbox/` exactly once and writes receipts the phone reads.
 * **capture (prj_unified_capture):** `jarvos capture --op-id` / `jarvos_capture op_id`: replaying the same capture never saves it twice (exactly-once by operation id).
 
