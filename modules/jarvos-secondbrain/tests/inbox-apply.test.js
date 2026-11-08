@@ -89,8 +89,12 @@ for (const during of ['capture', 'receipt']) {
     const before = fs.readFileSync(ledgerPath);
     const configured = createConfiguredVaultMutationService({ vaultRoot: f.vaultRoot, proveObsidianAbsent: () => false,
       adapterOptions: { ledger, probe: () => ({ state: 'app_busy' }) } });
+    // Damage the ledger in a way the ledger cannot repair: its path becomes a
+    // symlink (a wrong file mode alone is now restored to 0600 and kept).
+    const kept = `${ledgerPath}.kept`;
     const damageLedger = () => {
-      fs.chmodSync(ledgerPath, 0o644);
+      fs.renameSync(ledgerPath, kept);
+      fs.symlinkSync(kept, ledgerPath);
       configured.reserveCaptureOperation({ ...reservation, intentId: `capture:op:${'c'.repeat(64)}` });
     };
     const service = during === 'receipt' ? { ...configured, createMarkdownFile: damageLedger } : configured;
@@ -104,7 +108,8 @@ for (const during of ['capture', 'receipt']) {
     assert.equal(calls, 1);
     assert.equal(result.requests.length, 1);
     assert.ok(Object.values(result.counts).every((count) => count === 0));
-    assert.deepEqual(fs.readFileSync(ledgerPath), before);
+    assert.deepEqual(fs.readFileSync(kept), before);
+    assert.equal(fs.lstatSync(ledgerPath).isSymbolicLink(), true);
     assert.equal(fs.existsSync(path.join(f.receipts, `${opId}.md`)), false);
     assert.equal(fs.existsSync(path.join(f.receipts, 'invented-next-001.md')), false);
     assert.equal(fs.existsSync(`${ledgerPath}.quarantine`), false);
@@ -800,4 +805,19 @@ test('a lock held by a live run on this host is kept however old; a dead owner\'
   fs.writeFileSync(file, JSON.stringify({ pid: Number(dead.stdout), host: os.hostname() }));
   assert.equal((await f.apply()).counts.saved, 1);
   assert.equal(fs.existsSync(file), false);
+});
+
+test('a ledger with a wrong file mode is restored to 0600 with its records kept, and the run continues', async (t) => {
+  const f = fixture(t); f.put();
+  const ledgerPath = path.join(f.root, 'ledger.json');
+  const ledger = createVaultMutationLedger({ filePath: ledgerPath });
+  const reservation = { intentId: `capture:op:${'d'.repeat(64)}`, requestHash: 'e'.repeat(64), vaultId: 'invented-vault', plan: {} };
+  ledger.reserveCapture(reservation);
+  fs.chmodSync(ledgerPath, 0o644);
+  const service = createConfiguredVaultMutationService({ vaultRoot: f.vaultRoot, proveObsidianAbsent: () => false,
+    adapterOptions: { ledger, probe: () => ({ state: 'app_busy' }) } });
+  const result = await f.apply({ mutationService: service, capture: () => ({ ok: true, message: 'Saved an invented capture.' }) });
+  assert.equal(result.stopped, undefined);
+  assert.equal(fs.statSync(ledgerPath).mode & 0o777, 0o600);
+  assert.ok(JSON.parse(fs.readFileSync(ledgerPath, 'utf8')).captures[reservation.intentId]);
 });

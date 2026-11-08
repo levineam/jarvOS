@@ -48,7 +48,10 @@ test('inbox CLI stops on an unsafe persistent ledger without losing capture rese
   fs.mkdirSync(inbox, { recursive: true });
   fs.writeFileSync(path.join(inbox, 'operation-invented.md'), '---\nphanos_request: capture/v1\nop_id: operation-invented\ndevice: phone-invented\nkind: journal\nwords: user\nasked: explicit\ndate: 2030-02-03\n---\nAn invented different orchard.\n\n<!-- phanos:end -->\n');
   const files = fs.readdirSync(f.vaultRoot, { recursive: true });
-  fs.chmodSync(ledgerPath, 0o644);
+  // A ledger path that is not a regular file cannot be repaired (a wrong mode alone now is).
+  const kept = `${ledgerPath}.kept`;
+  fs.renameSync(ledgerPath, kept);
+  fs.symlinkSync(kept, ledgerPath);
   // Real configured service and persistent ledger; only the app capability is offline.
   const script = `
     const { createConfiguredVaultMutationService } = require('./modules/jarvos-secondbrain/src/vault-mutation-service');
@@ -72,7 +75,8 @@ test('inbox CLI stops on an unsafe persistent ledger without losing capture rese
       assert.ok(Object.values(stopped.counts).every((count) => count === 0));
     } else assert.match(result.stdout, /stopped.*ledger integrity/i);
   }
-  fs.chmodSync(ledgerPath, 0o600);
+  fs.unlinkSync(ledgerPath);
+  fs.renameSync(kept, ledgerPath);
   assert.throws(() => simpleCapture({ ...capture, text: 'An invented different orchard.' }, options), /already used for different content/);
   assert.deepEqual(fs.readFileSync(ledgerPath), before);
 });
