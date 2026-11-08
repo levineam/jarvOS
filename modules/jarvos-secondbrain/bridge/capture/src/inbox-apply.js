@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { CaptureValidationError, simpleCapture, buildSimpleCaptureEvent } = require('./simple-capture');
 const { OP_ID_PATTERN, captureOperationRequest } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 const { TERMINAL } = require('../../../adapters/obsidian/src/vault-mutation-ledger');
@@ -23,6 +23,9 @@ function stat(file) {
 }
 
 function directory(root, parts, create = false) {
+  const rootInfo = stat(root);
+  if (!rootInfo) return null;
+  if (!rootInfo.isDirectory()) throw new Error('inbox root must be a real directory, not a symlink');
   let current = root;
   for (const part of parts) {
     current = path.join(current, part);
@@ -37,7 +40,7 @@ function directory(root, parts, create = false) {
   return current;
 }
 
-function readFile(file) {
+function readFile(file, encoding = 'utf8') {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
     if (!fs.fstatSync(fd).isFile()) throw new Error('request and receipt targets must be regular files, not symlinks');
@@ -49,7 +52,7 @@ function readFile(file) {
       length += count;
     }
     if (length > MAX_BYTES) throw new CaptureValidationError('file exceeds 256 KB');
-    return bytes.subarray(0, length).toString('utf8');
+    return encoding === null ? bytes.subarray(0, length) : bytes.subarray(0, length).toString(encoding);
   } finally { fs.closeSync(fd); }
 }
 
@@ -99,28 +102,55 @@ function parseRequest(source, opId, device) {
   return input;
 }
 
-function pendingReceipt(vaultRoot, device, opId) {
-  const folder = directory(vaultRoot, ['phanos', 'receipts', device]);
+function pendingReceipt(inboxRoot, device, opId, external) {
+  const folder = directory(inboxRoot, ['receipts', device]);
   if (!folder) return null;
   const file = path.join(folder, `${opId}.md`);
   const info = stat(file);
   if (!info) return null;
   if (!info.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
-  const content = readFile(file);
+  const content = readFile(file, external ? null : 'utf8');
   const header = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content);
   const statuses = header?.[1].match(/^status: ([a-z_]+)\r?$/gm);
   return statuses?.length === 1 && statuses[0].trim() === 'status: not_confirmed' ? content : false;
 }
 
-function writeReceipt(service, vaultRoot, device, opId, kind, status, message, applied, expectedContent) {
+function writeReceipt(service, vaultRoot, inboxRoot, external, device, opId, kind, status, message, applied, expectedContent, assertRootUnchanged = () => {}) {
   const ledger = service.adapter?.ledger;
   const snapshot = ledger?.verify();
-  directory(vaultRoot, ['phanos', 'receipts', device], true);
-  const vaultRelativePath = `phanos/receipts/${device}/${opId}.md`;
-  const info = stat(path.join(vaultRoot, vaultRelativePath));
+  const folder = directory(inboxRoot, ['receipts', device], true);
+  if (!folder) throw new Error('inbox root disappeared');
+  const file = path.join(folder, `${opId}.md`);
+  const info = stat(file);
   if (info && !info.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
   const body = String(message).replace(/[\r\n\u0085\u2028\u2029]+/g, ' ').trim();
   const content = `---\nphanos_receipt: capture/v1\nop_id: ${ID.test(opId) ? opId : JSON.stringify(opId)}\nstatus: ${status}\n${kind ? `kind: ${kind}\n` : ''}applied: ${applied}\n---\n${body}\n`;
+  if (external) {
+    // UUID-only name: a long request name must not push the temp name past filename limits.
+    const temporary = path.join(folder, `.${randomUUID()}.tmp`);
+    const fd = fs.openSync(temporary, 'wx', 0o644);
+    try {
+      fs.writeFileSync(fd, content);
+      directory(inboxRoot, ['receipts', device]);
+      const currentInfo = stat(file);
+      if (currentInfo && !currentInfo.isFile()) throw new Error('receipt target must be a regular file, not a symlink');
+      const current = currentInfo ? readFile(file, null) : null;
+      if (expectedContent === null ? current !== null : current === null || !current.equals(expectedContent)) {
+        return { status: 'conflict', obsidian: 'unacknowledged', message: 'receipt changed before replacement' };
+      }
+      // Compare immediately before rename; the local lock excludes another applier for this pair.
+      // Node has no openat/renameat, so the root's identity is rechecked right
+      // before and right after the rename; a change stops the run.
+      assertRootUnchanged();
+      fs.renameSync(temporary, file);
+      assertRootUnchanged();
+      return { status: 'committed', obsidian: 'acknowledged' };
+    } finally {
+      fs.closeSync(fd);
+      if (directory(inboxRoot, ['receipts', device]) && stat(temporary)) fs.unlinkSync(temporary);
+    }
+  }
+  const vaultRelativePath = path.relative(fs.realpathSync(vaultRoot), file).split(path.sep).join('/');
   const receiptIntent = (before) => {
     const expectedHash = before === null ? null : createHash('sha256').update(before).digest('hex');
     return `inbox-receipt:${createHash('sha256').update(JSON.stringify([vaultRelativePath, status, expectedHash, body])).digest('hex')}`;
@@ -156,16 +186,23 @@ function writeReceipt(service, vaultRoot, device, opId, kind, status, message, a
     : service.applyMarkdownMutation({ ...mutation, expectedContent });
 }
 
-function acquireLock(vaultRoot) {
-  const stateHome = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
-  const folder = path.resolve(stateHome, 'jarvos', 'vault-mutations');
-  // Resolve existing ancestors before mkdir, including a state-home symlink.
-  let ancestor = folder;
+function realPath(value) {
+  let ancestor = path.resolve(value);
   while (!stat(ancestor)) ancestor = path.dirname(ancestor);
-  const resolved = path.resolve(fs.realpathSync(ancestor), path.relative(ancestor, folder));
-  if (resolved === vaultRoot || resolved.startsWith(vaultRoot + path.sep)) throw new Error('jarvOS state directory must be outside the vault');
+  return path.resolve(fs.realpathSync(ancestor), path.relative(ancestor, path.resolve(value)));
+}
+
+function stateDirectory() {
+  const stateHome = process.env.XDG_STATE_HOME || path.join(os.homedir(), '.local', 'state');
+  return realPath(path.resolve(stateHome, 'jarvos'));
+}
+
+function acquireLock(vaultRoot, inboxRoot) {
+  // Resolve existing ancestors before mkdir, including a state-home symlink.
+  const folder = realPath(path.join(stateDirectory(), 'vault-mutations'));
+  if (folder === vaultRoot || folder.startsWith(vaultRoot + path.sep)) throw new Error('jarvOS state directory must be outside the vault');
   fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const file = path.join(folder, `inbox-${createHash('sha256').update(vaultRoot).digest('hex')}.lock`);
+  const file = path.join(folder, `inbox-${createHash('sha256').update(JSON.stringify([vaultRoot, inboxRoot])).digest('hex')}.lock`);
   for (let attempt = 0; attempt < 2; attempt++) {
     let fd;
     try {
@@ -198,7 +235,7 @@ function processAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
 
-async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, mutationService, now = () => new Date() } = {}) {
+async function applyInbox({ vaultRoot, inboxRoot, limit = 50, capture = simpleCapture, mutationService, now = () => new Date() } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be an absolute path');
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('limit must be a positive integer');
   if (!fs.statSync(vaultRoot).isDirectory()) throw new Error('vaultRoot must be a directory');
@@ -209,22 +246,55 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
   const configuredVault = realOrResolved(vaultRoot) === realOrResolved(paths.vault);
   // Use the configured spelling of the root too, so root and destinations stay lexically consistent for the storage adapter.
   if (configuredVault) vaultRoot = path.resolve(paths.vault);
+  const realVault = fs.realpathSync(vaultRoot);
+  if (inboxRoot === undefined) {
+    directory(realVault, ['phanos']);
+    inboxRoot = path.join(vaultRoot, 'phanos');
+  }
+  if (typeof inboxRoot !== 'string' || !path.isAbsolute(inboxRoot)) throw new Error('inboxRoot must be an absolute path');
+  const requestedInboxRoot = inboxRoot;
+  inboxRoot = realPath(inboxRoot);
+  const stateRoot = stateDirectory();
+  const ledgerRoot = realPath(path.join(stateRoot, 'vault-mutations'));
+  if (inboxRoot === realVault || inboxRoot === path.parse(inboxRoot).root
+    || [stateRoot, ledgerRoot].some((root) => inboxRoot === root || inboxRoot.startsWith(root + path.sep))) {
+    throw new Error('inboxRoot must not be the vault root, a filesystem root, or the jarvOS state directory');
+  }
+  const external = !inboxRoot.startsWith(realVault + path.sep);
+  // Identity of the inbox root as resolved now. Before each external receipt
+  // write it must still resolve to the same directory, outside the vault, so a
+  // parent swapped for a link mid-run can't redirect receipts into the vault.
+  const rootIdentity = external ? fs.statSync(inboxRoot) : null;
+  const assertRootUnchanged = () => {
+    if (!external) return;
+    const resolved = realPath(requestedInboxRoot);
+    const now = stat(resolved);
+    if (resolved !== inboxRoot || !now?.isDirectory() || now.dev !== rootIdentity.dev || now.ino !== rootIdentity.ino
+      || resolved === realVault || resolved.startsWith(realVault + path.sep)
+      || realVault.startsWith(path.join(resolved, 'receipts') + path.sep)) {
+      throw Object.assign(new Error('inbox root changed during the run; stopped before writing receipts'), { ledgerIntegrity: true });
+    }
+  };
+  const receiptsRoot = path.join(inboxRoot, 'receipts');
+  if (external && (realVault === receiptsRoot || realVault.startsWith(receiptsRoot + path.sep))) {
+    throw new Error('external receipt directory must not overlap the vault');
+  }
   const journalDir = configuredVault ? paths.journal : path.join(vaultRoot, 'Journal');
   const notesDir = configuredVault ? paths.notes : path.join(vaultRoot, 'Notes');
   const knowledgeDir = configuredVault ? undefined : path.join(vaultRoot, '.jarvos', 'knowledge');
   if (!fs.constants.O_NOFOLLOW) throw new Error('inbox apply requires filesystem support for O_NOFOLLOW');
   const counts = { saved: 0, not_confirmed: 0, not_saved: 0, invalid: 0, incomplete: 0, skipped: 0 };
   const result = { counts, requests: [], inProgress: false };
-  const release = acquireLock(fs.realpathSync(vaultRoot));
+  const release = acquireLock(realVault, inboxRoot);
   if (!release) return { ...result, inProgress: true, message: 'another run is in progress' };
   try {
     mutationService ||= createConfiguredVaultMutationService({ vaultRoot, source: 'bridge.inbox-apply' });
     mutationService.adapter?.ledger.verify();
-    const inbox = directory(vaultRoot, ['phanos', 'inbox']);
+    const inbox = directory(inboxRoot, ['inbox']);
     const items = [];
     if (inbox) for (const device of fs.readdirSync(inbox)) {
       if (device.startsWith('.')) continue;
-      const folder = directory(vaultRoot, ['phanos', 'inbox', device]);
+      const folder = directory(inboxRoot, ['inbox', device]);
       for (const name of fs.readdirSync(folder)) {
         if (name.startsWith('.') || !name.endsWith('.md')) continue;
         const file = path.join(folder, name);
@@ -239,11 +309,11 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
     let processed = 0;
     for (const item of items) {
       if (processed >= limit) break;
-      directory(vaultRoot, ['phanos', 'inbox', item.device]);
+      directory(inboxRoot, ['inbox', item.device]);
       if (!stat(item.file)?.isFile()) throw new Error('request file changed or is a symlink');
       const record = { device: item.device, opId: item.opId, status: 'skipped' };
       result.requests.push(record);
-      const currentReceipt = pendingReceipt(vaultRoot, item.device, item.opId);
+      const currentReceipt = pendingReceipt(inboxRoot, item.device, item.opId, external);
       if (currentReceipt === false) { counts.skipped++; continue; }
       const applied = localTimestamp(now());
       let input;
@@ -252,6 +322,9 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
       try {
         input = parseRequest(readFile(item.file), item.opId, item.device);
       } catch (error) {
+        if (['EIO', 'ETIMEDOUT', 'ETIME', 'EAGAIN', 'EBUSY', 'EINTR', 'ENODATA', 'ENOENT', 'ENXIO', 'EACCES', 'EPERM'].includes(error.code)) {
+          record.status = 'incomplete'; counts.incomplete++; continue;
+        }
         status = error.validation === true ? 'invalid' : 'not_confirmed';
         message = error.validation === true ? error.message : TEMPORARY_PROBLEM;
       }
@@ -275,7 +348,8 @@ async function applyInbox({ vaultRoot, limit = 50, capture = simpleCapture, muta
           message = error.validation === true ? error.message : TEMPORARY_PROBLEM;
         }
       }
-      const receipt = await writeReceipt(mutationService, vaultRoot, item.device, item.opId, input?.kind, status, message, applied, currentReceipt);
+      assertRootUnchanged();
+      const receipt = await writeReceipt(mutationService, vaultRoot, inboxRoot, external, item.device, item.opId, input?.kind, status, message, applied, currentReceipt, assertRootUnchanged);
       if (!['committed', 'already_satisfied'].includes(receipt.status) || receipt.obsidian !== 'acknowledged') {
         record.receipt = { status: receipt.status, obsidian: receipt.obsidian, ...(receipt.message ? { message: receipt.message } : {}) };
       }
