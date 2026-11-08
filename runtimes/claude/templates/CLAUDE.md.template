@@ -68,9 +68,13 @@ is the entire versioning decision — there is no "target version" to
 choose, and no version number belongs in a branch name, PR title, or
 this file. Release *placement* — which release lane a piece of work
 belongs to — is a separate question owned by the steward system in
-`modules/jarvos-coding` (`triageCodingWork`,
-`releaseFitFromPaperclipReleaseIntake`), which classifies work into a
+`modules/jarvos-coding` (`triageCodingWork`), which classifies work into a
 product lane, release lane, ready-execution lane, or manual triage.
+
+A breaking change (`feat!:` or a `BREAKING CHANGE:` footer) is a minor bump
+before 1.0. A major version (1.0 or above) is never produced automatically;
+it needs the owner's explicit approval against the published criteria. Don't
+use `!` to signal importance.
 
 ### What this triggers
 
