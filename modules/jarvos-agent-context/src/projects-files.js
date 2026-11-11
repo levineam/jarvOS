@@ -464,8 +464,8 @@ async function resolvePlanTask(directory, reference, sessionId) {
   const owner = owners.length === 1 ? owners[0] : '';
   const ids = owner.match(/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi) || [];
   const artifacts = taskArtifacts(task, directory);
-  const disposition = record.status !== 'active' ? 'project_not_active' : task.completed ? 'completed'
-    : owners.length > 1 || ids.length !== 1 ? 'owner_unverified' : ids[0] !== sessionId ? 'retained_other_owner'
+  const disposition = record.status !== 'active' ? 'project_not_active'
+    : owners.length > 1 || ids.length !== 1 ? 'owner_unverified' : ids[0] !== sessionId ? 'retained_other_owner' : task.completed ? 'completed'
       : artifacts.some((item) => item.status !== 'present') ? 'artifact_read_required' : 'current_owner';
   const section = (heading) => record.body.split(new RegExp(`^## (?:${heading})\\s*$`, 'm'))[1]?.split(/^## /m)[0]?.trim() || '';
   const canonicalDir = await fs.realpath(directory);
@@ -512,7 +512,7 @@ async function savePlanTaskPointer(options, committed) {
       if (!expectedRevision) throw pointerError('PMS_PROJECT_REVISION_REQUIRED');
       const prior = (await binding.store.read())?.codeThread?.workReference;
       if (prior?.authority !== CONTRACT || prior.itemId !== project || prior.operationId !== task) throw pointerError('PMS_SELECTION_MISMATCH');
-      if (!['current_owner', 'completed'].includes(context.disposition) || !context.task.owner.includes(sessionId)) throw pointerError('PMS_RETAINED_OWNER_RECONCILIATION');
+      if (!['current_owner', 'completed'].includes(context.disposition)) throw pointerError('PMS_RETAINED_OWNER_RECONCILIATION');
       if (prior.revision === context.project.revision) throw pointerError('PMS_NO_CANONICAL_PROGRESS');
       const cwd = path.dirname(context.project.file), file = path.basename(context.project.file);
       const source = gitRead(cwd, ['show', `HEAD:${file}`]);

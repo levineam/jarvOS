@@ -70,9 +70,31 @@ test('retained other owner, unknown owner and completed work never grant executi
   f.change(`Owner: Journal (${B})`, 'Owner: Journal');
   assert.equal((await f.read()).disposition, 'owner_unverified');
   f.change('- [ ] Task B', '- [x] Task B');
-  const context = await f.read(); assert.equal(context.disposition, 'completed'); assert.equal(context.effectsAuthorized, false);
+  const context = await f.read(); assert.equal(context.disposition, 'owner_unverified'); assert.equal(context.effectsAuthorized, false);
   const checkpoint = await checkpointPlanTask({ ...f.options(), project: 'prj_named', task: 'Task B', expectedState: context.stateRevision, expectedRevision: context.project.revision });
   assert.equal(checkpoint.code, 'PMS_RETAINED_OWNER_RECONCILIATION');
+});
+
+test('completed checkpoint requires exactly one current owner UUID', async (t) => {
+  const f = fixture(t); const selected = await f.select();
+  f.change('- [ ] Task A', '- [x] Task A');
+  let previous = `Source (${A})`;
+  for (const owner of [`Source (${A}) / Journal (${B})`, 'Source', `Journal (${B})`, `Source (${A})`]) {
+    f.change(`Owner: ${previous}`, `Owner: ${owner}`); previous = owner;
+    f.git('commit', '--only', '-qm', 'Record completed task owner', '--', 'Project.md');
+    const current = await f.read();
+    const checkpoint = await checkpointPlanTask({ ...f.options(), project: 'prj_named', task: 'Task A',
+      expectedState: selected.stateRevision, expectedRevision: current.project.revision });
+    if (owner !== `Source (${A})`) {
+      assert.equal(checkpoint.code, 'PMS_RETAINED_OWNER_RECONCILIATION', owner);
+      assert.equal((await f.read()).stateRevision, selected.stateRevision);
+    } else {
+      assert.equal(current.disposition, 'completed');
+      assert.equal(checkpoint.status, 'ok');
+      assert.equal(checkpoint.canonicalCommit, f.git('log', '-1', '--format=%H', '--', 'Project.md'));
+    }
+    assert.equal(current.effectsAuthorized, false);
+  }
 });
 
 test('rename, duplicate and removed selection reconcile without replacing the saved pointer', async (t) => {
