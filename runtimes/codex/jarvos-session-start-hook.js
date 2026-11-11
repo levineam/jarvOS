@@ -76,7 +76,26 @@ async function main() {
     const continuity = require('./assignment-continuity');
     const input = continuity.readInput();
     if (input?.source && !['startup', 'resume'].includes(input.source)) {
-      writeJson(await continuity.consume(input));
+      const output = await continuity.consume(input);
+      const sessionId = hookSessionId(input, 'SessionStart');
+      if (input.source === 'compact' && sessionId && !input.agent_id
+        && (process.env.CODEX_THREAD_ID === undefined || process.env.CODEX_THREAD_ID === sessionId)
+        && process.env.JARVOS_PROJECTS_DIR !== undefined) {
+        try {
+          const selectedTask = await currentPlanTaskContext(sessionId);
+          if (selectedTask) {
+            const context = [selectedTask, output.hookSpecificOutput?.additionalContext].filter(Boolean).join('\n\n');
+            if (Buffer.byteLength(context, 'utf8') > continuity.MAX_CONTEXT_BYTES) {
+              output.systemMessage = [output.systemMessage, 'jarvOS selected-task context exceeds the compact output limit; use the explicit task read before task-dependent effects.'].filter(Boolean).join('\n');
+            } else output.hookSpecificOutput = {
+              ...output.hookSpecificOutput,
+              hookEventName: 'SessionStart',
+              additionalContext: context,
+            };
+          }
+        } catch (error) { logFailure(error); }
+      }
+      writeJson(output);
       return;
     }
     const env = bridgeEnvironment(hookSessionId(input, 'SessionStart'));

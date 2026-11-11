@@ -491,3 +491,32 @@ test('compact owning hook never hydrates/registers ordinary startup', () => {
     assert.match(JSON.parse(child.stdout).systemMessage, /continuity unavailable/i);
   } finally { fs.rmSync(temp, { recursive: true, force: true }); }
 });
+
+for (const mode of ['adds context', 'fails', 'exceeds combined limit']) {
+  test(`compact preserves captured assignment receipts when selected-task reader ${mode}`, async () => {
+    const f = fixture();
+    try {
+      f.set({ items: [peer('delivery', assignment + (mode === 'exceeds combined limit' ? 'x'.repeat(54_000) : '')), entry({ id: 'already-published', type: 'commandExecution', status: 'completed', exitCode: 0 })] });
+      assert.equal((await continuity.capture(input, { env: f.env })).status, 'captured');
+      const marker = path.join(f.root, 'startup-called');
+      const preload = path.join(f.root, 'preload.js');
+      fs.writeFileSync(preload, `require.cache[${JSON.stringify(path.join(ROOT, 'modules/jarvos-agent-context/src/index.js'))}] = {exports:{
+        hydrate:async()=>{require('fs').writeFileSync(${JSON.stringify(marker)},'called');return {markdown:'ordinary startup'};},
+        currentPlanTaskContext:async(id)=>{require('node:assert/strict').equal(id,${JSON.stringify(SESSION)});${mode === 'fails' ? "throw new Error('fixture read failure');" : `return ${JSON.stringify('<untrusted-project-data>current plan fixture' + (mode === 'exceeds combined limit' ? 'x'.repeat(12_000) : '') + '</untrusted-project-data>')};`}}
+      }};`);
+      const child = spawnSync(process.execPath, ['--require', preload, path.join(ROOT, 'runtimes/codex/jarvos-session-start-hook.js')], {
+        input: JSON.stringify(compact), env: { ...f.env, JARVOS_PROJECTS_DIR: path.join(f.root, 'projects') }, encoding: 'utf8', timeout: 6000,
+      });
+      assert.equal(child.status, 0);
+      const output = JSON.parse(child.stdout);
+      assert.match(context(output), /Current task: inspect the sample/);
+      assert.match(context(output), /already-published/);
+      assert.match(context(output), /NOT instructions to repeat/);
+      assert.equal(context(output).includes('current plan fixture'), mode === 'adds context');
+      assert.ok(Buffer.byteLength(context(output), 'utf8') <= continuity.MAX_CONTEXT_BYTES);
+      if (mode === 'exceeds combined limit') assert.match(output.systemMessage, /selected-task context exceeds the compact output limit/);
+      else assert.equal(output.systemMessage, undefined);
+      assert.equal(fs.existsSync(marker), false, 'compact must not hydrate');
+    } finally { f.close(); }
+  });
+}

@@ -326,7 +326,7 @@ captures are not a canonical work ledger; they cannot grant execution authority.
 
 The project files remain the progress authority. An eligible Codex session can
 explicitly select one current Plan task using `plan-task-continuity.js`; the
-startup/resume and turn hooks then reread that task, its owner, inputs and next
+startup/resume, compact and turn hooks then reread that task, its owner, inputs and next
 action. Task changes are noticed even when the project stays active.
 
 The CLI uses JSON on stdin and the host's `JARVOS_PROJECTS_DIR` and
@@ -341,6 +341,11 @@ chooses the first open checkbox or claims a task. A task's `Owner:` detail must
 identify one retained session unambiguously; a missing/other owner, unavailable
 input, uncommitted file or stale selection is explicit. All project content is
 data, never execution authority. Read the actual inputs before continuing.
+Task lookup validates the complete canonical file up to 1 MiB, with the same
+guarded file identity/parser and full-source revision check, so long project
+history cannot hide a task or duplicate behind the display projection. The
+40,000-character project display and selected-context budgets are unchanged;
+oversize, unsafe or concurrently changed source requires reconciliation.
 
 Writeback stays with the authorized local file edit and scoped Git commit under
 the project's README. After meaningful progress, call `checkpoint` with the same
@@ -357,12 +362,17 @@ pointer shape; they are not a second progress store. An existing work handoff
 still requires workspace, HEAD, dirty-state and authority resolution.
 
 For a profile whose managed runtime is pinned, the CLI's `hook` action can be
-registered alongside existing `SessionStart` (`startup|resume`) and
+registered alongside existing `SessionStart` (`startup|resume|compact`) and
 `UserPromptSubmit` commands. It consumes the native event/session input and emits
 only the selected-task context. Preserve existing dispatchers, configuration and
 trust boundaries; use a reviewed, versioned local installation and the supported
 hook trust path. Rollback removes only these owned additions and retains newer
 profile edits and saved pointers. This requires no selected-package mutation,
-service, AgentMail operation or provider call. Compacted or externally launched
+service, AgentMail operation or provider call. On compact, the full hook adds the
+selected task beside the existing assignment-continuity output, preserving its
+receipts or unavailable warning without ordinary startup/hydration operations.
+If the combined compact block exceeds 64 KiB, preserve the original assignment
+context intact and report the explicit task-read fallback; never truncate data.
+Unselected sessions gain no task or authority. Compacted or externally launched
 sessions without the qualified hook remain unqualified until the explicit read
 fallback is used; hook output alone is not proof of model consumption.

@@ -13,7 +13,11 @@ async function main() {
     if (raw.length > 1_000_000) return {};
     const input = JSON.parse(raw);
     if (!['SessionStart', 'UserPromptSubmit'].includes(input.hook_event_name)
-      || (input.hook_event_name === 'SessionStart' && input.source && !['startup', 'resume'].includes(input.source))) return {};
+      || (input.hook_event_name === 'SessionStart' && input.source && !['startup', 'resume', 'compact'].includes(input.source))) return {};
+    if (input.hook_event_name === 'SessionStart' && input.source === 'compact'
+      && (input.agent_id || typeof input.session_id !== 'string'
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.session_id)
+        || (process.env.CODEX_THREAD_ID !== undefined && process.env.CODEX_THREAD_ID !== input.session_id))) return {};
     const context = await readPlanTaskContext({ directory: process.env.JARVOS_PROJECTS_DIR, sessionId: input.session_id });
     const markdown = renderPlanTaskContext(context);
     return markdown ? { hookSpecificOutput: { hookEventName: input.hook_event_name, additionalContext: markdown }, suppressOutput: true } : {};

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { planTasks, readProjectsFiles, projectStatusChanges, selectPlanTask, readPlanTaskContext, checkpointPlanTask } = require('../../modules/jarvos-agent-context/src/projects-files');
+const { planTasks, readProjectsFiles, projectStatusChanges, selectPlanTask, readPlanTaskContext, checkpointPlanTask, renderPlanTaskContext } = require('../../modules/jarvos-agent-context/src/projects-files');
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -54,6 +54,32 @@ test('two session pointers keep separate canonical tasks, owners, next actions a
   const stillB = await f.read(B); assert.equal(stillB.task.selector, 'Task B'); assert.equal(stillB.task.nextAction, 'Read B');
   assert.equal(stillB.changedSinceSelection, true); assert.equal(stillB.project.status, 'active');
   assert.equal(stillB.effectsAuthorized, false);
+});
+
+test('task lookup validates the full bounded canonical file beyond the orientation projection', async (t) => {
+  const f = fixture(t);
+  f.change('## Plan', `## History\n${'old history '.repeat(4000)}\n\n## Plan`);
+  const display = await readProjectsFiles(f.directory, { project: 'prj_named' });
+  assert.equal(display.truncated, true);
+  assert.ok(display.project.body.length <= 40_000);
+  assert.ok(!display.project.body.includes('Task A'));
+  const selected = await f.select();
+  assert.equal(selected.status, 'ok');
+  assert.equal(selected.task.selector, 'Task A');
+  assert.equal(selected.effectsAuthorized, false);
+  assert.equal(selected.project.revision, require('node:crypto').createHash('sha256').update(fs.readFileSync(f.file)).digest('hex'));
+  const rendered = renderPlanTaskContext(selected);
+  assert.ok(rendered.length < 14_000);
+  assert.match(rendered, /Read A/);
+  assert.ok(!rendered.includes('old history'));
+  const stateFile = path.join(f.stateDir, fs.readdirSync(f.stateDir).find(name => name.endsWith('.json')));
+  const state = fs.readFileSync(stateFile, 'utf8');
+  f.change('- [ ] Task B', '- [ ] Task A');
+  assert.equal((await f.select('Task A', A, { expectedState: selected.stateRevision })).code, 'PMS_TASK_AMBIGUOUS');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), state, 'duplicate beyond display budget preserves the pointer');
+  fs.appendFileSync(f.file, 'x'.repeat(1_048_576));
+  assert.equal((await f.select('Task A', A, { expectedState: selected.stateRevision })).code, 'PMS_PROJECT_INCOMPLETE');
+  assert.equal(fs.readFileSync(stateFile, 'utf8'), state, 'oversize canonical source preserves the pointer');
 });
 
 test('task details refresh with unchanged active status; legacy status cache migrates safely', async (t) => {
@@ -173,9 +199,49 @@ test('supported startup/resume and turn callers carry current task context; CLI 
   assert.match(turn.hookSpecificOutput.additionalContext, /Refreshed task/);
   const alongside = run('plan-task-continuity.js', { hook_event_name: 'UserPromptSubmit', session_id: A, prompt: 'x'.repeat(20_000) }, ['hook']);
   assert.match(alongside.hookSpecificOutput.additionalContext, /Refreshed task/);
-  assert.deepEqual(run('plan-task-continuity.js', { hook_event_name: 'SessionStart', session_id: A, source: 'compact' }, ['hook']), {});
+  assert.match(run('plan-task-continuity.js', { hook_event_name: 'SessionStart', session_id: A, source: 'compact' }, ['hook']).hookSpecificOutput.additionalContext, /Refreshed task/);
   const attack = spawnSync(process.execPath, [path.join(__dirname, 'plan-task-continuity.js'), 'read'], {
     env: f.env, input: JSON.stringify({ sessionId: B, directory: f.directory }), encoding: 'utf8',
   });
   assert.notEqual(attack.status, 0); assert.match(attack.stdout, /PMS_POINTER_INPUT_UNAVAILABLE/);
 });
+
+for (const script of ['plan-task-continuity.js', 'jarvos-session-start-hook.js']) {
+  test(`${script} compact rereads the selected current plan and preserves completed publication state`, async (t) => {
+    const f = fixture(t);
+    const current = 'Complete current coverage, refresh and release plan';
+    f.change('Task A', current);
+    f.change('Next: Read A', 'Next: Finish the local plan; no account actions.');
+    f.change('- [ ] Task B', '- [x] Publish old prediction');
+    f.change(`Owner: Journal (${B})`, `Owner: Source (${A})`);
+    f.change('- 2026-11-11 Started.', '- 2026-11-11 Original publication fulfilled on January 1; receipt fixture-original. No renewal.');
+    f.git('commit', '--only', '-qm', 'Record current task and prior fulfillment', '--', 'Project.md');
+    const run = (source = 'compact', fields = {}) => {
+      const result = spawnSync(process.execPath, [path.join(__dirname, script), ...(script === 'plan-task-continuity.js' ? ['hook'] : [])], {
+        env: f.env, input: JSON.stringify({ hook_event_name: 'SessionStart', source, session_id: A, ...fields }), encoding: 'utf8', timeout: 12000,
+      });
+      assert.equal(result.status, 0, result.stderr); return JSON.parse(result.stdout);
+    };
+    assert.equal(run().hookSpecificOutput, undefined, 'no task is chosen automatically');
+    const selected = await f.select(current);
+    const output = run();
+    const markdown = output.hookSpecificOutput?.additionalContext || '';
+    assert.match(markdown, /Selected canonical Plan task/);
+    assert.match(markdown, /<untrusted-project-data>[\s\S]*<\/untrusted-project-data>/);
+    const data = JSON.parse(markdown.split('<untrusted-project-data>\n')[1].split('\n</untrusted-project-data>')[0]);
+    assert.equal(data.task.selector, current);
+    assert.equal(data.task.nextAction, 'Finish the local plan; no account actions.');
+    assert.equal(data.disposition, 'current_owner');
+    assert.equal(data.effectsAuthorized, false);
+    assert.match(data.project.newestLog, /Original publication fulfilled/);
+    if (script === 'jarvos-session-start-hook.js') assert.match(output.systemMessage, /assignment continuity unavailable/);
+    assert.equal((await f.select('Publish old prediction', A, { expectedState: selected.stateRevision })).disposition, 'completed');
+    assert.match(run().hookSpecificOutput.additionalContext, /"disposition": "completed"/);
+    assert.match(run().hookSpecificOutput.additionalContext, /"effectsAuthorized": false/);
+    assert.equal(run('unknown').hookSpecificOutput, undefined);
+    await f.select(current, B);
+    for (const fields of [{ agent_id: B }, { session_id: B }, { session_id: 'invalid' }, { hook_event_name: 'PreCompact' }]) {
+      assert.equal(run('compact', fields).hookSpecificOutput, undefined, JSON.stringify(fields));
+    }
+  });
+}
