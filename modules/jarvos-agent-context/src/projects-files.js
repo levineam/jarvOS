@@ -112,6 +112,35 @@ function unavailable() {
   return { status: 'unavailable', code: 'PROJECTS_FILES_UNAVAILABLE', reason: 'Project files are unavailable', packet: null };
 }
 
+async function readProjectSource(root, rootStat, name, maxBytes) {
+  // Node has no openat(); retain file/root identity checks for both readers.
+  const filename = path.join(root, name);
+  if (path.dirname(await fs.realpath(filename)) !== root) throw new Error('Outside project directory');
+  const before = await fs.lstat(filename);
+  const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let source;
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error('File changed while opening');
+    if (maxBytes === undefined) source = await handle.readFile('utf8');
+    else {
+      if (opened.size > maxBytes) throw new Error('Project source too large');
+      const buffer = Buffer.alloc(maxBytes + 1);
+      let size = 0;
+      while (size < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, size, buffer.length - size, size);
+        if (!bytesRead) break;
+        size += bytesRead;
+      }
+      if (size > maxBytes) throw new Error('Project source too large');
+      source = buffer.toString('utf8', 0, size);
+    }
+  } finally { await handle.close(); }
+  const now = await fs.lstat(root).catch(() => null);
+  if (!now?.isDirectory() || now.dev !== rootStat.dev || now.ino !== rootStat.ino) throw new Error('Project directory changed');
+  return source;
+}
+
 async function readProjectsFiles(directory, { project } = {}) {
   if (project !== undefined && (typeof project !== 'string' || project.length < 1 || project.length > 200
     || /[\x00-\x1f\x7f\u0085\u2028\u2029]/.test(project))) {
@@ -127,14 +156,6 @@ async function readProjectsFiles(directory, { project } = {}) {
     if (!rootStat.isDirectory()) return unavailable();
     entries = await fs.readdir(root, { withFileTypes: true });
   } catch { return unavailable(); }
-  // Node has no openat(), so containment is checked by identity: the opened
-  // file must be the one lstat saw inside root, and root must not have been
-  // swapped while reading.
-  const sameRoot = async () => {
-    const now = await fs.lstat(root).catch(() => null);
-    return !!now && now.isDirectory() && now.dev === rootStat.dev && now.ino === rootStat.ino;
-  };
-
   const records = [];
   const skipped = [];
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
@@ -149,16 +170,7 @@ async function readProjectsFiles(directory, { project } = {}) {
     }
     let source;
     try {
-      const filename = path.join(root, entry.name);
-      if (path.dirname(await fs.realpath(filename)) !== root) throw new Error('Outside project directory');
-      const before = await fs.lstat(filename);
-      const handle = await fs.open(filename, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      try {
-        const opened = await handle.stat();
-        if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) throw new Error('File changed while opening');
-        source = await handle.readFile('utf8');
-      } finally { await handle.close(); }
-      if (!(await sameRoot())) throw new Error('Project directory changed');
+      source = await readProjectSource(root, rootStat, entry.name);
     } catch {
       skipped.push({ file: entry.name, reason: 'File unavailable or unsafe' });
       continue;
@@ -455,8 +467,17 @@ async function resolvePlanTask(directory, reference, sessionId) {
     throw pointerError('PMS_TASK_REFERENCE_UNAVAILABLE');
   }
   const result = await readProjectsFiles(directory, { project: reference.itemId });
-  if (!result.ok || result.truncated || result.project.id !== reference.itemId) throw pointerError(result.code || 'PMS_PROJECT_INCOMPLETE');
-  const record = result.project;
+  if (!result.ok || result.project.id !== reference.itemId) throw pointerError(result.code || 'PMS_PROJECT_INCOMPLETE');
+  let source, complete;
+  try {
+    const root = await fs.realpath(directory);
+    source = await readProjectSource(root, await fs.stat(root), result.project.file, 1_048_576);
+    complete = parse(source);
+  } catch { throw pointerError('PMS_PROJECT_INCOMPLETE'); }
+  if (!complete || complete.id !== reference.itemId) throw pointerError('PMS_PROJECT_INCOMPLETE');
+  if (crypto.createHash('sha256').update(source).digest('hex') !== result.project.revision) throw pointerError('PMS_PROJECT_REVISION_CONFLICT');
+  // Display truncation is not a complete task lookup; validate the bounded source.
+  const record = { ...result.project, body: complete.body };
   const matches = planTasks(record.body).filter((task) => task.selector === reference.operationId);
   if (matches.length !== 1) throw pointerError(matches.length ? 'PMS_TASK_AMBIGUOUS' : 'PMS_TASK_RENAMED_OR_MISSING');
   const task = matches[0];
