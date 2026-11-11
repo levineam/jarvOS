@@ -194,7 +194,14 @@ function createFileSessionStateStore(path = {}) {
     },
     async write(nextState) {
       await fs.promises.mkdir(pathLib.dirname(normalized), { recursive: true });
-      fs.writeFileSync(normalized, JSON.stringify(nextState, null, 2) + '\n', 'utf8');
+      // Readers must see either complete pointer, never a half-written checkpoint.
+      const temp = `${normalized}.${process.pid}.${require('node:crypto').randomBytes(8).toString('hex')}`;
+      try {
+        fs.writeFileSync(temp, JSON.stringify(nextState, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+        fs.renameSync(temp, normalized);
+      } finally {
+        if (fs.existsSync(temp)) fs.unlinkSync(temp);
+      }
       return nextState;
     },
   };

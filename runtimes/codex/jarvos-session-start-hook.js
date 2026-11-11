@@ -5,7 +5,7 @@ const { projectStatusChanges } = require('../../modules/jarvos-agent-context/src
 const fs = require('node:fs');
 const os = require('os');
 const path = require('path');
-const { hydrate } = require('../../modules/jarvos-agent-context/src/index.js');
+const { hydrate, currentPlanTaskContext } = require('../../modules/jarvos-agent-context/src/index.js');
 const { envelopeHasContent: projectsContextRefreshHasContent } = require('../../modules/jarvos-runtime-kit/src/projects-context-refresh.js');
 const {
   additionalContext,
@@ -104,7 +104,10 @@ async function main() {
     } catch (error) {
       logFailure(error);
     }
-    const context = [judgment, projectsContextMarkdown, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
+    // Keep the selected task in its own complete data block; hydration's budget
+    // must not cut the task or turn its trailing data into instructions.
+    const selectedTask = process.env.JARVOS_PROJECTS_DIR === undefined ? '' : await currentPlanTaskContext(hookSessionId(input, 'SessionStart'));
+    const context = [selectedTask, judgment, projectsContextMarkdown, hydration].filter((value) => typeof value === 'string' && value.trim()).join('\n\n');
     if (!context) {
       writeJson({});
       return;

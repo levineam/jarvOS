@@ -197,7 +197,7 @@ function runSessionStartHook(runtime, env, input, hydrationMarkdown) {
     "const fs = require('node:fs');",
     `const agentContextPath = ${JSON.stringify(agentContextPath)};`,
     `const callsPath = ${JSON.stringify(callsPath)};`,
-    `require.cache[agentContextPath] = { id: agentContextPath, filename: agentContextPath, loaded: true, exports: { hydrate: async (options) => { fs.writeFileSync(callsPath, JSON.stringify(options)); return { markdown: ${JSON.stringify(hydrationMarkdown)} }; } } };`,
+    `require.cache[agentContextPath] = { id: agentContextPath, filename: agentContextPath, loaded: true, exports: { currentPlanTaskContext: async () => '', hydrate: async (options) => { fs.writeFileSync(callsPath, JSON.stringify(options)); return { markdown: ${JSON.stringify(hydrationMarkdown)} }; } } };`,
     runtime === 'claude'
       ? "const childProcess = require('node:child_process'); childProcess.spawn = () => ({ unref() {} });"
       : '',
