@@ -12,7 +12,10 @@ const os = require('os');
 const crypto = require('node:crypto');
 const { spawnSync } = require('child_process');
 const { createHostProjectsContextProvider } = require('./projects-context-bootstrap');
-const { readProjectsFiles, renderProjectsFilesMarkdown } = require('./projects-files');
+const { readProjectsFiles, renderProjectsFilesMarkdown, readPlanTaskContext, renderPlanTaskContext } = require('./projects-files');
+async function currentPlanTaskContext(sessionId) {
+  return renderPlanTaskContext(await readPlanTaskContext({ directory: process.env.JARVOS_PROJECTS_DIR, sessionId }));
+}
 const { normalizeProposal, ProposalValidationError } = require('./projects-proposals');
 
 const {
@@ -2524,6 +2527,7 @@ module.exports = {
   HYDRATION_PROJECTS_PROVIDER,
   HYDRATION_ACCOUNTABILITY_PIN,
   HYDRATION_ACCOUNTABILITY_BRIEF,
+  currentPlanTaskContext,
   checkProjectsAccountabilityResume,
   controlPlane,
   runtimeActivationStatus,

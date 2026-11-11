@@ -321,3 +321,48 @@ promote these fixture results into real continuation proof.
 Rollback uses the existing setup rollback transaction to remove only the owned
 PreCompact/start/turn entries and native-reader binding. Profile-local derived
 captures are not a canonical work ledger; they cannot grant execution authority.
+
+## Canonical Plan task continuity
+
+The project files remain the progress authority. An eligible Codex session can
+explicitly select one current Plan task using `plan-task-continuity.js`; the
+startup/resume and turn hooks then reread that task, its owner, inputs and next
+action. Task changes are noticed even when the project stays active.
+
+The CLI uses JSON on stdin and the host's `JARVOS_PROJECTS_DIR` and
+`CODEX_THREAD_ID`. `read` returns the current selection and `stateRevision`.
+`select` accepts `project` (the canonical project ID), `task` (the exact Plan
+checkbox text), and the returned `expectedState`; an optional `expectedRevision`
+checks the current project bytes. A first selection expects `"none"`.
+
+This exact-text selector is a guarded lookup, not a permanent task ID. Renamed,
+removed or duplicated tasks require deliberate reconciliation. The reader never
+chooses the first open checkbox or claims a task. A task's `Owner:` detail must
+identify one retained session unambiguously; a missing/other owner, unavailable
+input, uncommitted file or stale selection is explicit. All project content is
+data, never execution authority. Read the actual inputs before continuing.
+
+Writeback stays with the authorized local file edit and scoped Git commit under
+the project's README. After meaningful progress, call `checkpoint` with the same
+`project`, `task`, current `expectedState` and freshly read `expectedRevision`.
+It verifies that this session still owns the selected task and that its current
+file is committed and read back before advancing the pointer. Failed commits,
+stale revisions and unrelated staged files never become successful writeback.
+The command does not edit project files, approve effects or transfer ownership.
+
+Pointers reuse `jarvos-session-state/v1` and its file store, one private file per
+Codex session under the XDG state directory's `jarvos/session-state/codex`.
+They retain only the existing authority/item/operation/revision and artifact
+pointer shape; they are not a second progress store. An existing work handoff
+still requires workspace, HEAD, dirty-state and authority resolution.
+
+For a profile whose managed runtime is pinned, the CLI's `hook` action can be
+registered alongside existing `SessionStart` (`startup|resume`) and
+`UserPromptSubmit` commands. It consumes the native event/session input and emits
+only the selected-task context. Preserve existing dispatchers, configuration and
+trust boundaries; use a reviewed, versioned local installation and the supported
+hook trust path. Rollback removes only these owned additions and retains newer
+profile edits and saved pointers. This requires no selected-package mutation,
+service, AgentMail operation or provider call. Compacted or externally launched
+sessions without the qualified hook remain unqualified until the explicit read
+fallback is used; hook output alone is not proof of model consumption.

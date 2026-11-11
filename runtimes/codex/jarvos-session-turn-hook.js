@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-const { projectStatusChanges } = require('../../modules/jarvos-agent-context/src/projects-files.js');
+const { projectStatusChanges, readPlanTaskContext, renderPlanTaskContext } = require('../../modules/jarvos-agent-context/src/projects-files.js');
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 const { trustedExecutable } = require('../../modules/jarvos-runtime-kit/src/trusted-native-command.js');
@@ -226,7 +226,7 @@ function writeJson(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
 }
 
-function main(sessionId = readHookInput('UserPromptSubmit')) {
+async function main(sessionId = readHookInput('UserPromptSubmit')) {
   try {
     const env = bridgeEnvironment(sessionId);
     if (!env) {
@@ -243,6 +243,8 @@ function main(sessionId = readHookInput('UserPromptSubmit')) {
     const contexts = [];
     if (projectsContextRefreshHasContent(refresh.envelope)) contexts.push(refresh.envelope.markdown);
     if (process.env.JARVOS_PROJECTS_DIR !== undefined) {
+      const selected = renderPlanTaskContext(await readPlanTaskContext({ directory: process.env.JARVOS_PROJECTS_DIR, sessionId }));
+      if (selected) contexts.push(selected);
       try { const changes = projectStatusChanges(process.env.JARVOS_PROJECTS_DIR, sessionId); if (changes) contexts.push(changes); }
       catch { /* the turn continues without it */ }
     }
