@@ -33,6 +33,7 @@ test('Claude setup materializes a quoted capture path that ignores a hostile wor
       'runtimes/claude/jarvos-session-start-hook.js',
       'runtimes/claude/jarvos-session-turn-hook.js',
       'runtimes/claude/jarvos-precompact-hook.js',
+      'runtimes/claude/jarvos-coordinator-guard-hook.js',
     ]) {
       const destination = path.join(install, relative);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
