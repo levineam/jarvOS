@@ -6,6 +6,7 @@ MCP_SERVER="$ROOT/modules/jarvos-agent-context/scripts/jarvos-mcp.js"
 HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-start-hook.js"
 TURN_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-session-turn-hook.js"
 PRECOMPACT_HOOK_SCRIPT="$ROOT/runtimes/claude/jarvos-precompact-hook.js"
+COORDINATOR_GUARD_SCRIPT="$ROOT/runtimes/claude/jarvos-coordinator-guard-hook.js"
 CLAUDE_MD_TEMPLATE="$ROOT/runtimes/claude/templates/CLAUDE.md.template"
 CAPTURE_SCRIPT="$ROOT/modules/jarvos-secondbrain/scripts/jarvos-capture.js"
 WORK_CONTEXT_SOURCE="$ROOT/modules/jarvos-instruction-projection/content/durable-orientation.md"
@@ -110,6 +111,11 @@ if [ ! -f "$PRECOMPACT_HOOK_SCRIPT" ]; then
   exit 1
 fi
 
+if [ ! -f "$COORDINATOR_GUARD_SCRIPT" ]; then
+  echo "jarvOS Claude coordinator guard script not found: $COORDINATOR_GUARD_SCRIPT" >&2
+  exit 1
+fi
+
 # Managed mode rotates immutable runtime stages under a stable selector, so a
 # persisted MCP command must be the stable bundle's selector-aware jarvos-mcp
 # shim, never this stage's own script: a stage-pinned registration keeps
@@ -208,12 +214,12 @@ else
   echo "Claude Code CLI not found on PATH; skipping Claude Code MCP registration." >&2
 fi
 
-node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$STABLE_MCP_ENTRYPOINT" <<'NODE'
+node - "$CLAUDE_SETTINGS" "$HOOK_SCRIPT" "$TURN_HOOK_SCRIPT" "$PRECOMPACT_HOOK_SCRIPT" "$STEWARDSHIP_DISPATCHER" "$CLAUDE_DESKTOP_CONFIG" "$MCP_SERVER" "${JARVOS_STEWARDSHIP_ONLY:-0}" "${JARVOS_MANAGED_HARNESS_ROLLBACK:-0}" "$STEWARDSHIP_BRIDGE_COMMAND" "$STEWARDSHIP_CLAUDE_SESSION_MAP_ROOT" "$STEWARDSHIP_BRIDGE_PATH" "${JARVOS_STAGED_PUBLIC_RUNTIME_ROOT:-}" "$STABLE_MCP_ENTRYPOINT" "$COORDINATOR_GUARD_SCRIPT" <<'NODE'
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot, stableMcpEntrypoint] = process.argv.slice(2);
+const [settingsPath, hookScript, turnHookScript, precompactHookScript, dispatcher, desktopConfigPath, mcpServer, stewardshipOnly, rollback, bridgeCommand, claudeSessionMapRoot, bridgePath, stagedRoot, stableMcpEntrypoint, coordinatorGuardScript] = process.argv.slice(2);
 
 function readJsonFile(filePath, fallback) {
   if (!fs.existsSync(filePath)) return fallback;
@@ -272,11 +278,12 @@ function upsertClaudeCodeHook(settings, bridge) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
 
-  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, dispatcher].filter(Boolean);
+  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, coordinatorGuardScript, dispatcher].filter(Boolean);
   if (path.isAbsolute(stagedRoot || '')) {
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-turn-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
+    ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-coordinator-guard-hook.js'));
   }
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // A path is written into the command shell-quoted, and shellQuote renders an
@@ -400,6 +407,11 @@ function upsertClaudeCodeHook(settings, bridge) {
       upsert('PreCompact', precompactHookScript, null);
     }
   }
+  // This action is local; the stewardship dispatcher does not implement it.
+  upsert('PreToolUse', coordinatorGuardScript, rollback === '1' || process.env.JARVOS_SKIP_COORDINATOR_GUARD === '1' ? null : {
+    matcher: 'Write|Edit|MultiEdit|NotebookEdit|Bash',
+    hooks: [{ type: 'command', command: `node ${shellQuote(coordinatorGuardScript)}`, timeout: 10 }],
+  });
   next.hooks = hooks;
   return next;
 }

@@ -208,6 +208,14 @@
         "event": "PreCompact",
         "script": "jarvos-precompact-hook.js"
       },
+      "guards": [
+        {
+          "event": "PreToolUse",
+          "script": "jarvos-coordinator-guard-hook.js",
+          "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+          "description": "Fail-open coordinator guard: route build work to the owning session while permitting coordination files. Always invoked directly with node."
+        }
+      ],
       "bootstrap": {
         "claudeMd": {
           "template": "templates/CLAUDE.md.template",
@@ -367,6 +375,7 @@
     "claude mcp get jarvos",
     "node runtimes/claude/jarvos-session-start-hook.js",
     "node runtimes/claude/jarvos-precompact-hook.js",
+    "node --test modules/jarvos-runtime-kit/test/claude-coordinator-guard.test.js",
     "node modules/jarvos-runtime-kit/scripts/jarvos-runtime-kit.js check claude"
   ]
 }

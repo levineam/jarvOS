@@ -175,6 +175,57 @@ Save requested Ideas, Journal entries and notes with `jarvos_capture` (or `jarvo
 
 Setup keeps the guideline current in a managed capture block, backing up changed instruction files first and preserving everything outside that block.
 
+## Coordinator guard
+
+Setup registers a `PreToolUse` guard for `Write`, `Edit`, `MultiEdit`,
+`NotebookEdit`, and `Bash`. Marked coordinators can maintain coordination files
+but must hand product edits, builds, tests, releases, and Git publication to the
+owning session listed in the project's `sessions:` field. Other sessions are
+unaffected. The guard always runs directly with Node, including managed installs.
+It uses Node built-ins and the existing setup ownership pattern; no dependency
+or external solution is needed for this bounded command check.
+
+Mark a session, inspect its status, or unmark it:
+
+```bash
+node runtimes/claude/jarvos-coordinator-guard-hook.js mark 00000000-test-coordinator
+node runtimes/claude/jarvos-coordinator-guard-hook.js status 00000000-test-coordinator
+node runtimes/claude/jarvos-coordinator-guard-hook.js unmark 00000000-test-coordinator
+```
+
+The id is the Claude Code session id that hooks receive as `session_id`; it is
+also the file name of the session's transcript under `~/.claude/projects/`.
+Alternatively, launch the session with `JARVOS_COORDINATOR=1` (`true` and `yes`
+also work). Configuration defaults to `~/.claude/jarvos-coordinator-guard.json`;
+`JARVOS_COORDINATOR_GUARD_CONFIG` overrides its location:
+
+```json
+{
+  "coordinatorSessions": ["00000000-test-coordinator"],
+  "allowWrite": ["~/notes/projects", "~/.claude/coordinator-state"],
+  "allowGit": ["~/notes/projects"]
+}
+```
+
+Allowlisted directories include their descendants, with symlinks resolved.
+`allowGit` defaults to `allowWrite` when omitted. Writes to `~/.claude/plans`,
+`~/.claude/projects`, the system temp directory, and Claude Code's scratch folder
+(`/tmp/claude-<uid>`) are
+always allowed. `JARVOS_PROJECTS_DIR`, when set, permits both writes and Git
+operations in that directory. CLI changes preserve other config keys and replace
+the file atomically with mode `0600`.
+
+To bypass the guard, set `JARVOS_COORDINATOR_GUARD=off` (`0` or `false` also work)
+or create `~/.claude/coordinator-guard.disabled`. Run setup with
+`JARVOS_SKIP_COORDINATOR_GUARD=1` to omit or remove its registration; managed
+rollback removes it too. Unrelated hooks are preserved.
+
+The hook fails open: errors, malformed input, and unsupported shell syntax
+produce no output and exit successfully. Missing or invalid config is treated
+as empty; environment-marked coordinators still use the defaults. This is a
+coordination aid, not a shell security boundary: it checks simple commands and
+strips heredoc bodies, but does not inspect scripts or expand shell expressions.
+
 ## Verification
 
 ```bash
