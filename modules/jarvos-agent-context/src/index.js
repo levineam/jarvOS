@@ -580,6 +580,7 @@ function oneLineGoal(goal, limit = 100) {
 }
 
 function renderProjectsContextMarkdown(result, maxChars = 3600) {
+  if (result?.contract === 'jarvos.projects-files/v1') return renderProjectsFilesMarkdown(result, { maxChars });
   if (!result || result.status !== 'ok' || !result.packet) {
     return `## Projects Context\nUnavailable: ${safeProjectsReason(result?.reason, 'Projects provider is not configured')}.`;
   }
@@ -2537,6 +2538,7 @@ module.exports = {
   currentWork,
   defaultFrontmatter,
   renderCurrentWorkUnavailable,
+  renderProjectsContextMarkdown,
   ensureTodayJournal,
   expandTilde,
   hydrate,

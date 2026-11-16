@@ -68,7 +68,7 @@ test('orientation skips reserved/non-project/malformed files and marks private p
   write('broken.md', '---\ntype: project\ntitle: "unterminated\n---\n');
   write('editor.md', source({ extra: 'private: true # included\n' }));
   write('ignored.txt', source());
-  const packet = await readProjectsFiles(dir);
+  const packet = await readProjectsFiles(dir, { now: '2026-10-28T12:00:00Z' });
   assert.equal(packet.ok, true);
   assert.equal(packet.status, 'ok');
   assert.equal(packet.contract, 'jarvos.projects-files/v1');
@@ -79,7 +79,7 @@ test('orientation skips reserved/non-project/malformed files and marks private p
     id: 'prj_000123', title: 'Notes Editor', parent: 'jarvOS Desktop', status: 'active', private: true,
     updated: '2026-10-28', goal: 'Keep notes editable.', done: { checked: 2, total: 3 },
     nextSteps: ['Next step (in progress: Codex, 10-28)', 'Second step', 'Third step'],
-    lastLog: '2026-10-28 Codex: shipped autosave prototype.',
+    lastLog: '2026-10-28 Codex: shipped autosave prototype.', stalled: [],
   }]);
   assert.deepEqual(packet.skipped.map((item) => item.file).sort(), ['README.md', 'broken.md', 'index.md', 'note.md'].sort());
   assert.ok(packet.skipped.every((item) => item.reason.length > 0 && item.reason.length < 80));
