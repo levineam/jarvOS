@@ -2,6 +2,14 @@
 
 Contract, scaffold, and conformance checks for jarvOS runtime adapters.
 
+## Primary alert channel
+
+`readAlertSettings`, `writeAlertSettings`, and `resetAlertSettings` manage
+`~/.jarvos/alerts.json` (override with `configPath`). `deliverRoutineAlert`
+appends to a caller-supplied Chief of Staff inbox or invokes a caller-supplied
+Telegram sender. The default primary channel is Chief of Staff; escalation is
+configured separately as Telegram.
+
 ## Constrained generation (declaration-only)
 
 `evaluateConstrainedGeneration(record)` evaluates a redacted, backend-neutral
