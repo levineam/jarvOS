@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const PUBLIC_STATUSES = new Set(['committed', 'saved_locally_sync_pending', 'already_satisfied', 'conflict', 'blocked', 'unavailable', 'failed', 'unknown_after_dispatch']);
 const SYNC_STATES = new Set(['disabled', 'converged', 'pending', 'diverged', 'unknown']);
-const LIFECYCLE_STATES = new Set(['planned', 'local_mutating', 'local_applied', 'dispatched', 'unknown_after_dispatch', 'acknowledged', 'conflict', 'blocked']);
+const LIFECYCLE_STATES = new Set(['planned', 'local_mutating', 'local_applied', 'dispatched', 'unknown_after_dispatch', 'acknowledged', 'abandoned', 'conflict', 'blocked']);
 const PUBLIC_PERSISTENCE = new Set(['durable', 'pending', 'unavailable', 'failed', 'unknown']);
 const PUBLIC_OBSIDIAN = new Set(['acknowledged', 'pending', 'unavailable', 'unknown']);
 
@@ -69,6 +69,7 @@ function validateOperation(input, { identityPolicy } = {}) {
   if (typeof input.vaultId !== 'string' || !input.vaultId.trim()) fail('Invalid vaultId');
   if (!Number.isSafeInteger(input.sequence) || input.sequence < 1) fail('Invalid operation sequence');
   if (!['create', 'transform', 'replace', 'delete'].includes(input.operationKind)) fail('Invalid operation kind');
+  if (input.createOnly !== undefined && (typeof input.createOnly !== 'boolean' || input.operationKind !== 'create')) fail('createOnly must be a boolean on a create operation');
   const operation = { ...input, vaultRelativePath: validateVaultRelativeMarkdownPath(input.vaultRelativePath) };
   if (operation.expectedHash !== undefined && !isHash(operation.expectedHash)) fail('Invalid expectedHash');
   if (operation.intendedHash !== undefined && !isHash(operation.intendedHash)) fail('Invalid intendedHash');

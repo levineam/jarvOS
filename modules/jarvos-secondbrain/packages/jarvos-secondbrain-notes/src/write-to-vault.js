@@ -340,7 +340,7 @@ function hasPersistedNoteBytes(filePath, receipt) {
   );
 }
 
-function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, notesDir = getVaultNotesDir(), knowledgeDir, sequence = 1, source, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
+function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutationExecutor, operationId, vaultId, vaultRoot, notesDir = getVaultNotesDir(), knowledgeDir, sequence = 1, source, createOnly = false, resolveUserSource, drafting, content_origin_drafting, resolveServedModel, preserveExistingBodyBytes = false, expectedExistingContent }) {
   const collectedDrafting = collectDraftingDeclarations(drafting, content_origin_drafting);
   if (!collectedDrafting.ok) throw new Error(`Invalid note frontmatter: content_origin_drafting rejected: invalid_drafting:${collectedDrafting.reason}`);
   const draftingDeclaration = collectedDrafting.entries;
@@ -365,7 +365,8 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   }
   const existingContent = bindExpectedState
     ? expectedExistingContent
-    : created ? '' : readFileSync(filePath, 'utf8');
+    // Create-only collisions belong to the writer, regardless of existing metadata.
+    : created || createOnly ? '' : readFileSync(filePath, 'utf8');
   // The metadata rendered below and the compare-and-swap guard come from the
   // same bytes, so a change landing between two reads cannot be committed under
   // a guard for the newer bytes while the write renders the older metadata.
@@ -409,7 +410,7 @@ function writeNoteFile({ title, content, frontmatter = {}, appendEntry, mutation
   if (bindExpectedState && (operation.operationKind !== 'replace' || operation.expectedHash !== hashUtf8(expectedExistingContent))) {
     throw new NoteExpectedStateError('expected_state_not_enforceable');
   }
-  const receipt = mutationExecutor(operation);
+  const receipt = mutationExecutor(createOnly ? { ...operation, createOnly: true } : operation);
   const persistedOperation = receipt.operation || operation;
   const hasBytes = hasPersistedNoteBytes(filePath, receipt);
   const artifactReceipt = createArtifactReceipt({

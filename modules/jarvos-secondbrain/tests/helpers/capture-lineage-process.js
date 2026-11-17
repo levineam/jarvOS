@@ -32,7 +32,7 @@ function flushAllCallbacks() {
   while (pendingCallbacks.length) flushCallbacks();
 }
 
-const { root, capture, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
+const { root, capture, mutation, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
   inboxNow = '2030-02-03T12:00:00Z', inboxRoot, clockNow, journalFolder = 'Journal', notesFolder = 'Notes' } = JSON.parse(fs.readFileSync(0, 'utf8'));
 if (clockNow) {
   const RealDate = Date;
@@ -53,6 +53,10 @@ const vault = {
   read: (file) => deferred(() => fs.readFileSync(absolute(file.path), 'utf8')),
   create: (relative, content) => deferred(() => {
     if (!relative.startsWith('phanos/receipts/')) fs.mkdirSync(path.dirname(absolute(relative)), { recursive: true });
+    if (relative.startsWith('Notes/') && ['race_create', 'race_identical_create'].includes(fault)) {
+      fs.writeFileSync(absolute(relative), fault === 'race_identical_create' ? content : 'An invented competing note.', { flag: 'wx' });
+      faultTriggered = true;
+    }
     fs.writeFileSync(absolute(relative), content, { flag: 'wx' });
     writes.push(relative);
     return { path: relative };
@@ -80,6 +84,11 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
       const encoded = code.match(/atob\('([^']+)'\)/)?.[1];
       const input = encoded ? JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) : null;
       const mutation = input && !input.inspectionToken;
+      if (mutation && fault === 'race_before_dispatch' && input.vaultRelativePath.startsWith('Notes/')) {
+        fs.mkdirSync(path.dirname(absolute(input.vaultRelativePath)), { recursive: true });
+        fs.writeFileSync(absolute(input.vaultRelativePath), 'An invented competing note.', { flag: 'wx' });
+        faultTriggered = true;
+      }
       if (mutation && fault === 'exit_after_effect' && (input.vaultRelativePath.startsWith('Notes/') || input.transformName === 'journal-section-line')) {
         vm.runInContext(code, context);
         flushAllCallbacks();
@@ -129,6 +138,7 @@ async function main() {
         }
       } });
     if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
+    if (mutation) result = service.applyMarkdownMutation(mutation);
     if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
   } catch (caught) { error = caught.message; result = null; }
   // A timed-out app operation may complete after the caller has already returned.

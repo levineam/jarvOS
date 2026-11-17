@@ -55,7 +55,8 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
       ledger.transition(operation.operationId, 'local_applied', { ownerId, fence: claim.fence, evidence: { localHash: hashUtf8(operation.content) } });
       return { status: 'saved_locally_sync_pending', persistence: 'pending', localMutation: 'applied' };
     } catch (error) {
-      try { ledger.transition(operation.operationId, 'conflict', { ownerId, fence: claim.fence, evidence: { errorClass: error.code === 'EEXIST' ? 'create_collision' : 'local_mutation_failed' } }); } catch {}
+      const rejectedCreate = operation.createOnly && operation.operationKind === 'create' && error.code === 'EEXIST';
+      try { ledger.transition(operation.operationId, rejectedCreate ? 'abandoned' : 'conflict', { ownerId, fence: claim.fence, evidence: { errorClass: rejectedCreate ? 'note_exists' : error.code === 'EEXIST' ? 'create_collision' : 'local_mutation_failed' } }); } catch {}
       return { status: 'conflict', errorClass: error.code === 'EEXIST' ? 'create_collision' : 'local_mutation_failed' };
     }
   }

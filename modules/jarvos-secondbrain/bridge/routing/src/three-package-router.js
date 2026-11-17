@@ -75,6 +75,7 @@ function applyStoragePlan(plan, capture = {}, options = {}) {
 
   if (plan.createNote) {
     result.note = adapter.writeNote({
+      ...(capture.createOnly === true ? { createOnly: true } : {}),
       title: plan.noteTitle,
       content: plan.noteContent,
       frontmatter: {

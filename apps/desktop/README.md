@@ -171,3 +171,6 @@ unavailable. Only `Ideas` and `Journal` are accepted, with required `words`
 (`user`, `assistant`, `mixed`) and `asked` (`explicit`, `accepted_offer`). The
 installed Desktop copy never imports repository modules or writes journal bullets
 directly; the capture receipt supplies the one-line result.
+The CLI's additional `standing_request` value is an honesty label, not
+authorization, reserved for host apps with a user-enabled standing setting;
+it is not exposed to a chat model saving on the spot.

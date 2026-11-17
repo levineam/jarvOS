@@ -125,9 +125,10 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         ]),
       };
     },
-    writeNote({ title, content, frontmatter = {}, intentId, requestHash, resolveUserSource, resolveServedModel } = {}) {
+    writeNote({ title, content, frontmatter = {}, intentId, requestHash, createOnly, resolveUserSource, resolveServedModel } = {}) {
       const filePath = noteFilePath(title, notesDir);
-      return writeNoteFile({ title, content, frontmatter, notesDir, knowledgeDir, resolveUserSource, resolveServedModel, ...contextFor(relativeToVault(vaultRoot, filePath), intentId, requestHash) });
+      const context = service.createWriteContext({ vaultRelativePath: relativeToVault(vaultRoot, filePath), intentId, requestHash, createOnly, operationSource: service.source });
+      return writeNoteFile({ title, content, frontmatter, notesDir, knowledgeDir, createOnly, resolveUserSource, resolveServedModel, ...context });
     },
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId, journalPolicy, explicitBacklink, frontmatter, notePath } = {}) {
       if (resolveJournalLinkPolicy({ noteTitle, notePath, frontmatter, journalPolicy, explicitBacklink, vaultRoot, source }) === 'none') return { status: 'not_requested', linked: false, acknowledged: false };

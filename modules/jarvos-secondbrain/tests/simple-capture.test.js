@@ -31,14 +31,28 @@ test('simple capture maps words and validates through the existing contract', ()
     const normalized = normalizeCaptureEvent(buildSimpleCaptureEvent({ ...base, source }));
     assert.equal(normalized.source.label, source);
   }
-  assert.equal(buildSimpleCaptureEvent({ ...base, asked: 'accepted_offer' }).frontmatter.capture_asked, 'accepted_offer');
+  for (const asked of ['accepted_offer', 'standing_request']) {
+    assert.equal(buildSimpleCaptureEvent({ ...base, asked }).frontmatter.capture_asked, asked);
+  }
 });
 
 test('simple capture rejects unsupported or missing declarations', () => {
   for (const kind of ['idea', 'journal']) assert.throws(() => buildSimpleCaptureEvent({ ...base, kind, title: 'Tidal gardens' }), /title is only used for notes/);
-  for (const asked of [undefined, 'unasked', 'ambient']) assert.throws(() => buildSimpleCaptureEvent({ ...base, asked }), /save only when the user asked or accepted an offer/);
+  for (const asked of [undefined, 'unasked', 'ambient']) assert.throws(() => buildSimpleCaptureEvent({ ...base, asked }), /asked must be explicit, accepted_offer, or standing_request/);
   for (const patch of [{ kind: 'project' }, { words: 'human' }, { text: '' }, { text: 3 }, { source: '' }, { date: '2026-02-30' }, { title: null, kind: 'note' }, { model: 5 }]) {
     assert.throws(() => buildSimpleCaptureEvent({ ...base, ...patch }));
+  }
+});
+
+test('createOnly is a boolean note option preserved by normalization', () => {
+  const input = { ...base, kind: 'note', createOnly: true };
+  assert.equal(normalizeCaptureEvent(buildSimpleCaptureEvent(input)).createOnly, true);
+  for (const kind of ['idea', 'journal']) {
+    assert.throws(() => buildSimpleCaptureEvent({ ...input, kind }), /createOnly is only used for notes/);
+    assert.throws(() => normalizeCaptureEvent({ ...buildSimpleCaptureEvent(input), trigger: kind }), /only used for notes/);
+  }
+  for (const createOnly of ['true', 1, null]) {
+    assert.throws(() => buildSimpleCaptureEvent({ ...input, createOnly }), /createOnly must be a boolean/);
   }
 });
 

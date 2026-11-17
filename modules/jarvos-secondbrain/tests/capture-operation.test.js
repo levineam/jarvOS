@@ -8,6 +8,7 @@ const path = require('node:path');
 const { execFile, execFileSync, spawnSync } = require('node:child_process');
 const { normalizeCaptureEvent } = require('../bridge/capture/src/universal-capture');
 const { buildSimpleCaptureEvent } = require('../bridge/capture/src/simple-capture');
+const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
 
 const base = { kind: 'idea', text: 'An invented tidal garden.', words: 'user', asked: 'explicit',
   source: 'codex', date: '2030-02-03', opId: 'test-operation-001' };
@@ -33,6 +34,143 @@ function fixture(t) {
   run.root = root;
   return run;
 }
+
+test('a standing create-only request saves and links once, then replays its create', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented garden', asked: 'standing_request', createOnly: true };
+  const first = run({ capture });
+  assert.equal(first.result.ok, true, JSON.stringify(first));
+  assert.match(first.notes[0].content, /capture_asked: standing_request/);
+  assert.equal(first.journal.split('[[Invented garden]]').length - 1, 1);
+  const second = run({ capture });
+  assert.equal(second.result.ok, true, JSON.stringify(second));
+  assert.equal(second.result.result.note.receipt.replay, true);
+  assert.deepEqual(second.notes, first.notes);
+  assert.equal(second.journal, first.journal);
+  assert.deepEqual(second.writes, []);
+  for (const patch of [{ text: 'Another invented note.' }, { createOnly: false }, { asked: 'explicit' }]) {
+    const changed = run({ capture: { ...capture, ...patch } });
+    assert.match(changed.error, /already used for different content/);
+    assert.deepEqual(changed.notes, first.notes);
+    assert.equal(changed.journal, first.journal);
+    assert.deepEqual(changed.writes, []);
+  }
+});
+
+test('create-only refuses any existing title, including empty notes, without a journal mutation', (t) => {
+  for (const content of ['', 'An invented existing note.', '---\ncontent_origin_drafting: invalid\n---\nAn invented malformed note.']) {
+    for (const opId of [undefined, 'test-create-only-001']) {
+      const run = fixture(t);
+      const before = run({ capture: base });
+      const notesDir = path.join(run.root, 'vault/Notes');
+      fs.mkdirSync(notesDir);
+      fs.writeFileSync(path.join(notesDir, 'Invented garden.md'), content);
+      const capture = { ...base, kind: 'note', title: 'Invented garden', createOnly: true, opId };
+      const rejected = run({ capture });
+      assert.equal(rejected.result?.ok, false, JSON.stringify(rejected));
+      assert.equal(rejected.result.result.note.receipt.status, 'conflict');
+      assert.equal(rejected.result.result.note.receipt.reason, 'note_exists');
+      assert.equal(rejected.result.message, 'Not saved: a note with this title already exists');
+      assert.deepEqual(rejected.notes, [{ name: 'Invented garden.md', content }]);
+      assert.equal(rejected.journal, before.journal);
+      assert.deepEqual(rejected.writes, []);
+      const retried = run({ capture });
+      assert.equal(retried.result.result.note.receipt.reason, 'note_exists');
+      assert.deepEqual(retried.notes, rejected.notes);
+      assert.equal(retried.journal, before.journal);
+      assert.deepEqual(retried.writes, []);
+      const ledger = createVaultMutationLedger({ filePath: path.join(run.root, 'ledger.json') });
+      const noteRecords = Object.values(ledger.verify().operations).filter(record => record.operation.vaultRelativePath === 'Notes/Invented garden.md');
+      assert.equal(noteRecords.length, opId ? 1 : 2);
+      assert.ok(noteRecords.every(record => record.status === 'abandoned'));
+      const reconciled = run({ reconcile: true });
+      assert.deepEqual(reconciled.ledger.operations, retried.ledger.operations);
+      assert.deepEqual(reconciled.writes, []);
+      const updated = run({ mutation: { vaultRelativePath: 'Notes/Invented garden.md',
+        expectedContent: content, nextContent: `${content}\nAn invented follow-up.`, operationId: 'test-followup-001' } });
+      assert.equal(updated.result?.status, 'committed', JSON.stringify(updated));
+      assert.equal(updated.notes[0].content, `${content}\nAn invented follow-up.`);
+      for (const record of noteRecords) assert.deepEqual(ledger.verify().operations[record.operation.operationId], record);
+    }
+  }
+});
+
+for (const fault of ['race_before_dispatch', 'race_create', 'race_identical_create']) {
+  test(`create-only rejects a note appearing between plan and write: ${fault}`, (t) => {
+    const run = fixture(t);
+    const before = run({ capture: base });
+    const capture = { ...base, kind: 'note', title: 'Invented garden', createOnly: true, opId: 'test-create-only-001' };
+    const rejected = run({ capture, fault });
+    assert.equal(rejected.faultTriggered, true);
+    assert.equal(rejected.result?.ok, false, JSON.stringify(rejected));
+    assert.equal(rejected.result.result.note.receipt.reason, 'note_exists');
+    assert.equal(rejected.journal, before.journal);
+    assert.deepEqual(rejected.writes, []);
+    const original = Object.values(rejected.ledger.operations).find(record => record.operation.vaultRelativePath === 'Notes/Invented garden.md');
+    assert.equal(rejected.notes[0].content, fault === 'race_identical_create' ? original.operation.content : 'An invented competing note.');
+    assert.equal(original.status, 'abandoned');
+    const retried = run({ capture });
+    assert.equal(retried.result.result.note.receipt.reason, 'note_exists');
+    assert.deepEqual(retried.notes, rejected.notes);
+    assert.equal(retried.journal, before.journal);
+    assert.deepEqual(retried.writes, []);
+    const reconciled = run({ reconcile: true });
+    assert.equal(reconciled.recovery.processed, 0);
+    assert.deepEqual(reconciled.ledger.operations, rejected.ledger.operations);
+    assert.deepEqual(reconciled.writes, []);
+    const updated = run({ capture: { ...capture, createOnly: false, opId: 'test-followup-001', text: 'An invented follow-up.' } });
+    assert.equal(updated.result?.ok, true, JSON.stringify(updated));
+    assert.match(updated.notes[0].content, /An invented follow-up\./);
+    const ledger = createVaultMutationLedger({ filePath: path.join(run.root, 'ledger.json') });
+    assert.deepEqual(ledger.verify().operations[original.operation.operationId], original);
+    const replayAfterUpdate = run({ capture });
+    assert.equal(replayAfterUpdate.result.result.note.receipt.reason, 'note_exists');
+    assert.deepEqual(replayAfterUpdate.notes, updated.notes);
+    assert.equal(replayAfterUpdate.journal, updated.journal);
+    assert.deepEqual(replayAfterUpdate.writes, []);
+  });
+}
+
+test('an offline create-only collision is settled and cannot block a later update', (t) => {
+  const run = fixture(t);
+  const before = run({ capture: base });
+  fs.mkdirSync(path.join(run.root, 'vault/Notes'));
+  fs.writeFileSync(path.join(run.root, 'vault/Notes/Invented garden.md'), 'An invented existing note.');
+  const capture = { ...base, kind: 'note', title: 'Invented garden', createOnly: true, opId: 'test-offline-create-001' };
+  const rejected = run({ capture, fault: 'offline_stopped' });
+  assert.equal(rejected.result.result.note.receipt.reason, 'note_exists');
+  assert.equal(rejected.notes[0].content, 'An invented existing note.');
+  assert.equal(rejected.journal, before.journal);
+  assert.deepEqual(rejected.writes, []);
+  const original = Object.values(rejected.ledger.operations).find(record => record.operation.vaultRelativePath === 'Notes/Invented garden.md');
+  assert.equal(original.status, 'abandoned');
+  const retried = run({ capture, fault: 'offline_stopped' });
+  assert.equal(retried.result.result.note.receipt.reason, 'note_exists');
+  assert.deepEqual(retried.notes, rejected.notes);
+  assert.equal(retried.journal, before.journal);
+  assert.deepEqual(retried.writes, []);
+  const reconciled = run({ reconcile: true });
+  assert.equal(reconciled.recovery.processed, 0);
+  assert.deepEqual(reconciled.ledger.operations, rejected.ledger.operations);
+  assert.deepEqual(reconciled.writes, []);
+  const updated = run({ capture: { ...capture, createOnly: false, opId: 'test-followup-001', text: 'An invented follow-up.' } });
+  assert.equal(updated.result?.ok, true, JSON.stringify(updated));
+  assert.match(updated.notes[0].content, /An invented follow-up\./);
+  const ledger = createVaultMutationLedger({ filePath: path.join(run.root, 'ledger.json') });
+  assert.deepEqual(ledger.verify().operations[original.operation.operationId], original);
+});
+
+test('create-only recovers an interrupted original create without rewriting the note', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented garden', createOnly: true };
+  const interrupted = run({ capture, fault: 'after_note' });
+  assert.equal(interrupted.result.ok, false);
+  const recovered = run({ capture });
+  assert.equal(recovered.result.ok, true, JSON.stringify(recovered));
+  assert.deepEqual(recovered.notes, interrupted.notes);
+  assert.equal(recovered.writes.some(name => name.startsWith('Notes/')), false);
+  assert.equal(recovered.journal.split('[[Invented garden]]').length - 1, 1);
+});
 
 test('opId validation survives normalization and rejects malformed values before storage', () => {
   for (const opId of ['test-001', 'A'.repeat(80), 'Test_001.abc-xyz']) {
