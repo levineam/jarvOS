@@ -32,7 +32,7 @@ function flushAllCallbacks() {
   while (pendingCallbacks.length) flushCallbacks();
 }
 
-const { root, capture, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
+const { root, capture, mutation, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
   inboxNow = '2030-02-03T12:00:00Z', inboxRoot, clockNow, journalFolder = 'Journal', notesFolder = 'Notes' } = JSON.parse(fs.readFileSync(0, 'utf8'));
 if (clockNow) {
   const RealDate = Date;
@@ -138,6 +138,7 @@ async function main() {
         }
       } });
     if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
+    if (mutation) result = service.applyMarkdownMutation(mutation);
     if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
   } catch (caught) { error = caught.message; result = null; }
   // A timed-out app operation may complete after the caller has already returned.

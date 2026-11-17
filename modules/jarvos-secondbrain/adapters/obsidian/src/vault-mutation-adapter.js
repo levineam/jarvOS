@@ -283,7 +283,11 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     const operation = validateOperation(input);
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
-    mutationLedger.ensure(operation);
+    const record = mutationLedger.ensure(operation);
+    // A proven create-only rejection is final, even if the app is now unavailable.
+    if (operation.createOnly && record.status === 'abandoned' && record.evidence?.errorClass === 'note_exists') {
+      return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'abandoned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: record.evidence });
+    }
     const check = capability();
     if (!check || !CAPABILITY_STATES.includes(check.state) || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) {
       // Only allowlisted state and reason codes leave the probe; an unknown
@@ -321,7 +325,14 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
         try { run(cleanupProgram(operation.operationId)); } catch { /* acknowledgement is already durable */ }
         return createInternalReceipt({ operation, status: 'committed', persistence: 'durable', obsidian: 'acknowledged' });
       }
-      if (result?.status === 'error' || result?.status === 'done') { const failure = failureEvidence(result.errorClass || 'readback_mismatch', result.error); mutationLedger.transition(operation.operationId, 'conflict', { ownerId, fence: claim.fence, evidence: failure }); try { run(cleanupProgram(operation.operationId)); } catch {} return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'conflict', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure }); }
+      if (result?.status === 'error' || result?.status === 'done') {
+        const failure = failureEvidence(result.errorClass || 'readback_mismatch', result.error);
+        // note_exists proves the exclusive create wrote nothing; release its FIFO slot.
+        const lifecycleState = operation.createOnly && result.status === 'error' && failure.errorClass === 'note_exists' ? 'abandoned' : 'conflict';
+        mutationLedger.transition(operation.operationId, lifecycleState, { ownerId, fence: claim.fence, evidence: failure });
+        try { run(cleanupProgram(operation.operationId)); } catch {}
+        return createInternalReceipt({ operation, status: 'failed', lifecycleState, persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure });
+      }
       mutationLedger.transition(operation.operationId, 'unknown_after_dispatch', { ownerId, fence: claim.fence });
       return createInternalReceipt({ operation, status: 'unknown_after_dispatch', persistence: 'durable', obsidian: 'unacknowledged' });
     } catch (error) {
