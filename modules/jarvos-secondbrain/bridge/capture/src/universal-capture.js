@@ -165,6 +165,7 @@ function normalizeCaptureEvent(rawInput = {}, options = {}) {
     substantive: raw.substantive,
     verbatim: raw.verbatim === true ? true : undefined,
     createNote: raw.createNote,
+    createOnly: raw.createOnly,
     createDurableNote: raw.createDurableNote,
     durable: raw.durable,
     durableNote: raw.durableNote,
@@ -266,6 +267,7 @@ const EXIT_NOT_ACKNOWLEDGED = 3; // routed, but a promised artifact was not ackn
 
 function captureExitCode(result) {
   if (result?.ok === true) return EXIT_OK;
+  if (result?.note?.receipt?.reason === 'note_exists') return EXIT_NOT_CAPTURED;
   if (result?.routing?.plan?.ignored || result?.hardCommand?.disposition === 'needs_input') return EXIT_NOT_CAPTURED;
   return EXIT_NOT_ACKNOWLEDGED;
 }
@@ -274,6 +276,7 @@ function captureExitCode(result) {
 // sanitized adapter failure text, when the mutation adapter recorded one.
 function captureFailureMessage(result) {
   if (result?.ok === true) return null;
+  if (result?.note?.receipt?.reason === 'note_exists') return 'a note with this title already exists';
   if (result?.error) return result.error;
   if (result?.hardCommand?.disposition === 'needs_input') return result.routing?.response || 'Capture needs input.';
   const artifacts = result?.artifactReceipt?.artifacts || [];

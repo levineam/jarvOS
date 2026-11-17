@@ -33,6 +33,15 @@ test('contract validates normalized vault-relative Markdown paths and operation 
   assert.throws(() => contract.validateOperation(operation(), { identityPolicy: () => false }), /identity policy/i);
 });
 
+test('createOnly is a boolean guard for create operations only', () => {
+  const create = { ...operation(), operationKind: 'create', content: 'An invented note.' };
+  assert.equal(contract.validateOperation({ ...create, createOnly: true }).createOnly, true);
+  for (const createOnly of ['true', 1, null]) {
+    assert.throws(() => contract.validateOperation({ ...create, createOnly }), /createOnly must be a boolean/);
+  }
+  assert.throws(() => contract.validateOperation({ ...operation(), createOnly: true }), /on a create operation/);
+});
+
 test('contract rejects target and parent symlink escapes before mutation', { skip: process.platform === 'win32' }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-contract-'));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-outside-'));

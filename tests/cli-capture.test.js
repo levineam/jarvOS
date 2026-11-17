@@ -39,6 +39,35 @@ test('capture CLI reads stdin and emits the full JSON receipt', async () => {
   assert.equal(JSON.parse(result.stdout).message, "Saved to today's Ideas.");
 });
 
+test('capture CLI accepts standing requests and maps create-only for notes', async () => {
+  const result = await invoke(['--kind', 'note', '--words', 'assistant', '--asked', 'standing_request', '--create-only', 'A test garden note.'], {
+    raw: { ok: true, note: { title: 'Test garden' } },
+    inspect(input) {
+      assert.equal(input.asked, 'standing_request');
+      assert.equal(input.createOnly, true);
+      assert.equal(input['create-only'], undefined);
+    },
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(renderHelp(), /explicit\|accepted_offer\|standing_request/);
+  assert.match(renderHelp(), /only a host app with a user-enabled standing setting/);
+  assert.match(renderHelp(), /--create-only/);
+  for (const kind of ['idea', 'journal']) {
+    const rejected = await invoke([...flags, '--kind', kind, '--create-only', 'A test garden note.']);
+    assert.equal(rejected.code, 1);
+    assert.match(rejected.stderr, /createOnly is only used for notes/);
+  }
+});
+
+test('capture CLI returns exit 2 and a single-line message for a title conflict', async () => {
+  const result = await invoke(['--kind', 'note', '--words', 'assistant', '--asked', 'standing_request', '--create-only', 'A test garden note.'], {
+    raw: { ok: false, note: { receipt: { status: 'conflict', reason: 'note_exists' } } },
+  });
+  assert.equal(result.code, 2);
+  assert.equal(result.stdout, 'Not saved: a note with this title already exists\n');
+  assert.equal(result.stderr, '');
+});
+
 test('capture CLI maps --op-id and refuses malformed operation IDs with exit 1', async () => {
   for (const args of [['--op-id', 'test-operation-001'], ['--op-id=test-operation-001']]) {
     const result = await invoke([...flags, ...args, 'An invented tidal garden.'], {

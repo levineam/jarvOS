@@ -247,6 +247,25 @@ terminal owner.
 The canonical journal path is `Journal/YYYY-MM-DD.md`. Agents must not create
 guessed daily journal files under `Notes/`.
 
+## Simple Capture
+
+`jarvos capture --kind idea|journal|note --words user|assistant|mixed --asked explicit|accepted_offer|standing_request [--title T] [--create-only] [--op-id ID] [text...]`
+uses the same writer as programmatic `simpleCapture(input)`.
+`asked` is stored as `capture_asked`: `explicit` means the person asked for this save,
+`accepted_offer` means they accepted an offer to save, and `standing_request` means
+this save follows a standing instruction they enabled.
+`standing_request` is an honesty label, not authorization: only a host app with a
+user-enabled standing setting may use it, never a chat model saving on the spot.
+MCP and chat-tool schemas retain only `explicit` and `accepted_offer`.
+
+For notes, `--create-only` (programmatic `createOnly: true`) refuses an existing
+target path with `note_exists`, without changing the note or its journal link,
+including when another writer creates the note during capture. The CLI exits 2
+for this rejection. Ideas and journal entries reject this option. Repeating the
+same request with the same `--op-id` still acknowledges its original create;
+changing the request under that ID still conflicts. Without this option, existing
+note capture behavior is unchanged.
+
 ## Synced Phone Inbox
 
 `jarvos inbox apply [--vault <abs path>] [--inbox <abs path>] [--limit N] [--json]` applies complete

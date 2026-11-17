@@ -34,6 +34,76 @@ function fixture(t) {
   return run;
 }
 
+test('a standing create-only request saves and links once, then replays its create', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented garden', asked: 'standing_request', createOnly: true };
+  const first = run({ capture });
+  assert.equal(first.result.ok, true, JSON.stringify(first));
+  assert.match(first.notes[0].content, /capture_asked: standing_request/);
+  assert.equal(first.journal.split('[[Invented garden]]').length - 1, 1);
+  const second = run({ capture });
+  assert.equal(second.result.ok, true, JSON.stringify(second));
+  assert.equal(second.result.result.note.receipt.replay, true);
+  assert.deepEqual(second.notes, first.notes);
+  assert.equal(second.journal, first.journal);
+  assert.deepEqual(second.writes, []);
+  for (const patch of [{ text: 'Another invented note.' }, { createOnly: false }, { asked: 'explicit' }]) {
+    const changed = run({ capture: { ...capture, ...patch } });
+    assert.match(changed.error, /already used for different content/);
+    assert.deepEqual(changed.notes, first.notes);
+    assert.equal(changed.journal, first.journal);
+    assert.deepEqual(changed.writes, []);
+  }
+});
+
+test('create-only refuses any existing title, including empty notes, without a journal mutation', (t) => {
+  for (const content of ['', 'An invented existing note.', '---\ncontent_origin_drafting: invalid\n---\nAn invented malformed note.']) {
+    for (const opId of [undefined, 'test-create-only-001']) {
+      const run = fixture(t);
+      const before = run({ capture: base });
+      const notesDir = path.join(run.root, 'vault/Notes');
+      fs.mkdirSync(notesDir);
+      fs.writeFileSync(path.join(notesDir, 'Invented garden.md'), content);
+      const rejected = run({ capture: { ...base, kind: 'note', title: 'Invented garden', createOnly: true, opId } });
+      assert.equal(rejected.result?.ok, false, JSON.stringify(rejected));
+      assert.equal(rejected.result.result.note.receipt.status, 'conflict');
+      assert.equal(rejected.result.result.note.receipt.reason, 'note_exists');
+      assert.equal(rejected.result.message, 'Not saved: a note with this title already exists');
+      assert.deepEqual(rejected.notes, [{ name: 'Invented garden.md', content }]);
+      assert.equal(rejected.journal, before.journal);
+      assert.deepEqual(rejected.writes, []);
+    }
+  }
+});
+
+for (const fault of ['race_before_dispatch', 'race_create', 'race_identical_create']) {
+  test(`create-only rejects a note appearing between plan and write: ${fault}`, (t) => {
+    const run = fixture(t);
+    const before = run({ capture: base });
+    const capture = { ...base, kind: 'note', title: 'Invented garden', createOnly: true, opId: 'test-create-only-001' };
+    const rejected = run({ capture, fault });
+    assert.equal(rejected.faultTriggered, true);
+    assert.equal(rejected.result?.ok, false, JSON.stringify(rejected));
+    assert.equal(rejected.result.result.note.receipt.reason, 'note_exists');
+    assert.equal(rejected.journal, before.journal);
+    assert.deepEqual(rejected.writes, []);
+    const original = Object.values(rejected.ledger.operations).find(record => record.operation.vaultRelativePath === 'Notes/Invented garden.md');
+    assert.equal(rejected.notes[0].content, fault === 'race_identical_create' ? original.operation.content : 'An invented competing note.');
+  });
+}
+
+test('create-only recovers an interrupted original create without rewriting the note', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented garden', createOnly: true };
+  const interrupted = run({ capture, fault: 'after_note' });
+  assert.equal(interrupted.result.ok, false);
+  const recovered = run({ capture });
+  assert.equal(recovered.result.ok, true, JSON.stringify(recovered));
+  assert.deepEqual(recovered.notes, interrupted.notes);
+  assert.equal(recovered.writes.some(name => name.startsWith('Notes/')), false);
+  assert.equal(recovered.journal.split('[[Invented garden]]').length - 1, 1);
+});
+
 test('opId validation survives normalization and rejects malformed values before storage', () => {
   for (const opId of ['test-001', 'A'.repeat(80), 'Test_001.abc-xyz']) {
     assert.equal(normalizeCaptureEvent(buildSimpleCaptureEvent({ ...base, opId })).opId, opId);

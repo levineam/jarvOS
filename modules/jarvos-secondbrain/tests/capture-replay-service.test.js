@@ -30,3 +30,16 @@ test('identified replay retains the original operation across service restart an
   assert.deepEqual(restarted.adapter.ledger.get('capture:fixture:note').operation, original);
   assert.deepEqual(fs.readdirSync(vaultRoot), []);
 });
+
+test('create-only write contexts refuse transforms and cannot replay an original update', () => {
+  for (const original of [undefined, { operationKind: 'transform' }]) {
+    const service = createConfiguredVaultMutationService({ vaultRoot: path.resolve('fixture-vault'),
+      adapter: { ledger: { get: () => original && { operation: original } }, submit: () => assert.fail('must not dispatch an update') },
+      reconciler: {},
+    });
+    const context = service.createWriteContext({ vaultRelativePath: 'Notes/Invented garden.md', createOnly: true });
+    const receipt = context.mutationExecutor({ operationKind: original ? 'create' : 'transform' });
+    assert.equal(receipt.status, 'conflict');
+    assert.equal(receipt.reason, 'note_exists');
+  }
+});

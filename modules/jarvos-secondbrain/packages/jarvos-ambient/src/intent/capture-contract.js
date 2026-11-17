@@ -23,6 +23,7 @@ const {
  * @property {string} [salienceClass] - Canonical salience class.
  * @property {number} [confidence] - Salience confidence score from 0.0 to 1.0.
  * @property {string} [title] - Human-readable title.
+ * @property {boolean} [createOnly] - Refuse an existing note target; valid only for note captures.
  * @property {string} [text] - Raw captured text.
  * @property {string} [content] - Body override.
  * @property {string} [rationale] - Why this is significant.
@@ -298,6 +299,9 @@ function validateContentOriginDeclaration(event = {}, errors, options = {}) {
 
 function validateCaptureEvent(event = {}, options = {}) {
   const errors = [];
+  if (event.createOnly !== undefined && (typeof event.createOnly !== 'boolean' || event.trigger !== 'note')) {
+    errors.push('createOnly must be a boolean and is only used for notes');
+  }
 
   if (event.opId !== undefined) {
     try { validateCaptureOpId(event.opId); } catch (error) { errors.push(error.message); }

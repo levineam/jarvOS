@@ -209,7 +209,7 @@ function createConfiguredVaultMutationService({
     return reservation;
   }
 
-  function createWriteContext({ vaultRelativePath, operationId, intentId, requestHash, operationSource = source } = {}) {
+  function createWriteContext({ vaultRelativePath, operationId, intentId, requestHash, createOnly = false, operationSource = source } = {}) {
     if (typeof vaultRelativePath !== 'string' || !vaultRelativePath) throw new Error('vaultRelativePath is required');
     if (requestHash !== undefined && (typeof requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(requestHash) || !(operationId || intentId))) throw new Error('requestHash requires a SHA-256 digest and stable intentId');
     const contextSource = boundSource(operationSource);
@@ -217,7 +217,14 @@ function createConfiguredVaultMutationService({
     return Object.freeze({
       mutationExecutor: (operation) => {
         if (requestHash && (operation.operationId !== id || operation.vaultRelativePath !== vaultRelativePath || operation.vaultId !== vaultId)) throw new Error('Identified capture operation does not match its write context');
-        return submitAuthorized(operation, contextSource, requestHash);
+        if (!createOnly) return submitAuthorized(operation, contextSource, requestHash);
+        // A retry may plan an append; only the ledger's original create may replay.
+        const original = adapter.ledger.get(id)?.operation;
+        const conflict = { status: 'conflict', obsidian: 'unacknowledged', reason: 'note_exists' };
+        if ((original || operation).operationKind !== 'create') return conflict;
+        const receipt = submitAuthorized({ ...operation, createOnly: true }, contextSource, requestHash);
+        return receipt.adapterEvidence?.errorClass === 'note_exists' || receipt.errorClass === 'create_collision'
+          ? { ...receipt, ...conflict } : receipt;
       },
       operationId: id,
       // Package operation factories require a positive sequence field. The

@@ -21,8 +21,10 @@ function buildSimpleCaptureEvent(input = {}) {
   if (!['idea', 'journal', 'note'].includes(kind)) throw new CaptureValidationError('kind must be idea, journal, or note');
   if (typeof input.text !== 'string' || !input.text.trim()) throw new CaptureValidationError('text must be a non-empty string');
   if (kind !== 'note' && input.title !== undefined) throw new CaptureValidationError('title is only used for notes');
+  if (input.createOnly !== undefined && typeof input.createOnly !== 'boolean') throw new CaptureValidationError('createOnly must be a boolean');
+  if (kind !== 'note' && input.createOnly !== undefined) throw new CaptureValidationError('createOnly is only used for notes');
   if (!['user', 'assistant', 'mixed'].includes(words)) throw new CaptureValidationError('words must be user, assistant, or mixed');
-  if (!['explicit', 'accepted_offer'].includes(asked)) throw new CaptureValidationError('save only when the user asked or accepted an offer');
+  if (!['explicit', 'accepted_offer', 'standing_request'].includes(asked)) throw new CaptureValidationError('asked must be explicit, accepted_offer, or standing_request');
   if (typeof input.source !== 'string' || !input.source.trim()) throw new CaptureValidationError('source must be a non-empty string');
   for (const key of ['title', 'model']) {
     if (input[key] !== undefined && (typeof input[key] !== 'string' || !input[key].trim() || /[\r\n\u2028\u2029]/.test(input[key]))) {
@@ -52,6 +54,7 @@ function buildSimpleCaptureEvent(input = {}) {
   const model = input.model?.trim() || 'unknown';
   return {
     trigger: kind,
+    ...(input.createOnly === true ? { createOnly: true } : {}),
     ...(input.opId !== undefined ? { opId: input.opId } : {}),
     text: input.text.trim(),
     source: SOURCE_TOOLS.includes(source) || /^custom:[a-z0-9][a-z0-9-]*$/i.test(source)
