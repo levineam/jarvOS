@@ -22,6 +22,7 @@ const runtimeModeContract = require('./runtime-mode-contract.js');
 const harnessConformance = require('./harness-conformance.js');
 const constrainedGeneration = require('./constrained-generation.js');
 const runnerState = require('./runner-state.js');
+const alertChannel = require('./alert-channel.js');
 
 const DEFAULT_AGENT_CONTEXT_MCP = 'modules/jarvos-agent-context/scripts/jarvos-mcp.js';
 const REQUIRED_MCP_TOOL = 'jarvos_hydrate';
@@ -1368,6 +1369,7 @@ function scaffoldRuntime(runtimeId, outDir) {
 }
 
 module.exports = {
+  ...alertChannel,
   ...commonWorkService,
   ...harnessDispatch,
   ...stewardshipAdapter,
