@@ -76,14 +76,14 @@ async function deliverRoutineAlert({ title, text }, { configPath, inboxDir, now 
   if (channel === 'telegram') {
     if (!sendTelegram) return { sent: false, channel, error: 'telegram-sender-missing' };
     const result = await sendTelegram(text);
-    return { sent: result?.sent !== false, channel, result };
+    return { sent: result !== false && result?.sent !== false, channel, result };
   }
   if (!inboxDir) return { sent: false, channel, error: 'inbox-dir-missing' };
   const date = new Date(now);
   const day = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   const file = path.join(inboxDir, `${day}.md`);
-  fs.mkdirSync(inboxDir, { recursive: true });
-  fs.appendFileSync(file, `\nRoutine result: ${title}\n${text.trim()}\n${date.toISOString()}\n`);
+  fs.mkdirSync(inboxDir, { recursive: true, mode: 0o700 });
+  fs.appendFileSync(file, `\nRoutine result: ${title}\n${text.trim()}\n${date.toISOString()}\n`, { mode: 0o600 });
   return { sent: true, channel, path: file };
 }
 

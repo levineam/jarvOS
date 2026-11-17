@@ -55,6 +55,7 @@ test('delivers to the local dated inbox or reports a missing inbox', async (t) =
   const inboxDir = path.join(dir, 'inbox');
   const result = await deliverRoutineAlert(alert, { configPath, inboxDir, now });
   assert.deepEqual(result, { sent: true, channel: 'chief-of-staff', path: path.join(inboxDir, '2025-01-02.md') });
+  assert.equal(fs.statSync(result.path).mode & 0o077, 0);
   assert.equal(fs.readFileSync(result.path, 'utf8'), `\nRoutine result: Example\nAll clear.\n${now.toISOString()}\n`);
   await assert.rejects(deliverRoutineAlert({ title: ' ', text: 'x' }, { configPath }), TypeError);
   await assert.rejects(deliverRoutineAlert({ title: 'x', text: '' }, { configPath }), TypeError);
@@ -68,5 +69,6 @@ test('delegates Telegram delivery and propagates sender errors', async (t) => {
   const result = { sent: false };
   assert.deepEqual(await deliverRoutineAlert(alert, { configPath, sendTelegram: async (text) => { assert.equal(text, 'Message'); return result; } }), { sent: false, channel: 'telegram', result });
   assert.equal((await deliverRoutineAlert(alert, { configPath, sendTelegram: async () => ({}) })).sent, true);
+  assert.equal((await deliverRoutineAlert(alert, { configPath, sendTelegram: async () => false })).sent, false);
   await assert.rejects(deliverRoutineAlert(alert, { configPath, sendTelegram: async () => { throw new Error('failed'); } }), /failed/);
 });
