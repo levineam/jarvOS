@@ -65,24 +65,36 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
     if (!vaultFileExists({ vaultRoot: path.resolve(vaultRoot), vaultRelativePath })) return false;
     return typeof service.vaultFileState === 'function' && service.vaultFileState(vaultRelativePath) === 'present';
   }
-  function contextFor(vaultRelativePath, intentId, requestHash) { return service.createWriteContext({ vaultRelativePath, intentId, requestHash, operationSource: service.source }); }
-  function executeTransform({ date, transformName, transformVersion = 1, replayPayload, intentId, requestHash }) {
+  function contextFor(vaultRelativePath, intentId, requestHash, exact) { return service.createWriteContext({ vaultRelativePath, intentId, requestHash, exact, operationSource: service.source }); }
+  function executeTransform({ date, transformName, transformVersion = 1, replayPayload, intentId, requestHash, exact }) {
     const journalPath = path.join(journalDir, `${date}.md`);
     const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
-    const context = contextFor(vaultRelativePath, intentId, requestHash);
+    const context = contextFor(vaultRelativePath, intentId, requestHash, exact);
     const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'transform', transformName, transformVersion, replayPayload, source: context.source });
     return { journalPath, receipt };
   }
   return Object.freeze({
+    noteCapturePlan({ title, date = todayDate(), journalPolicy, explicitBacklink, frontmatter }) {
+      const notePath = relativeToVault(vaultRoot, noteFilePath(title, notesDir));
+      const journalPath = relativeToVault(vaultRoot, path.join(journalDir, `${date}.md`));
+      const link = resolveJournalLinkPolicy({ vaultRoot, noteTitle: title, notePath, journalPolicy, explicitBacklink, frontmatter, source });
+      return { notePath, journalPath, link };
+    },
+    noteCaptureProgress(request) {
+      return require('./resume-note-capture').resumeNoteCapture(this, service, request);
+    },
+    repairLegacyCaptureProvenance(request) {
+      return require('./resume-note-capture').repairLegacyCaptureProvenance(this, service, request);
+    },
     reserveCaptureOperation(request) {
       if (typeof service.reserveCaptureOperation !== 'function') throw new Error('The configured storage service does not support capture operation IDs');
       return service.reserveCaptureOperation({ ...request, plan: { ...request.plan, date: request.plan.date || todayDate() } });
     },
-    ensureJournal({ date = todayDate(), intentId, requestHash } = {}) {
+    ensureJournal({ date = todayDate(), intentId, requestHash, exact } = {}) {
       const journalPath = path.join(journalDir, `${date}.md`);
       const existed = fs.existsSync(journalPath);
       const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
-      const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`, requestHash);
+      const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`, requestHash, exact);
       const content = existed ? fs.readFileSync(journalPath, 'utf8') : renderJournalScaffold(date);
       const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', content, source: context.source });
       return {
@@ -93,7 +105,7 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         artifactReceipt: artifactReceiptFor([journalArtifact({ journalPath, vaultRoot, receipt })]),
       };
     },
-    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash, contentOrigin, journalPolicy, explicitBacklink, frontmatter } = {}) {
+    appendLineToJournalSection({ heading, line, date = todayDate(), intentId, requestHash, contentOrigin, journalPolicy, explicitBacklink, frontmatter, exact, safeBacklink = exact } = {}) {
       if (!heading) throw new Error('heading is required');
       if (!line || !String(line).trim()) throw new Error('line is required');
       const linkTitle = String(line).trim().match(/^- \[\[([^\]]+)\]\]$/)?.[1];
@@ -102,15 +114,18 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const invalid = createJarvosVaultTransforms().quarantine({ transformName: 'journal-section-line', transformVersion: contentOriginPayload ? 2 : 1, replayPayload: { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) } });
       if (contentOriginPayload && !invalid) contentOriginPayload.clean_text_digest = digestText(normalizeJournalEntry(line).text);
       const journalExists = invalid || (requestHash && fs.existsSync(path.join(journalDir, `${date}.md`))) || journalIsPresent(path.join(journalDir, `${date}.md`));
-      const ensured = journalExists ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash });
+      const ensured = journalExists ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash, exact });
       if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
+      const exactLink = safeBacklink && linkTitle && !contentOriginPayload;
       const outcome = executeTransform({
         date,
-        transformName: 'journal-section-line',
+        transformName: exactLink ? 'journal-backlink' : 'journal-section-line',
         transformVersion: contentOriginPayload ? 2 : 1,
-        replayPayload: { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) },
+        replayPayload: exactLink ? { linkTarget: linkTitle, section: heading, preserveExistingLinks: true }
+          : { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) },
         intentId: intentId ? `${intentId}:section` : undefined,
         requestHash,
+        exact,
       });
       return {
         journalPath: outcome.journalPath,
@@ -125,10 +140,11 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
         ]),
       };
     },
-    writeNote({ title, content, frontmatter = {}, intentId, requestHash, createOnly, resolveUserSource, resolveServedModel } = {}) {
+    writeNote({ title, content, frontmatter = {}, intentId, requestHash, createOnly, resolveUserSource, resolveServedModel, exact, expectedExistingContent } = {}) {
       const filePath = noteFilePath(title, notesDir);
-      const context = service.createWriteContext({ vaultRelativePath: relativeToVault(vaultRoot, filePath), intentId, requestHash, createOnly, operationSource: service.source });
-      return writeNoteFile({ title, content, frontmatter, notesDir, knowledgeDir, createOnly, resolveUserSource, resolveServedModel, ...context });
+      const context = service.createWriteContext({ vaultRelativePath: relativeToVault(vaultRoot, filePath), intentId, requestHash, createOnly, exact, operationSource: service.source });
+      return writeNoteFile({ title, content, frontmatter, notesDir, knowledgeDir, createOnly, resolveUserSource, resolveServedModel,
+        ...(expectedExistingContent === undefined ? {} : { expectedExistingContent, preserveExistingBodyBytes: true }), ...context });
     },
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId, journalPolicy, explicitBacklink, frontmatter, notePath } = {}) {
       if (resolveJournalLinkPolicy({ noteTitle, notePath, frontmatter, journalPolicy, explicitBacklink, vaultRoot, source }) === 'none') return { status: 'not_requested', linked: false, acknowledged: false };

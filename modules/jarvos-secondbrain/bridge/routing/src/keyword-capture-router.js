@@ -69,7 +69,21 @@ function applyPlan(capture, plan, options = {}) {
     if (capture.captureIdentity !== undefined) throw new Error('opId and captureIdentity cannot be combined');
     adapter ||= createStorageAdapter(options);
     const request = options.captureOperation || captureOperationRequest(capture);
-    prepared = { capture, ...request, plan: adapter.reserveCaptureOperation({ ...request, plan }).plan };
+    const frontmatter = { ...(capture.frontmatter || {}), ...(plan.noteFrontmatter || {}) };
+    const target = plan.route === NOTE && plan.createNote ? adapter.noteCapturePlan?.({
+      title: plan.noteTitle, date: plan.date, frontmatter, journalPolicy: capture.journalPolicy, explicitBacklink: capture.explicitBacklink,
+    }) : null;
+    const backlinkRequested = Boolean(plan.createNote && plan.journalLine
+      && resolveJournalLinkPolicy({ ...capture, noteTitle: plan.noteTitle }) === 'link' && target?.link !== 'none');
+    prepared = { capture, ...request, plan: adapter.reserveCaptureOperation({ ...request, plan: {
+      ...plan,
+      ...(plan.route === NOTE && plan.createNote ? { resumeNote: {
+        backlinkRequested,
+        frontmatter, notePath: target?.notePath, journalPath: target?.journalPath,
+        ...(capture.journalPolicy ? { journalPolicy: capture.journalPolicy } : {}),
+        ...(capture.explicitBacklink === true ? { explicitBacklink: true } : {}),
+      } } : {}),
+    } }).plan };
   } else prepared = prepareIdentifiedCapture(capture, plan);
   ({ capture, plan } = prepared);
   const { intentId, requestHash } = prepared;
@@ -86,6 +100,14 @@ function applyPlan(capture, plan, options = {}) {
     return result;
   }
   adapter ||= createStorageAdapter(options);
+
+  if (plan.resumeNote?.notePath && adapter.noteCapturePlan) {
+    const target = adapter.noteCapturePlan({ title: plan.noteTitle, date, frontmatter: plan.resumeNote.frontmatter,
+      journalPolicy: plan.resumeNote.journalPolicy, explicitBacklink: plan.resumeNote.explicitBacklink });
+    if (target.notePath !== plan.resumeNote.notePath || target.journalPath !== plan.resumeNote.journalPath) {
+      throw new Error('The configured folders no longer match this capture operation');
+    }
+  }
 
   if (plan.createNote) {
     result.note = adapter.writeNote({
@@ -116,8 +138,8 @@ function applyPlan(capture, plan, options = {}) {
     result.plan = plan;
   }
 
-  const journalLinkAllowed = !/^- \[\[[^\]]+\]\]$/.test(String(plan.journalLine || '').trim())
-    || resolveJournalLinkPolicy({ ...capture, noteTitle: result.note?.title || plan.noteTitle }) === 'link';
+  const journalLinkAllowed = plan.resumeNote?.backlinkRequested ?? (!/^- \[\[[^\]]+\]\]$/.test(String(plan.journalLine || '').trim())
+    || resolveJournalLinkPolicy({ ...capture, noteTitle: result.note?.title || plan.noteTitle }) === 'link');
   if (plan.journalSection && plan.journalLine && journalLinkAllowed) {
     const actualNoteTitle = result.note?.title;
     const journalLine = actualNoteTitle && plan.noteTitle
@@ -132,6 +154,7 @@ function applyPlan(capture, plan, options = {}) {
       date,
       ...(intentId ? { intentId: `${intentId}:${capture.opId && plan.createNote ? 'note-link' : 'journal'}`, requestHash } : {}),
       ...(contentOrigin ? { contentOrigin } : {}),
+      ...(plan.resumeNote ? { safeBacklink: true } : {}),
     });
     result.noteLink = result.journalEntry;
   } else if (journalLinkAllowed) {

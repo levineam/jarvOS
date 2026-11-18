@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { execFile, execFileSync, spawnSync } = require('node:child_process');
 const { normalizeCaptureEvent } = require('../bridge/capture/src/universal-capture');
 const { buildSimpleCaptureEvent } = require('../bridge/capture/src/simple-capture');
@@ -34,6 +35,115 @@ function fixture(t) {
   run.root = root;
   return run;
 }
+
+test('note status and resume use the original ID after a dropped create acknowledgement and restart', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented resumable note', words: 'mixed', model: 'invented-model' };
+  const first = run({ capture, fault: 'after_note' });
+  assert.equal(first.result.ok, false);
+  assert.deepEqual(first.writes, ['Notes/Invented resumable note.md']);
+  const progress = { opId: capture.opId, source: capture.source };
+  const checked = run({ progress });
+  assert.deepEqual(checked.ledger, first.ledger);
+  assert.equal(checked.result.note, 'unconfirmed', JSON.stringify(checked));
+  assert.equal(checked.result.notePath, first.writes[0]);
+  assert.equal(checked.result.journal, 'pending');
+  const recovered = run({ progress: { ...progress, resume: true } });
+  assert.equal(recovered.result.state, 'complete', JSON.stringify(recovered));
+  assert.deepEqual(recovered.notes, first.notes);
+  assert.match(recovered.notes[0].content, /invented-model/);
+  assert.equal(recovered.journal.split('[[Invented resumable note]]').length - 1, 1);
+  const repeated = run({ progress: { ...progress, resume: true } });
+  assert.equal(repeated.result.state, 'complete');
+  assert.deepEqual(repeated.writes, []);
+  assert.deepEqual(repeated.ledger, recovered.ledger);
+  assert.deepEqual(repeated.notes, recovered.notes);
+  assert.equal(repeated.journal, recovered.journal);
+
+  const notePath = path.join(run.root, 'vault', first.writes[0]);
+  const later = first.notes[0].content + '\nA subsequent invented edit.\n';
+  fs.writeFileSync(notePath, later);
+  const changed = run({ progress: { ...progress, resume: true } });
+  assert.equal(changed.result.state, 'conflict');
+  assert.deepEqual(changed.writes, []);
+  assert.equal(changed.notes[0].content, later);
+  assert.equal(changed.journal, recovered.journal);
+});
+
+test('legacy capture inherits validated provenance in place before linking, with a durable original-operation audit', (t) => {
+  const hash = value => createHash('sha256').update(value).digest('hex');
+  const run = fixture(t);
+  const capture = { ...base, text: 'An invented revision of the approved source.', kind: 'note', title: 'Invented revision', words: 'assistant' };
+  const first = run({ capture, legacy: true, fault: 'after_note' });
+  const note = first.notes[0].content;
+  const intentId = Object.keys(first.ledger.captures)[0];
+  const baselinePath = path.join(run.root, 'vault/Notes/Invented baseline.md');
+  const baseline = [
+    '---', 'content_origin: mixed', 'content_origin_basis: mixed_composition', 'human_evidence_eligible: false',
+    'content_origin_drafting: [{"kind":"assistant_edit","harness":"invented-harness","model":"invented-model","model_evidence":"declared"}]',
+    'jarvos_note_id: invented-baseline-id', '---', '', 'An invented approved source.',
+  ].join('\n');
+  fs.writeFileSync(baselinePath, baseline);
+  const repair = { intentId, originalHash: hash(note), baselinePath, baselineHash: hash(baseline),
+    revision: capture.text, revisionHash: hash(capture.text), journalPath: 'Journal/2030-02-03.md' };
+  const premature = run({ progress: { opId: capture.opId, source: capture.source, resume: true } });
+  assert.equal(premature.result.state, 'unsupported');
+  assert.deepEqual(premature.ledger, first.ledger);
+  const refused = run({ provenanceRepair: { ...repair, baselineHash: '0'.repeat(64) } });
+  assert.deepEqual(refused.ledger, first.ledger);
+  assert.equal(refused.result.state, 'conflict');
+  const corrected = run({ provenanceRepair: repair });
+  assert.equal(corrected.result?.state, 'corrected', JSON.stringify({ error: corrected.error, result: corrected.result }));
+  assert.deepEqual(corrected.writes, ['Notes/Invented revision.md']);
+  const revised = corrected.notes.find(file => file.name === 'Invented revision.md').content;
+  const body = content => content.split(/^---$/m).slice(2).join('---');
+  const noteId = content => content.match(/^jarvos_note_id: (.*)$/m)[1];
+  assert.equal(body(revised), body(note));
+  assert.equal(noteId(revised), noteId(note));
+  assert.match(revised, /content_origin: mixed/);
+  assert.match(revised, /human_evidence_eligible: false/);
+  assert.match(revised, /invented-model/);
+  assert.match(revised, /incorrect_whole_document_assistant_draft/);
+  assert.equal(corrected.ledger.operations[`${intentId}:note`].operation.content, note);
+  assert.equal(corrected.journal, null);
+  const progress = { opId: capture.opId, source: capture.source, resume: true };
+  const linked = run({ progress });
+  assert.equal(linked.result.state, 'complete');
+  assert.equal(linked.journal.split('[[Invented revision]]').length - 1, 1);
+  const replay = run({ progress });
+  assert.deepEqual(replay.writes, []);
+  assert.deepEqual(replay.ledger, linked.ledger);
+});
+
+test('resume preserves a later journal edit that placed the note link in another section', (t) => {
+  const run = fixture(t);
+  const title = 'Invented note with later placement';
+  const capture = { ...base, kind: 'note', title };
+  const first = run({ capture, fault: 'after_note' });
+  const journal = '# Test Stream\n\n## Journal\n- [[' + title + '|Existing link]]\n\n## 📝 Notes\n\n';
+  const journalDir = path.join(run.root, 'vault/Journal');
+  fs.mkdirSync(journalDir, { recursive: true });
+  fs.writeFileSync(path.join(journalDir, capture.date + '.md'), journal);
+  const resumed = run({ progress: { opId: capture.opId, source: capture.source, resume: true } });
+  assert.equal(resumed.result.state, 'conflict');
+  assert.deepEqual(resumed.notes, first.notes);
+  assert.equal(resumed.journal, journal);
+  assert.ok(Object.values(resumed.ledger.operations).some(record =>
+    record.status === 'abandoned' && record.evidence?.errorClass === 'backlink_placement_conflict'));
+  const unrelated = run({ capture: { ...base, opId: 'test-independent-idea', text: 'An independent invented idea.' } });
+  assert.equal(unrelated.result.ok, true);
+  assert.match(unrelated.journal, /An independent invented idea/);
+});
+
+test('resume refuses to redirect an unfinished link after the configured journal folder changes', (t) => {
+  const run = fixture(t);
+  const capture = { ...base, kind: 'note', title: 'Invented pinned folder' };
+  const first = run({ capture, fault: 'after_note' });
+  const changed = run({ progress: { opId: capture.opId, source: capture.source, resume: true }, progressJournalFolder: 'Other' });
+  assert.equal(changed.result.state, 'conflict');
+  assert.deepEqual(changed.ledger, first.ledger);
+  assert.deepEqual(changed.writes, []);
+});
 
 test('a standing create-only request saves and links once, then replays its create', (t) => {
   const run = fixture(t);

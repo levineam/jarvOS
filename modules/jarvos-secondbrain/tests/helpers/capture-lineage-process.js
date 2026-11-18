@@ -5,8 +5,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createHash } = require('node:crypto');
 const { captureWithJarvos } = require('../../bridge/capture/src/universal-capture');
-const { simpleCapture } = require('../../bridge/capture/src/simple-capture');
+const { simpleCapture, noteCaptureProgress } = require('../../bridge/capture/src/simple-capture');
 const { createConfiguredVaultMutationService } = require('../../src/vault-mutation-service');
 const { createVaultStorageAdapter } = require('../../adapters/obsidian/src/vault-storage-adapter');
 const { createVaultMutationLedger } = require('../../adapters/obsidian/src/vault-mutation-ledger');
@@ -32,8 +33,8 @@ function flushAllCallbacks() {
   while (pendingCallbacks.length) flushCallbacks();
 }
 
-const { root, capture, mutation, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
-  inboxNow = '2030-02-03T12:00:00Z', inboxRoot, clockNow, journalFolder = 'Journal', notesFolder = 'Notes' } = JSON.parse(fs.readFileSync(0, 'utf8'));
+const { root, capture, progress, provenanceRepair, legacy = false, mutation, fault, reconcile = false, simple = false, ledgerNow, inbox = false,
+  inboxNow = '2030-02-03T12:00:00Z', inboxRoot, clockNow, journalFolder = 'Journal', notesFolder = 'Notes', progressJournalFolder = 'Journal' } = JSON.parse(fs.readFileSync(0, 'utf8'));
 if (clockNow) {
   const RealDate = Date;
   global.Date = class extends RealDate {
@@ -68,6 +69,7 @@ const vault = {
   }),
 };
 const context = vm.createContext({ app: { vault }, TextDecoder, TextEncoder, Uint8Array,
+  crypto: { subtle: { digest: (algorithm, bytes) => deferred(() => createHash(algorithm).update(bytes).digest()) } },
   atob: (value) => Buffer.from(value, 'base64').toString('binary'),
   btoa: (value) => Buffer.from(value, 'binary').toString('base64') });
 let faultTriggered = false;
@@ -84,6 +86,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
       const encoded = code.match(/atob\('([^']+)'\)/)?.[1];
       const input = encoded ? JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) : null;
       const mutation = input && !input.inspectionToken;
+      const journalMutation = mutation && ['journal-section-line', 'journal-backlink'].includes(input.transformName);
       if (mutation && fault === 'race_before_dispatch' && input.vaultRelativePath.startsWith('Notes/')) {
         fs.mkdirSync(path.dirname(absolute(input.vaultRelativePath)), { recursive: true });
         fs.writeFileSync(absolute(input.vaultRelativePath), 'An invented competing note.', { flag: 'wx' });
@@ -94,7 +97,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
         flushAllCallbacks();
         process.exit(73);
       }
-      if (mutation && fault === 'before_backlink' && input.transformName === 'journal-section-line') {
+      if (journalMutation && fault === 'before_backlink') {
         faultTriggered = true;
         throw new Error('simulated ambiguous dispatch with no effect');
       }
@@ -103,7 +106,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
       if (mutation && !faultTriggered && ((fault === 'after_note' && input.vaultRelativePath.startsWith('Notes/'))
-        || (['after_backlink', 'after_backlink_before_receipt'].includes(fault) && input.transformName === 'journal-section-line'))) {
+        || (['after_backlink', 'after_backlink_before_receipt'].includes(fault) && journalMutation))) {
         flushAllCallbacks();
         faultTriggered = true;
         throw new Error('simulated lost acknowledgement after effect');
@@ -117,7 +120,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
     },
   },
 });
-const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot, journalDir: path.join(vaultRoot, 'Journal') });
+const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot, journalDir: path.join(vaultRoot, progressJournalFolder) });
 async function main() {
   const recovery = reconcile ? service.reconciler.drain({ limit: 20, timeMs: 2000 }) : null;
   let result = null;
@@ -137,7 +140,13 @@ async function main() {
           if (fault === 'ledger_lock') fs.unlinkSync(lockPath);
         }
       } });
-    if (capture) result = simple ? simpleCapture(capture, { adapter }) : captureWithJarvos(capture, { adapter });
+    const captureAdapter = legacy ? { ...adapter, reserveCaptureOperation({ plan, ...request }) {
+      const { resumeNote, ...oldPlan } = plan;
+      return adapter.reserveCaptureOperation({ ...request, plan: oldPlan });
+    } } : adapter;
+    if (capture) result = simple ? simpleCapture(capture, { adapter: captureAdapter }) : captureWithJarvos(capture, { adapter: captureAdapter });
+    if (progress) result = noteCaptureProgress(progress, { adapter });
+    if (provenanceRepair) result = adapter.repairLegacyCaptureProvenance(provenanceRepair);
     if (mutation) result = service.applyMarkdownMutation(mutation);
     if (fault === 'after_capture_ack') throw new Error('simulated caller death after acknowledgement');
   } catch (caught) { error = caught.message; result = null; }

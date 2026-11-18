@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
+const { createHash } = require('node:crypto');
 const test = require('node:test');
 const { createVaultMutationAdapter } = require('../adapters/obsidian/src/vault-mutation-adapter');
 const { buildObsidianInvariantProgram, buildObsidianMutationProgram } = require('../adapters/obsidian/src/vault-mutation-adapter');
@@ -214,12 +215,18 @@ test('inspection rejects malformed and wrong-token bootstrap receipts before pol
 test('inspection uses an opaque result token and leaves an in-flight mutation token intact', () => {
   const mutation = operation(); const inspection = 'inspection-token';
   const file = { path: mutation.vaultRelativePath, content: 'hello' };
-  const context = { app: { vault: { getFileByPath: () => file, read: () => settled('hello') } }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON, __jarvosVaultMutationResults: { [mutation.operationId]: { status: 'pending' } } };
+  const context = { app: { vault: { getFileByPath: () => file, read: () => settled(file.content) } },
+    TextDecoder, TextEncoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+    crypto: { subtle: { digest: (algorithm, bytes) => settled(createHash(algorithm).update(bytes).digest()) } },
+    JSON, __jarvosVaultMutationResults: { [mutation.operationId]: { status: 'pending' } } };
   context.globalThis = context;
   vm.runInNewContext(buildObsidianInvariantProgram(mutation, inspection), context);
   assert.deepEqual(context.__jarvosVaultMutationResults[mutation.operationId], { status: 'pending' });
   assert.equal(context.__jarvosVaultMutationResults[inspection].status, 'satisfied');
   assert.equal(context.__jarvosVaultMutationResults[inspection].invariant, true);
+  file.content = 'A later edit';
+  vm.runInNewContext(buildObsidianInvariantProgram(mutation, inspection), context);
+  assert.equal(context.__jarvosVaultMutationResults[inspection].status, 'unsatisfied');
 });
 
 test('a cleaned-up inspection token cannot be recreated by a late app read', () => {
@@ -234,6 +241,8 @@ test('a cleaned-up inspection token cannot be recreated by a late app read', () 
   const context = {
     app: { vault: { getFileByPath: () => ({ path: mutation.vaultRelativePath }), read: () => pendingRead } },
     TextDecoder,
+    TextEncoder,
+    crypto: { subtle: { digest: (algorithm, bytes) => settled(createHash(algorithm).update(bytes).digest()) } },
     Uint8Array,
     atob: (value) => Buffer.from(value, 'base64').toString('binary'),
     JSON,

@@ -79,7 +79,7 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     fsImpl.writeFileSync(file, `${JSON.stringify({ schemaVersion: 1, reason, quarantinedAt: now(), record: raw })}\n`, { mode: 0o600 });
     try { fsImpl.chmodSync(file, 0o600); } catch {}
   }
-  function readUnlocked({ repair = false } = {}) {
+  function readUnlocked({ repair = false, repairMode = true } = {}) {
     let stat;
     try {
       stat = fsImpl.lstatSync(filePath);
@@ -89,6 +89,7 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     }
     if (!stat.isFile()) throw new Error('ledger path must be a regular file');
     if (unsafeMode(stat)) {
+      if (!repairMode) throw new Error('ledger permissions are unsafe');
       try {
         fsImpl.chmodSync(filePath, 0o600);
         stat = fsImpl.lstatSync(filePath);
@@ -141,9 +142,9 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
   }
   function ensure(operation) { return transaction(() => { const data = readUnlocked({ repair: true }); const { record, created } = ensureUnlocked(data, operation); if (created) writeAtomic(filePath, data, fsImpl); return record; }); }
   // Atomic ledger replacements permit strict verification without a repair or lock write.
-  function verify() {
+  function verify({ repairMode = true } = {}) {
     try {
-      const data = readUnlocked();
+      const data = readUnlocked({ repairMode });
       if (Object.hasOwn(data, 'captures') && (!data.captures || typeof data.captures !== 'object' || Array.isArray(data.captures))) {
         throw new Error('Invalid capture operation reservations');
       }
