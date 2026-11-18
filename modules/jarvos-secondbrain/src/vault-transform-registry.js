@@ -218,11 +218,12 @@ function backlinkLineRegex(linkTarget) { return new RegExp(`^\\s*-\\s*\\[\\[${es
 // A backlink is identified by the resolved vault-relative wikilink target, not
 // by a display title. That makes retries after a rename deterministic while the
 // queue keeps the note id used to resolve the target.
-function journalBacklinkTransform(content, { linkTarget, section }) {
+function journalBacklinkTransform(content, { linkTarget, section, preserveExistingLinks }) {
   const canonicalHeading = normalizeJournalHeading(section || '📝 Notes');
   const linkText = `- [[${linkTarget}]]`;
   const exactLink = backlinkLineRegex(linkTarget);
   let lines = String(content).split('\n');
+  if (preserveExistingLinks && lines.some(line => exactLink.test(line))) return String(content);
   const range = journalSectionRange(lines, canonicalHeading);
   if (range.start === -1) {
     const cleaned = lines.filter((line) => !exactLink.test(line)).join('\n').trimEnd();
@@ -301,8 +302,8 @@ function createJarvosVaultTransforms() {
     },
     {
       name: 'journal-backlink', version: 1, maxPayloadBytes: 8192,
-      validatePayload: (p) => typeof p?.linkTarget === 'string' && p.linkTarget.trim() && !/[\r\n\[\]]/.test(p.linkTarget) && (p.section === undefined || typeof p.section === 'string') && (p.noteId === undefined || typeof p.noteId === 'string'),
-      normalizePayload: (p) => ({ linkTarget: p.linkTarget.trim(), section: normalizeJournalHeading(p.section || '📝 Notes'), ...(p.noteId ? { noteId: p.noteId.trim() } : {}) }),
+      validatePayload: (p) => typeof p?.linkTarget === 'string' && p.linkTarget.trim() && !/[\r\n\[\]]/.test(p.linkTarget) && (p.section === undefined || typeof p.section === 'string') && (p.noteId === undefined || typeof p.noteId === 'string') && (p.preserveExistingLinks === undefined || p.preserveExistingLinks === true),
+      normalizePayload: (p) => ({ linkTarget: p.linkTarget.trim(), section: normalizeJournalHeading(p.section || '📝 Notes'), ...(p.noteId ? { noteId: p.noteId.trim() } : {}), ...(p.preserveExistingLinks ? { preserveExistingLinks: true } : {}) }),
       applyNode: (content, payload) => journalBacklinkTransform(content, payload),
       invariant: journalBacklinkSatisfied,
     },

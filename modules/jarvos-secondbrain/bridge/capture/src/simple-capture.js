@@ -4,7 +4,7 @@ const { captureWithJarvos, captureFailureMessage } = require('./universal-captur
 const { parseHardCaptureCommand } = require('../../routing/src/keyword-capture-router');
 const { SOURCE_TOOLS } = require('../../../packages/jarvos-ambient/src/intent/capture-contract');
 const { normalizeJournalEntry } = require('../../provenance/src/content-origin-contract');
-const { validateCaptureOpId } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
+const { captureOperationRequest, validateCaptureOpId } = require('../../../packages/jarvos-ambient/src/intent/capture-operation');
 
 class CaptureValidationError extends Error {
   constructor(message) {
@@ -124,4 +124,11 @@ function simpleCapture(input, options = {}) {
   return { ok, kind, message: message.replace(/[\r\n\u2028\u2029]+/g, ' '), result };
 }
 
-module.exports = { CaptureValidationError, buildSimpleCaptureEvent, simpleCapture };
+function noteCaptureProgress({ opId, source, resume = false } = {}, options = {}) {
+  if (typeof source !== 'string' || !source.trim()) throw new CaptureValidationError('source is required');
+  const { intentId } = captureOperationRequest({ opId, source: source.trim() });
+  const adapter = options.adapter || require('../../../adapters').createStorageAdapter(options);
+  return adapter.noteCaptureProgress({ intentId, resume });
+}
+
+module.exports = { CaptureValidationError, buildSimpleCaptureEvent, simpleCapture, noteCaptureProgress };

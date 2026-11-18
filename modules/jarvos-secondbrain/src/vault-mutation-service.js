@@ -142,7 +142,7 @@ function createConfiguredVaultMutationService({
     return source;
   }
 
-  function submitAuthorized(input, operationSource, requestHash) {
+  function submitAuthorized(input, operationSource, requestHash, exact = false) {
     let operation = { ...input, source: operationSource, ...(requestHash ? { captureRequestHash: requestHash } : {}) };
     function replayExisting() {
       const existing = adapter.ledger.get(operation.operationId)?.operation;
@@ -170,15 +170,16 @@ function createConfiguredVaultMutationService({
       }
     }
     let receipt;
-    try { receipt = adapter.submit(operation); } catch (error) {
+    const options = exact ? { drain: false } : undefined;
+    try { receipt = adapter.submit(operation, options); } catch (error) {
       if (!requestHash || error.message !== 'operationId already belongs to a different mutation') throw error;
       // A concurrent first submission may have won atomic planning.
       const replay = replayExisting();
       if (!replay) throw error;
       if (replay !== true) return replay;
-      receipt = adapter.submit(operation);
+      receipt = adapter.submit(operation, options);
     }
-    if (receipt.status !== 'unavailable') return receipt;
+    if (receipt.status !== 'unavailable' || exact) return receipt;
     const planned = receipt.operation || adapter.ledger.get(operation.operationId)?.operation || operation;
     const offlineReceipt = reconciler.safeOfflineSave(planned, offlineWriteCapability);
     // Nothing was written (unauthorized or deferred): the adapter's classified
@@ -209,7 +210,7 @@ function createConfiguredVaultMutationService({
     return reservation;
   }
 
-  function createWriteContext({ vaultRelativePath, operationId, intentId, requestHash, createOnly = false, operationSource = source } = {}) {
+  function createWriteContext({ vaultRelativePath, operationId, intentId, requestHash, createOnly = false, exact = false, operationSource = source } = {}) {
     if (typeof vaultRelativePath !== 'string' || !vaultRelativePath) throw new Error('vaultRelativePath is required');
     if (requestHash !== undefined && (typeof requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(requestHash) || !(operationId || intentId))) throw new Error('requestHash requires a SHA-256 digest and stable intentId');
     const contextSource = boundSource(operationSource);
@@ -217,12 +218,12 @@ function createConfiguredVaultMutationService({
     return Object.freeze({
       mutationExecutor: (operation) => {
         if (requestHash && (operation.operationId !== id || operation.vaultRelativePath !== vaultRelativePath || operation.vaultId !== vaultId)) throw new Error('Identified capture operation does not match its write context');
-        if (!createOnly) return submitAuthorized(operation, contextSource, requestHash);
+        if (!createOnly) return submitAuthorized(operation, contextSource, requestHash, exact);
         // A retry may plan an append; only the ledger's original create may replay.
         const original = adapter.ledger.get(id)?.operation;
         const conflict = { status: 'conflict', obsidian: 'unacknowledged', reason: 'note_exists' };
         if ((original || operation).operationKind !== 'create') return conflict;
-        const receipt = submitAuthorized({ ...operation, createOnly: true }, contextSource, requestHash);
+        const receipt = submitAuthorized({ ...operation, createOnly: true }, contextSource, requestHash, exact);
         return receipt.adapterEvidence?.errorClass === 'note_exists' || receipt.errorClass === 'create_collision'
           ? { ...receipt, ...conflict } : receipt;
       },
