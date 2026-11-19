@@ -137,6 +137,30 @@ test('MCP and bounded context rendering expose stalled steps with optional owner
   assert.ok(renderProjectsContextMarkdown(packet, 700).length <= 700);
 });
 
+test('stalled steps are capped, active-only, and dropped before the active list', async (t) => {
+  const directory = fixture(t, Array.from({ length: 30 }, (_, i) =>
+    `- [ ] Step ${i + 1} ${'x'.repeat(200)} for the next install`).join('\n'));
+  const active = (await read(directory)).projects[0];
+  const paused = { ...active, id: 'paused', title: 'Paused project', status: 'paused',
+    stalled: [{ step: 'Paused-only step', days: 12 }] };
+  const packet = { status: 'ok', contract: 'jarvos.projects-files/v1', summary: { stalled: 31 }, projects: [active, paused] };
+  const markdown = renderProjectsContextMarkdown(packet);
+  assert.match(markdown, /Active \(1\):\n- Stalled project \(updated/);
+  assert.match(markdown, /Stalled Plan steps: 30\n/);
+  assert.equal(markdown.match(/ — Stalled \d+ days:/g)?.length, 8);
+  assert.match(markdown, /and 22 more/);
+  assert.doesNotMatch(markdown, /Paused-only step/);
+
+  packet.projects.push(...Array.from({ length: 16 }, (_, i) => ({
+    ...active, id: `other-${i}`, title: `Project ${i} ${'y'.repeat(75)}`, stalled: [],
+  })));
+  const compact = renderProjectsContextMarkdown(packet);
+  assert.ok(compact.length <= 3600);
+  assert.match(compact, /Active \(17\):/);
+  for (const item of packet.projects.filter((item) => item.status === 'active')) assert.ok(compact.includes(`- ${item.title} (updated`));
+  assert.doesNotMatch(compact, /Stalled Plan steps/);
+});
+
 
 test('all short progress dates participate and an empty Owner line still tracks the step', async (t) => {
   const directory = fixture(t, `- [ ] Update all progress notes (in progress: Alice, 11-01)

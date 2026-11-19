@@ -143,6 +143,33 @@ test('duplicate project IDs, unsafe file links and missing artifacts remain unav
   assert.equal((await f.read()).task.artifacts[0].status, 'unavailable');
 });
 
+test('artifact reads report clean, unstaged and staged changes without running fsmonitor', async (t) => {
+  const f = fixture(t);
+  const repo = path.join(f.root, 'artifact-repo');
+  const subdir = path.join(repo, 'inputs');
+  const file = path.join(subdir, 'report.md');
+  const monitor = path.join(repo, 'monitor.sh');
+  const marker = path.join(repo, 'monitor-ran');
+  fs.mkdirSync(subdir, { recursive: true });
+  fs.writeFileSync(file, 'Fixture report\n');
+  f.change(f.artifact, file);
+  const git = (...args) => f.git('-C', repo, ...args);
+  git('init', '-q');
+  git('add', 'inputs/report.md');
+  git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Track fixture report');
+  fs.writeFileSync(monitor, '#!/bin/sh\n: > "$(dirname "$0")/monitor-ran"\n', { mode: 0o700 });
+  git('config', 'core.fsmonitor', monitor);
+
+  const selected = await f.select();
+  assert.equal(selected.task.artifacts[0].workingChanges, 'clean');
+  fs.appendFileSync(file, 'Unstaged change\n');
+  assert.equal((await f.read()).task.artifacts[0].workingChanges, 'dirty_or_untracked');
+  // Stage with fsmonitor disabled so only the feature under test can invoke it.
+  git('-c', 'core.fsmonitor=false', 'add', 'inputs/report.md');
+  assert.equal((await f.read()).task.artifacts[0].workingChanges, 'dirty_or_untracked');
+  assert.equal(fs.existsSync(marker), false);
+});
+
 test('stale state/revision and concurrent selectors preserve the earlier successful selection', async (t) => {
   const f = fixture(t);
   const [a, b] = await Promise.all([f.select(), f.select('Task B')]);

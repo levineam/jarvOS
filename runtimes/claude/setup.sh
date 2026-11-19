@@ -278,12 +278,11 @@ function upsertClaudeCodeHook(settings, bridge) {
   const next = { ...settings };
   const hooks = next.hooks && typeof next.hooks === 'object' && !Array.isArray(next.hooks) ? { ...next.hooks } : {};
 
-  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, coordinatorGuardScript, dispatcher].filter(Boolean);
+  const ownedPaths = [hookScript, turnHookScript, precompactHookScript, dispatcher].filter(Boolean);
   if (path.isAbsolute(stagedRoot || '')) {
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-start-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-session-turn-hook.js'));
     ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-precompact-hook.js'));
-    ownedPaths.push(path.join(stagedRoot, 'runtimes', 'claude', 'jarvos-coordinator-guard-hook.js'));
   }
   const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // A path is written into the command shell-quoted, and shellQuote renders an
@@ -296,12 +295,17 @@ function upsertClaudeCodeHook(settings, bridge) {
     if (raw.test(command)) return true;
     return command.includes(shellQuote(target));
   };
+  // Match the direct, shell-quoted guard invocation written by setup in any checkout.
+  const guardCommand = /^node '(?:[^']|'"'"')*\/runtimes\/claude\/jarvos-coordinator-guard-hook\.js'$/;
 
   function upsert(event, script, entry) {
     const entries = Array.isArray(hooks[event]) ? [...hooks[event]] : [];
     const retained = entries.map((candidate) => {
       if (!Array.isArray(candidate?.hooks)) return candidate;
-      const retainedHooks = candidate.hooks.filter((hook) => typeof hook?.command !== 'string' || !ownedPaths.some((target) => hasOwnedPath(hook.command, target)));
+      const retainedHooks = candidate.hooks.filter((hook) => typeof hook?.command !== 'string' || !(
+        ownedPaths.some((target) => hasOwnedPath(hook.command, target))
+        || (script === coordinatorGuardScript && hook.type === 'command' && guardCommand.test(hook.command))
+      ));
       if (retainedHooks.length === candidate.hooks.length) return candidate;
       return retainedHooks.length ? { ...candidate, hooks: retainedHooks } : null;
     }).filter(Boolean);
