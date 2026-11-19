@@ -5,7 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { execFile, spawn, spawnSync } = require('node:child_process');
+const { once } = require('node:events');
+const { createHash, randomUUID } = require('node:crypto');
 const { planTasks, readProjectsFiles, projectStatusChanges, selectPlanTask, readPlanTaskContext, checkpointPlanTask, renderPlanTaskContext } = require('../../modules/jarvos-agent-context/src/projects-files');
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -179,6 +181,165 @@ test('stale state/revision and concurrent selectors preserve the earlier success
   const c = await f.read();
   const stale = await f.select('Task A', A, { expectedState: c.stateRevision, expectedRevision: '0'.repeat(64) });
   assert.equal(stale.code, 'PMS_PROJECT_REVISION_CONFLICT');
+});
+
+const pointerCLI = path.join(__dirname, 'plan-task-continuity.js');
+const taskRequest = { project: 'prj_named', task: 'Task A' };
+
+function pointerFile(f) {
+  return path.join(f.stateDir, `${createHash('sha256').update(A).digest('hex')}.json`);
+}
+
+function runPointer(f, action, request) {
+  const result = spawnSync(process.execPath, [pointerCLI, action], {
+    env: f.env, input: JSON.stringify(request), encoding: 'utf8', timeout: 12000,
+  });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+async function pausePointer(t, f, action, request, { operation = 'lstatSync', after = false } = {}) {
+  const marker = path.join(f.root, randomUUID());
+  const preload = `${marker}.cjs`;
+  fs.writeFileSync(preload, `
+    const fs = require('node:fs');
+    const real = fs.${operation};
+    let paused = false;
+    fs.${operation} = function (...args) {
+      if (!paused && args.at(-1) === ${JSON.stringify(pointerFile(f))}) {
+        paused = true;
+        ${after ? 'const result = real.apply(this, args);' : ''}
+        fs.writeSync(1, 'paused\\n');
+        const latch = new Int32Array(new SharedArrayBuffer(4));
+        while (!fs.existsSync(${JSON.stringify(marker)})) Atomics.wait(latch, 0, 0, 10);
+        return ${after ? 'result' : 'real.apply(this, args)'};
+      }
+      return real.apply(this, args);
+    };
+  `);
+  const child = spawn(process.execPath, ['--require', preload, pointerCLI, action], {
+    env: f.env, stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  const exited = once(child, 'close');
+  child.stdin.end(JSON.stringify(request));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const [data] = await once(child.stdout, 'data', { signal: controller.signal });
+    assert.equal(String(data), 'paused\n');
+    assert.ok(fs.existsSync(`${pointerFile(f)}.lock`), 'holder has entered with the real lock');
+  } finally { clearTimeout(timer); }
+  return {
+    async kill() {
+      assert.ok(child.kill('SIGKILL'));
+      assert.deepEqual(await exited, [null, 'SIGKILL']);
+    },
+    async finish() {
+      let stdout = '';
+      child.stdout.on('data', (data) => { stdout += data; });
+      fs.writeFileSync(marker, '');
+      assert.deepEqual(await exited, [0, null]);
+      return JSON.parse(stdout);
+    },
+  };
+}
+
+test('a killed task pointer holder blocks while live and recovers through the CLI after death', async (t) => {
+  const f = fixture(t);
+  const holder = await pausePointer(t, f, 'select', taskRequest);
+  const lockFile = `${pointerFile(f)}.lock`;
+  fs.utimesSync(lockFile, new Date(0), new Date(0));
+  assert.equal(runPointer(f, 'select', taskRequest).code, 'PMS_POINTER_BUSY');
+  assert.equal((await f.read()).status, 'not_selected');
+  await holder.kill();
+  assert.ok(fs.existsSync(lockFile), 'the killed process bypassed cleanup');
+  const selected = runPointer(f, 'select', taskRequest);
+  assert.equal(selected.status, 'ok', selected.code);
+  assert.equal(selected.task.selector, 'Task A');
+  assert.equal(selected.effectsAuthorized, false);
+  assert.deepEqual(fs.readdirSync(f.stateDir).sort(), [path.basename(pointerFile(f)), path.basename(`${lockFile}.guard`)]);
+});
+
+test('only one of two competing CLI processes can select through a dead holder', async (t) => {
+  const f = fixture(t);
+  const holder = await pausePointer(t, f, 'select', taskRequest);
+  await holder.kill();
+  const contender = (task) => new Promise((resolve, reject) => {
+    const child = execFile(process.execPath, [pointerCLI, 'select'], {
+      env: f.env, timeout: 12000,
+    }, (error, stdout) => {
+      if (error) { reject(error); return; }
+      try { resolve(JSON.parse(stdout)); } catch (invalid) { reject(invalid); }
+    });
+    child.stdin.end(JSON.stringify({ ...taskRequest, task }));
+  });
+  const results = await Promise.all([contender('Task A'), contender('Task B')]);
+  const winners = results.filter((result) => result.status === 'ok');
+  assert.equal(winners.length, 1, JSON.stringify(results.map((result) => result.status + ':' + result.code)));
+  assert.equal((await f.read()).task.selector, winners[0].task.selector);
+  assert.ok(['PMS_POINTER_BUSY', 'PMS_POINTER_CONFLICT'].includes(results.find((result) => result.status !== 'ok').code));
+});
+
+test('a killed checkpoint releases ownership without replaying a committed pointer', async (t) => {
+  const f = fixture(t);
+  const before = runPointer(f, 'select', taskRequest);
+  f.change('Next: Read A', 'Next: Checkpoint input');
+  f.git('commit', '-qam', 'Record checkpoint');
+  const request = { ...taskRequest, expectedState: before.stateRevision, expectedRevision: (await f.read()).project.revision };
+  const beforeWrite = await pausePointer(t, f, 'checkpoint', request);
+  await beforeWrite.kill();
+  const afterWrite = await pausePointer(t, f, 'checkpoint', request, { operation: 'renameSync', after: true });
+  await afterWrite.kill();
+  const saved = fs.readFileSync(pointerFile(f), 'utf8');
+  assert.equal((await f.read()).changedSinceSelection, false);
+  assert.equal(runPointer(f, 'checkpoint', request).code, 'PMS_POINTER_CONFLICT');
+  assert.equal(fs.readFileSync(pointerFile(f), 'utf8'), saved);
+  assert.equal(fs.existsSync(`${pointerFile(f)}.lock`), false);
+});
+
+test('a replaced visible lock is preserved when the owner detects it before writing', async (t) => {
+  const f = fixture(t);
+  const lockFile = `${pointerFile(f)}.lock`;
+  const original = await pausePointer(t, f, 'select', taskRequest);
+  fs.renameSync(lockFile, `${lockFile}.displaced`);
+  fs.writeFileSync(lockFile, 'Unknown replacement', { mode: 0o600 });
+  const replacementInode = fs.statSync(lockFile, { bigint: true }).ino;
+  assert.equal((await original.finish()).code, 'PMS_POINTER_BUSY');
+  assert.equal(fs.statSync(lockFile, { bigint: true }).ino, replacementInode);
+  assert.equal(runPointer(f, 'select', taskRequest).code, 'PMS_POINTER_BUSY');
+  assert.equal((await f.read()).status, 'not_selected');
+});
+
+test('a displaced visible lock cannot admit a second writer at the pointer rename', async (t) => {
+  const f = fixture(t);
+  const lockFile = `${pointerFile(f)}.lock`;
+  const original = await pausePointer(t, f, 'select', taskRequest, { operation: 'renameSync' });
+  fs.renameSync(lockFile, `${lockFile}.displaced`);
+  const competitor = { ...taskRequest, task: 'Task B' };
+  assert.equal(runPointer(f, 'select', competitor).code, 'PMS_POINTER_BUSY');
+  assert.equal(fs.existsSync(lockFile), false);
+  assert.equal((await original.finish()).task.selector, 'Task A');
+  assert.equal(runPointer(f, 'select', competitor).code, 'PMS_POINTER_CONFLICT');
+  assert.equal((await f.read()).task.selector, 'Task A');
+});
+
+test('unknown legacy locks are preserved, even with a recycled PID or old timestamp', async (t) => {
+  const f = fixture(t);
+  const lockFile = `${pointerFile(f)}.lock`;
+  fs.mkdirSync(f.stateDir, { recursive: true, mode: 0o700 });
+  for (const content of ['', '{', JSON.stringify({ pid: process.pid, createdAt: 0 })]) {
+    fs.writeFileSync(lockFile, content, { mode: 0o600 });
+    const old = new Date(0);
+    fs.utimesSync(lockFile, old, old);
+    assert.equal(runPointer(f, 'select', taskRequest).code, 'PMS_POINTER_BUSY');
+    assert.equal(fs.readFileSync(lockFile, 'utf8'), content);
+    assert.equal(fs.existsSync(pointerFile(f)), false);
+  }
+  fs.unlinkSync(lockFile);
+  fs.symlinkSync(f.artifact, lockFile);
+  assert.equal(runPointer(f, 'select', taskRequest).code, 'PMS_POINTER_BUSY');
+  assert.equal(fs.readlinkSync(lockFile), f.artifact);
 });
 
 test('writeback distinguishes saved, failed commit and actual scoped committed readback', async (t) => {
