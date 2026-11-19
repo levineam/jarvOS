@@ -100,7 +100,7 @@ function resumeNoteCapture(storage, service, { intentId, resume = false } = {}) 
     const result = adapter.inspectInvariant(operation);
     if (result.status === 'satisfied' && result.invariant === true) {
       if (record.status === 'acknowledged') return 'confirmed';
-      return mayResume && adapter.acknowledgeIfSatisfied(operation) ? 'confirmed' : 'unconfirmed';
+      return mayResume && adapter.acknowledgeIfSatisfied(operation, { recoverBlockedJournal: true }) ? 'confirmed' : 'unconfirmed';
     }
     if (result.status === 'unavailable') return 'unavailable';
     if (AMBIGUOUS.has(record.status) || record.status === 'acknowledged') return 'conflict';

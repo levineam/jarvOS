@@ -144,6 +144,30 @@ test('resume recovers a queued backlink behind a stuck journal create', (t) => {
   assert.deepEqual(run({ progress }).writes, []);
 });
 
+test('resume acknowledges an already-present queued backlink behind a stuck journal create', (t) => {
+  const run = fixture(t);
+  const { createId, journalPath } = interruptJournalCreate(run);
+  const capture = { ...base, kind: 'note', opId: 'test-already-linked', title: 'Invented note linked in Obsidian' };
+  const queued = run({ capture, fault: 'journal_presence_unavailable' });
+  const link = Object.values(queued.ledger.operations).find(record => record.operation.transformName === 'journal-backlink');
+  assert.equal(link.status, 'planned');
+  assert.equal(queued.ledger.operations[createId].status, 'unknown_after_dispatch');
+  const journal = queued.journal.replace(/^- ?$/m, `- [[${capture.title}]]`);
+  fs.writeFileSync(path.join(run.root, 'vault', journalPath), journal);
+
+  const progress = { opId: capture.opId, source: capture.source };
+  const status = run({ progress });
+  assert.equal(status.result.journal, 'unconfirmed');
+  assert.deepEqual(status.ledger, queued.ledger);
+  const recovered = run({ progress: { ...progress, resume: true } });
+  assert.equal(recovered.result.state, 'complete');
+  assert.equal(recovered.ledger.operations[createId].evidence.reason, ENSURE_EXISTS_RESOLUTION);
+  assert.equal(recovered.ledger.operations[link.operation.operationId].status, 'acknowledged');
+  assert.deepEqual(recovered.writes, []);
+  assert.equal(recovered.journal, journal);
+  assert.deepEqual(run({ progress: { ...progress, resume: true } }).ledger, recovered.ledger);
+});
+
 test('legacy capture inherits validated provenance in place before linking, with a durable original-operation audit', (t) => {
   const hash = value => createHash('sha256').update(value).digest('hex');
   const run = fixture(t);

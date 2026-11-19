@@ -96,16 +96,17 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     return summary;
   }
 
-  function isEnsureExistsCreate(operation) {
+  function isEnsureExistsCreate(operation, requireEnsureMarker) {
     return operation.operationKind === 'create'
       && typeof operation.content === 'string'
-      && ENSURE_EXISTS_ID.test(operation.operationId)
+      && (requireEnsureMarker ? operation.ensureExists === true : ENSURE_EXISTS_ID.test(operation.operationId))
       && journalPathPattern.test(operation.vaultRelativePath);
   }
   // Plans (and, unless dryRun, applies) the safe resolution of stuck ensure-exists
   // creates on journal paths. Rule, per (vault, path) queue in FIFO order:
   //   1. take the leading run of ensure-exists creates (create, journal path,
-  //      ensure id, status planned|unknown_after_dispatch|conflict|blocked, no
+  //      ensure marker when required or legacy id by default,
+  //      status planned|unknown_after_dispatch|conflict|blocked, no
   //      live dispatch claim);
   //   2. act only if the run contains a stuck op (unknown_after_dispatch or conflict);
   //   3. act only if the target is verified present by the adapter's read of the
@@ -116,7 +117,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
   // Vault content is never compared, written, or deleted. Any other
   // head (transform, replace, delete, a create that is not an ensure) keeps the
   // strict reconcile rules and is only reported.
-  function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists', vaultRelativePath, beforeSequence = Infinity } = {}) {
+  function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists', vaultRelativePath, beforeSequence = Infinity, requireEnsureMarker = false } = {}) {
     const summary = { dryRun: dryRun === true, resolved: [], skipped: [] };
     if (typeof vaultId !== 'string' || !vaultId) return { ...summary, skipped: [{ reason: 'vault_identity_unavailable' }] };
     if (typeof ledger.peek !== 'function' || typeof ledger.resolve !== 'function') return { ...summary, skipped: [{ reason: 'ledger_resolution_unavailable' }] };
@@ -139,7 +140,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
       const claimed = (record) => Boolean(claim && claim.operationId === record.operation.operationId && claim.expiresAt > now());
       const run = [];
       for (const record of queue) {
-        if (!isEnsureExistsCreate(record.operation) || !RESOLVABLE_STATUSES.has(record.status) || claimed(record)) break;
+        if (!isEnsureExistsCreate(record.operation, requireEnsureMarker) || !RESOLVABLE_STATUSES.has(record.status) || claimed(record)) break;
         run.push(record);
       }
       const head = queue[0];

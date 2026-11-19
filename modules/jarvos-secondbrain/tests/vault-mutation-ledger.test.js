@@ -214,6 +214,21 @@ test('complete operations are planned atomically in submission order', () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('retrying a legacy journal create with ensureExists preserves its durable payload', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-ensure-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const filePath = path.join(root, 'ledger.json');
+  const ledger = createVaultMutationLedger({ filePath });
+  const legacy = { ...op('synthetic-legacy:create'), vaultRelativePath: 'Journal/2030-01-02.md', content: 'Original scaffold' };
+  const retained = ledger.planNext(legacy);
+  const restarted = createVaultMutationLedger({ filePath });
+  const retry = { ...legacy, ensureExists: true };
+  const before = fs.readFileSync(filePath, 'utf8');
+  assert.deepEqual(restarted.planNext(retry), retained);
+  assert.throws(() => restarted.planNext({ ...retry, content: 'Different scaffold' }), /different mutation/);
+  assert.equal(fs.readFileSync(filePath, 'utf8'), before);
+});
+
 for (const state of ['planned', 'dispatched', 'local_mutating', 'local_applied', 'unknown_after_dispatch']) {
   test(`quarantine following ${state} ${state === 'planned' ? 'allows' : 'blocks'} later file claims`, () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-quarantine-order-'));

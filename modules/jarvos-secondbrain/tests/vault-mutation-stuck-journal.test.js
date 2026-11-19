@@ -11,6 +11,8 @@ const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mu
 const { createVaultMutationReconciler, ENSURE_EXISTS_RESOLUTION } = require('../adapters/obsidian/src/vault-mutation-reconciler');
 const { hashUtf8 } = require('../adapters/obsidian/src/vault-mutation-contract');
 const { ERROR_MESSAGE_MAX_CHARS, createVaultMutationAdapter, sanitizeErrorMessage } = require('../adapters/obsidian/src/vault-mutation-adapter');
+const { createVaultStorageAdapter } = require('../adapters/obsidian/src/vault-storage-adapter');
+const { linkNoteToJournal } = require('../bridge/provenance/src/link-to-journal');
 const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
 const { main: reconcileMain } = require('../scripts/vault-mutation-reconcile');
 // Assembled so the repository secret scan does not read test fixtures as credentials.
@@ -232,7 +234,7 @@ test('peek of a missing or unsafe ledger is empty or an error, and writes nothin
 // ---- end to end against the real adapter, ledger and registered transforms ----
 const CAPTURE_JOURNAL = 'Journal/2030-01-02.md';
 const OTHER_JOURNAL = 'Journal/2030-01-03.md';
-const CAPTURE_CREATE = 'journal-create-2030-01-02-test0001';
+const CAPTURE_CREATE = 'synthetic-ensure-journal';
 const OTHER_CREATE = 'journal-create-2030-01-03-test0002';
 const CAPTURE_LINK = 'backlink-test0003';
 const SCAFFOLD = '---\njournal-date: 2030-01-02\n---\n\n## 📝 Notes\n-\n';
@@ -242,7 +244,15 @@ function appVault(initial, present) {
   const file = { path: CAPTURE_JOURNAL, content: initial };
   const files = new Map(present ? [[file.path, file]] : []);
   const settled = (value) => ({ then(fn) { fn(value); return this; }, catch() { return this; } });
-  const vault = { getName: () => 'vault', getFileByPath: (target) => files.get(target) || null, process(target, transform) { target.content = transform(target.content); return settled(target); }, read: (target) => settled(target.content), create: () => { throw new Error('unexpected journal create'); } };
+  const vault = { getName: () => 'vault', getFileByPath: (target) => files.get(target) || null, process(target, transform) { target.content = transform(target.content); return settled(target); }, read: (target) => settled(target.content),
+    create(target, content) {
+      assert.equal(target, file.path);
+      assert.equal(files.has(target), false);
+      file.content = content;
+      files.set(target, file);
+      return settled(file);
+    },
+  };
   const context = { app: { vault }, TextDecoder, Uint8Array, atob: (value) => Buffer.from(value, 'base64').toString('binary'), JSON };
   context.globalThis = context;
   return { file, files, run: (code) => { const raw = vm.runInNewContext(code, context); return typeof raw === 'string' ? JSON.parse(raw) : raw; } };
@@ -260,6 +270,7 @@ function journalWriteFixture(t, { present = true } = {}) {
   const presenceReads = [];
   let resolutionPasses = 0;
   let cliDown = false;
+  let dropNextAck = false;
   const service = createConfiguredVaultMutationService({
     vaultRoot: root,
     vaultId: VAULT_ID,
@@ -283,35 +294,44 @@ function journalWriteFixture(t, { present = true } = {}) {
         if (cliDown) throw new Error(`Command failed: obsidian vault=Vault eval code=${Buffer.from(code).toString('base64')} (cwd ${root}) test output`);
         const target = code.match(/getFileByPath\?\.\("([^"]+)"\)/)?.[1];
         if (target) presenceReads.push(target);
-        return app.run(code);
+        const result = app.run(code);
+        if (dropNextAck) {
+          dropNextAck = false;
+          throw new Error('Synthetic lost acknowledgement');
+        }
+        return result;
       },
     },
   });
-  const create = ensureCreate(CAPTURE_CREATE, 1, { vaultRelativePath: CAPTURE_JOURNAL, content: SCAFFOLD });
+  const create = ensureCreate(CAPTURE_CREATE, 1, { vaultRelativePath: CAPTURE_JOURNAL, content: SCAFFOLD, ensureExists: true });
   const link = (sequence) => backlink(CAPTURE_LINK, sequence, { vaultRelativePath: CAPTURE_JOURNAL, replayPayload: { linkTarget: 'Recovered Note', section: '📝 Notes' } });
   const context = service.createWriteContext({ vaultRelativePath: CAPTURE_JOURNAL, operationId: CAPTURE_LINK });
   return {
-    app, ledger, strand, service, create, link, claimed, presenceReads,
+    app, ledger, strand, service, create, link, claimed, presenceReads, root,
     setCliDown(value) { cliDown = value; },
+    dropNextAck() { dropNextAck = true; },
     get resolutionPasses() { return resolutionPasses; },
     submitLink() { return context.mutationExecutor(link(1)); },
   };
 }
 
-test('journal write recovers a stuck ensure-create on its own day and lands once', (t) => {
+test('journal write recovers a stuck ensureJournal create on its own day and lands once', (t) => {
   const f = journalWriteFixture(t);
+  const storage = createVaultStorageAdapter({ vaultRoot: f.root, journalDir: path.join(f.root, 'Journal'), mutationService: f.service });
   f.setCliDown(true);
-  const stuck = f.service.execute(f.create);
+  const { receipt: stuck } = storage.ensureJournal({ date: '2030-01-02', intentId: CAPTURE_CREATE });
   assert.equal(stuck.status, 'unknown_after_dispatch');
   assert.equal(stuck.adapterEvidence.errorClass, 'dispatch_failed');
   assert.match(stuck.adapterEvidence.errorMessage, /^Command failed: obsidian vault=Vault eval code=<redacted>$/);
   assert.equal(f.ledger.get(CAPTURE_CREATE).evidence.errorMessage, stuck.adapterEvidence.errorMessage);
+  assert.equal(f.ledger.get(CAPTURE_CREATE).operation.ensureExists, true);
 
   f.setCliDown(false);
+  f.app.file.content += '\nAnother synthetic journal edit.\n';
   assert.equal(f.service.reconciler.drain().acknowledged, 0);
   assert.equal(f.ledger.get(CAPTURE_CREATE).status, 'unknown_after_dispatch');
   f.app.files.set(OTHER_JOURNAL, { path: OTHER_JOURNAL, content: '## Notes\n' });
-  f.strand(ensureCreate(OTHER_CREATE, 1, { vaultRelativePath: OTHER_JOURNAL }));
+  f.strand(ensureCreate(OTHER_CREATE, 1, { vaultRelativePath: OTHER_JOURNAL, ensureExists: true }));
   const otherBefore = f.ledger.get(OTHER_CREATE);
 
   const landed = f.submitLink();
@@ -325,6 +345,79 @@ test('journal write recovers a stuck ensure-create on its own day and lands once
   assert.deepEqual(f.presenceReads, [CAPTURE_JOURNAL]);
   assert.match(f.app.file.content, /\[\[Recovered Note\]\]/);
   assert.match(f.app.file.content, /An existing journal entry\./);
+});
+
+test('foreground recovery resolves a marked create from link-to-journal with a caller intent ID', (t) => {
+  const f = journalWriteFixture(t, { present: false });
+  const intentId = 'synthetic-caller-intent';
+  const createId = `${intentId}:create`;
+  f.dropNextAck();
+  assert.throws(() => linkNoteToJournal({
+    journalPath: path.join(f.root, CAPTURE_JOURNAL),
+    noteTitle: 'Invented bridge note',
+    mutationService: f.service,
+    intentId,
+    deferOnFailure: false,
+  }), (error) => error.receipt?.status === 'unknown_after_dispatch');
+  assert.ok(f.app.files.has(CAPTURE_JOURNAL));
+  const pending = f.ledger.get(createId);
+  assert.equal(pending.status, 'unknown_after_dispatch');
+  assert.equal(pending.operation.ensureExists, true);
+  f.app.file.content = EDITED_JOURNAL;
+
+  assert.equal(f.submitLink().status, 'committed');
+  assert.equal(f.ledger.get(createId).status, 'superseded');
+  assert.equal(f.ledger.get(createId).evidence.reason, ENSURE_EXISTS_RESOLUTION);
+  assert.match(f.app.file.content, /\[\[Recovered Note\]\]/);
+});
+
+test('journal recovery dispatches queued predecessors in FIFO order before the new write', (t) => {
+  const f = journalWriteFixture(t);
+  f.strand(f.create);
+  const queued = ['First Queued Note', 'Second Queued Note'].map((linkTarget, index) => ({
+    ...f.link(index + 2), operationId: `backlink-queued-${index}`,
+    replayPayload: { ...f.link(1).replayPayload, linkTarget },
+  }));
+  f.setCliDown(true);
+  for (const operation of queued) {
+    assert.equal(f.service.execute(operation).adapterEvidence.reason, 'prior_operation_blocked');
+    assert.equal(f.ledger.get(operation.operationId).attempts, 0);
+  }
+  f.setCliDown(false);
+  const otherOperation = { ...f.link(1), operationId: 'backlink-other-journal', vaultRelativePath: OTHER_JOURNAL };
+  const otherBefore = f.ledger.planNext(otherOperation);
+  f.claimed.length = 0;
+
+  const landed = f.submitLink();
+  assert.equal(landed.status, 'committed', landed.adapterEvidence?.reason);
+  const queuedIds = queued.map(({ operationId }) => operationId);
+  assert.deepEqual(f.claimed, [CAPTURE_LINK, ...queuedIds, CAPTURE_LINK]);
+  for (const id of [...queuedIds, CAPTURE_LINK]) {
+    assert.equal(f.ledger.get(id).status, 'acknowledged');
+    assert.equal(f.ledger.get(id).attempts, 1);
+  }
+  assert.deepEqual(f.ledger.get(otherOperation.operationId), otherBefore);
+  assert.equal(f.ledger.get(CAPTURE_CREATE).status, 'superseded');
+});
+
+test('foreground recovery leaves an unmarked synthetic:create with a lost acknowledgement blocked', (t) => {
+  const f = journalWriteFixture(t, { present: false });
+  f.dropNextAck();
+  const content = 'An exact synthetic journal body.\n';
+  const receipt = f.service.createMarkdownFile({ vaultRelativePath: CAPTURE_JOURNAL,
+    operationId: 'synthetic:create', content });
+  assert.equal(receipt.status, 'unknown_after_dispatch');
+  assert.equal(f.app.files.get(CAPTURE_JOURNAL)?.content, content);
+  f.app.file.content = EDITED_JOURNAL;
+  const pending = f.ledger.get('synthetic:create');
+  assert.equal(pending.operation.ensureExists, undefined);
+
+  const refused = f.submitLink();
+  assert.equal(refused.status, 'blocked');
+  assert.equal(refused.adapterEvidence.reason, 'prior_operation_blocked');
+  assert.deepEqual(f.ledger.get('synthetic:create'), pending);
+  assert.equal(f.ledger.get(CAPTURE_LINK).attempts, 0);
+  assert.equal(f.app.file.content, EDITED_JOURNAL);
 });
 
 test('journal write keeps the original refusal when the target is missing', (t) => {
@@ -376,20 +469,21 @@ test('journal write cannot resolve a create with a live claim', (t) => {
   assert.deepEqual(fs.readFileSync(f.ledger.filePath), before);
 });
 
-test('journal write retries the claim once and keeps the first refusal if still blocked', (t) => {
+test('journal recovery stops at the first failed predecessor and keeps the original refusal', (t) => {
   const f = journalWriteFixture(t);
-  const next = { ...f.link(2), operationId: 'backlink-test0005' };
-  // The second blocker remains pending, so the retry refuses for a different reason.
-  f.ledger.ensure(next);
+  const failed = { ...f.create, sequence: 2, operationId: 'synthetic-exact-create', ensureExists: false };
+  const next = { ...f.link(3), operationId: 'backlink-test0005' };
+  f.ledger.ensure(failed);
+  const before = f.ledger.ensure(next);
   f.strand(f.create);
-  const before = f.ledger.get(next.operationId);
 
   const refused = f.submitLink();
   assert.equal(refused.status, 'blocked');
   assert.equal(refused.adapterEvidence.reason, 'prior_operation_blocked');
   assert.equal(f.resolutionPasses, 1);
-  assert.deepEqual(f.claimed, [CAPTURE_LINK, CAPTURE_LINK]);
+  assert.deepEqual(f.claimed, [CAPTURE_LINK, failed.operationId]);
   assert.equal(f.ledger.get(CAPTURE_CREATE).status, 'superseded');
+  assert.equal(f.ledger.get(failed.operationId).status, 'conflict');
   assert.deepEqual(f.ledger.get(next.operationId), before);
 });
 
@@ -494,27 +588,31 @@ test('operator command --dry-run lists stuck ensure-creates and touches neither 
   } finally { f.cleanup(); }
 });
 
-test('the resolver is opt-in: a plain drain never edits the ledger; --resolve-stuck drains, resolves, then drains again', () => {
+test('the opt-in unscoped resolver still clears unmarked legacy creates by ID', () => {
   const f = ledgerFixture('present');
   try {
-    f.strand(ensureCreate('journal-create-2026-10-28-aaaa0021', 1));
+    const recoveryId = 'backlink-recovery-0123456789abcdef-00000000-0000-4000-8000-000000000021:create';
+    const defaultId = 'journal-create-00000000-0000-4000-8000-000000000022';
+    f.strand(ensureCreate(recoveryId, 1));
     const calls = [];
     const service = { reconciler: { ...f.reconciler, drain() { calls.push('drain'); return { processed: 1, acknowledged: 0 }; } } };
     const plain = reconcileMain({ JARVOS_VAULT_ROOT: f.root }, () => service, []);
     assert.deepEqual(calls, ['drain']);
     assert.equal(plain.stuckEnsureCreates, undefined);
-    assert.equal(f.ledger.get('journal-create-2026-10-28-aaaa0021').status, 'unknown_after_dispatch');
+    assert.equal(f.ledger.get(recoveryId).status, 'unknown_after_dispatch');
 
     calls.length = 0;
     const out = reconcileMain({ JARVOS_VAULT_ROOT: f.root }, () => service, ['--resolve-stuck']);
     assert.deepEqual(calls, ['drain', 'drain']);
     assert.equal(out.processed, 2);
-    assert.equal(out.stuckEnsureCreates.resolved.length, 1);
+    assert.deepEqual(out.stuckEnsureCreates.resolved.map(({ operationId }) => operationId), [recoveryId]);
+    assert.equal(f.ledger.get(recoveryId).status, 'superseded');
 
-    f.strand(ensureCreate('journal-create-2026-10-29-aaaa0022', 1, { vaultRelativePath: 'Journal/2026-10-29.md' }));
+    f.strand(ensureCreate(defaultId, 1, { vaultRelativePath: 'Journal/2026-10-29.md' }));
     calls.length = 0;
     const viaEnv = reconcileMain({ JARVOS_VAULT_ROOT: f.root, JARVOS_RECONCILE_RESOLVE_STUCK: '1' }, () => service, []);
     assert.deepEqual(calls, ['drain', 'drain']);
-    assert.equal(viaEnv.stuckEnsureCreates.resolved.length, 1);
+    assert.deepEqual(viaEnv.stuckEnsureCreates.resolved.map(({ operationId }) => operationId), [defaultId]);
+    assert.equal(f.ledger.get(defaultId).status, 'superseded');
   } finally { f.cleanup(); }
 });

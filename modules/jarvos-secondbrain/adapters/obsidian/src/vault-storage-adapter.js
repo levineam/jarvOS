@@ -96,7 +96,7 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
       const context = contextFor(vaultRelativePath, intentId || `journal-create-${date}-${crypto.randomUUID()}`, requestHash, exact);
       const content = existed ? fs.readFileSync(journalPath, 'utf8') : renderJournalScaffold(date);
-      const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', content, source: context.source });
+      const receipt = context.mutationExecutor({ schemaVersion: 1, operationId: context.operationId, vaultId: context.vaultId, vaultRelativePath, sequence: context.sequence, operationKind: 'create', ensureExists: true, content, source: context.source });
       return {
         journalPath,
         existed,

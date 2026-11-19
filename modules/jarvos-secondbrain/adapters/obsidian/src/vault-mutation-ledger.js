@@ -183,6 +183,8 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     const existing = data.operations[candidate.operationId];
     if (existing) {
       const retried = validateOperation({ ...candidate, sequence: existing.operation.sequence });
+      // Allow legacy retries without relabeling durable operations.
+      if (existing.operation.ensureExists === undefined && retried.ensureExists === true) delete retried.ensureExists;
       if (JSON.stringify(existing.operation) !== JSON.stringify(retried)) throw new Error('operationId already belongs to a different mutation');
       return existing;
     }

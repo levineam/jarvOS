@@ -287,6 +287,20 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (validationReason) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { validationReason } });
     return null;
   }
+  function recoverJournalPredecessors(operation, claim) {
+    const { vaultRelativePath, sequence } = operation;
+    if (claim.reason !== 'prior_operation_blocked' || !DEFAULT_JOURNAL_PATH.test(vaultRelativePath)) return false;
+    const { resolved } = createReconciler().resolveSatisfiedEnsureCreates({ vaultRelativePath, beforeSequence: sequence, requireEnsureMarker: true });
+    if (!resolved.length) return false;
+    // Bound the drain to one FIFO snapshot of the foreground operation's predecessors.
+    for (const { operation: prior, status } of mutationLedger.active()) {
+      if (prior.vaultId !== vaultId || prior.vaultRelativePath !== vaultRelativePath || prior.sequence >= sequence) continue;
+      if (status !== 'planned') return false;
+      const receipt = execute(prior, { drain: false });
+      if (receipt.status !== 'committed' && receipt.status !== 'already_satisfied') return false;
+    }
+    return true;
+  }
   function execute(input, { excludeOperationId, drain = true, recoverBlockedJournal = false } = {}) {
     const operation = validateOperation(input);
     const rejected = validationFailure(operation);
@@ -310,16 +324,9 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     // re-dispatch it before this invocation establishes its terminal state.
     if (drain && !draining && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
     let claim = mutationLedger.claim(operation, ownerId);
-    if (recoverBlockedJournal && claim.reason === 'prior_operation_blocked' && DEFAULT_JOURNAL_PATH.test(operation.vaultRelativePath)) {
-      // A queued ensure-create can itself be this submission. Resolve only its predecessors.
-      const { resolved } = createReconciler().resolveSatisfiedEnsureCreates({
-        vaultRelativePath: operation.vaultRelativePath,
-        beforeSequence: operation.sequence,
-      });
-      if (resolved.length > 0) {
-        const retry = mutationLedger.claim(operation, ownerId);
-        if (retry.granted) claim = retry;
-      }
+    if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
+      const retry = mutationLedger.claim(operation, ownerId);
+      if (retry.granted) claim = retry;
     }
     if (!claim.granted && claim.reason === 'already_acknowledged') {
       const inspection = inspectInvariant(operation);
@@ -376,13 +383,19 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     const record = mutationLedger.planNext(operation);
     return execute(record.operation, { ...options, recoverBlockedJournal: true });
   }
-  function acknowledgeIfSatisfied(input) {
+  function acknowledgeIfSatisfied(input, { recoverBlockedJournal = false } = {}) {
     const operation = validateOperation(input);
     if (validationFailure(operation)) return false;
     const inspection = inspectInvariant(operation);
     if (inspection.status !== 'satisfied' || inspection.invariant !== true) return false;
     mutationLedger.ensure(operation);
-    const claim = mutationLedger.claim(operation, ownerId, { allowAmbiguousRetry: true });
+    let claim = mutationLedger.claim(operation, ownerId, { allowAmbiguousRetry: true });
+    if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
+      // An earlier write may have changed the invariant since the first inspection.
+      const recheck = inspectInvariant(operation);
+      if (recheck.status !== 'satisfied' || recheck.invariant !== true) return false;
+      claim = mutationLedger.claim(operation, ownerId, { allowAmbiguousRetry: true });
+    }
     if (!claim.granted) return claim.reason === 'already_acknowledged';
     mutationLedger.transition(operation.operationId, 'acknowledged', {
       ownerId,

@@ -42,6 +42,19 @@ test('createOnly is a boolean guard for create operations only', () => {
   assert.throws(() => contract.validateOperation({ ...operation(), createOnly: true }), /on a create operation/);
 });
 
+test('ensureExists is an optional boolean on create operations only', () => {
+  const create = { ...operation(), operationKind: 'create', content: 'Invented journal content.' };
+  for (const ensureExists of [true, false]) {
+    assert.equal(contract.validateOperation({ ...create, ensureExists }).ensureExists, ensureExists);
+  }
+  for (const ensureExists of ['true', 1, null]) {
+    assert.throws(() => contract.validateOperation({ ...create, ensureExists }), /ensureExists must be a boolean/);
+  }
+  for (const operationKind of ['transform', 'replace', 'delete']) {
+    assert.throws(() => contract.validateOperation({ ...operation(), operationKind, ensureExists: false }), /on a create operation/);
+  }
+});
+
 test('contract rejects target and parent symlink escapes before mutation', { skip: process.platform === 'win32' }, () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-contract-'));
   const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-outside-'));
