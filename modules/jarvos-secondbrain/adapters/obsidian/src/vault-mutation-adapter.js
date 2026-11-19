@@ -287,11 +287,13 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (validationReason) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { validationReason } });
     return null;
   }
-  function recoverJournalPredecessors(operation, claim) {
+  function recoverJournalPredecessors(operation, { reason }) {
     const { vaultRelativePath, sequence } = operation;
-    if (claim.reason !== 'prior_operation_blocked' || !DEFAULT_JOURNAL_PATH.test(vaultRelativePath)) return false;
-    const { resolved } = createReconciler().resolveSatisfiedEnsureCreates({ vaultRelativePath, beforeSequence: sequence, requireEnsureMarker: true });
-    if (!resolved.length) return false;
+    if (!DEFAULT_JOURNAL_PATH.test(vaultRelativePath)) return false;
+    if (reason === 'prior_operation_blocked') {
+      const { resolved } = createReconciler().resolveSatisfiedEnsureCreates({ vaultRelativePath, beforeSequence: sequence, requireEnsureMarker: true });
+      if (!resolved.length) return false;
+    } else if (reason !== 'prior_operation_pending') return false;
     // Bound the drain to one FIFO snapshot of the foreground operation's predecessors.
     for (const { operation: prior, status } of mutationLedger.active()) {
       if (prior.vaultId !== vaultId || prior.vaultRelativePath !== vaultRelativePath || prior.sequence >= sequence) continue;
@@ -333,7 +335,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     let claim = mutationLedger.claim(operation, ownerId);
     if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
       const retry = mutationLedger.claim(operation, ownerId);
-      if (retry.granted) claim = retry;
+      if (retry.granted || retry.reason === 'already_acknowledged') claim = retry;
     }
     if (!claim.granted && claim.reason === 'already_acknowledged') {
       const inspection = inspectInvariant(operation);

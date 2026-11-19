@@ -258,7 +258,7 @@ function appVault(initial, present) {
   return { file, files, run: (code) => { const raw = vm.runInNewContext(code, context); return typeof raw === 'string' ? JSON.parse(raw) : raw; } };
 }
 
-function journalWriteFixture(t, { present = true } = {}) {
+function journalWriteFixture(t, { present = true, probe = () => ({ state: 'available', vaultId: VAULT_ID }), beforeClaim } = {}) {
   const { root, ledger, strand, cleanup } = ledgerFixture();
   t.after(cleanup);
   const app = appVault(EDITED_JOURNAL, present);
@@ -280,6 +280,7 @@ function journalWriteFixture(t, { present = true } = {}) {
         ...ledger,
         claim(operation, ...args) {
           claimed.push(operation.operationId);
+          beforeClaim?.(operation, claimed);
           return ledger.claim(operation, ...args);
         },
         peek() {
@@ -288,7 +289,7 @@ function journalWriteFixture(t, { present = true } = {}) {
         },
       },
       vaultName: 'vault',
-      probe: () => ({ state: 'available', vaultId: VAULT_ID }),
+      probe,
       maxPollAttempts: 2,
       evaluate(code) {
         if (cliDown) throw new Error(`Command failed: obsidian vault=Vault eval code=${Buffer.from(code).toString('base64')} (cwd ${root}) test output`);
@@ -398,6 +399,57 @@ test('journal recovery dispatches queued predecessors in FIFO order before the n
   }
   assert.deepEqual(f.ledger.get(otherOperation.operationId), otherBefore);
   assert.equal(f.ledger.get(CAPTURE_CREATE).status, 'superseded');
+});
+
+test('a new journal write drains a predecessor left planned by a second outage', (t) => {
+  let restored = false;
+  const f = journalWriteFixture(t, {
+    probe: () => ({ state: !restored && f.ledger.get(CAPTURE_CREATE)?.status === 'superseded' ? 'app_busy' : 'available' }),
+  });
+  f.strand(f.create);
+  const prior = { ...f.link(2), operationId: 'backlink-interrupted', replayPayload: { linkTarget: 'Interrupted Note', section: '📝 Notes' } };
+  f.ledger.planNext(prior);
+  const interrupted = { ...f.link(3), operationId: 'backlink-waiting', replayPayload: { linkTarget: 'Waiting Note', section: '📝 Notes' } };
+  assert.equal(f.service.execute(interrupted).adapterEvidence.reason, 'prior_operation_blocked');
+  assert.equal(f.ledger.get(CAPTURE_CREATE).status, 'superseded');
+  assert.equal(f.ledger.get(prior.operationId).status, 'planned');
+  assert.equal(f.ledger.get(prior.operationId).attempts, 0);
+  assert.equal(f.app.file.content, EDITED_JOURNAL);
+
+  restored = true;
+  f.claimed.length = 0;
+  const landed = f.submitLink();
+  assert.equal(landed.status, 'committed', landed.adapterEvidence?.reason);
+  assert.equal(f.resolutionPasses, 1);
+  assert.deepEqual(f.claimed, [CAPTURE_LINK, prior.operationId, interrupted.operationId, CAPTURE_LINK]);
+  for (const id of [prior.operationId, interrupted.operationId, CAPTURE_LINK]) {
+    assert.equal(f.ledger.get(id).status, 'acknowledged');
+    assert.equal(f.ledger.get(id).attempts, 1);
+  }
+});
+
+test('journal recovery reports an already-satisfied write when a second adapter commits before the retry', (t) => {
+  let concurrentReceipt;
+  const f = journalWriteFixture(t, {
+    beforeClaim(operation, claimed) {
+      if (operation.operationId === CAPTURE_LINK && claimed.length === 2) concurrentReceipt = otherService.execute(operation);
+    },
+  });
+  const otherService = createConfiguredVaultMutationService({
+    vaultRoot: f.root,
+    vaultId: VAULT_ID,
+    source: f.link(1).source,
+    adapterOptions: { ledgerPath: f.ledger.filePath, vaultName: 'vault', evaluate: f.app.run },
+  });
+  f.strand(f.create);
+
+  const landed = f.submitLink();
+  assert.deepEqual(f.claimed, [CAPTURE_LINK, CAPTURE_LINK]);
+  assert.equal(concurrentReceipt.status, 'committed');
+  assert.equal(f.ledger.get(CAPTURE_LINK).status, 'acknowledged');
+  assert.equal(f.ledger.get(CAPTURE_LINK).attempts, 1);
+  assert.equal(landed.status, 'already_satisfied', landed.adapterEvidence?.reason);
+  assert.equal(landed.obsidian, 'acknowledged');
 });
 
 test('journal recovery acknowledges an existing aliased backlink without rewriting it', (t) => {
