@@ -34,6 +34,7 @@ const WRITER_INVENTORY = Object.freeze([
   ['secondbrain', 'scripts/rename-journal-heading.js', 'mutation-owned-with-external-preimage', 'U4', 'Heading rename and restore use exact-content guarded replacements; only an exclusive owner-supplied preimage outside the vault is written directly.'],
   ['secondbrain', 'scripts/obsidian-live-smoke.js', 'mutation-owned-with-operational-attestation', 'U7', 'Creates and exact-identity deletes only a disposable vault fixture through the configured service; the owner-only rollout attestation is written outside the vault.'],
   ['agent-context', 'src/index.js', 'mutation-owned-with-operational-locks', 'U5', 'Note and session-thread Markdown use configured create/transform operations; session locks live in the owner-only host state directory outside the vault.'],
+  ['agent-context', 'src/plan-task-lock.js', 'operational-out-of-vault', 'U5', 'Writes a fixed lock marker beside the Codex task pointer in owner-only session state, never canonical project Markdown.'],
 ].map(([root, file, classification, migrationUnit, exceptionReason]) => Object.freeze({ root, file, classification, migrationUnit, exceptionReason })));
 
 const PACKAGE_TEMPORARY_SHIMS = Object.freeze([

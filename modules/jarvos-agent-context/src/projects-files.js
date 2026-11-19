@@ -6,6 +6,7 @@ const { constants } = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { acquirePlanTaskLock } = require('./plan-task-lock');
 
 const CONTRACT = 'jarvos.projects-files/v1';
 const MAX_PACKET_BYTES = 60_000;
@@ -608,9 +609,8 @@ async function readPlanTaskContext({ directory, sessionId, stateDir } = {}) {
 async function savePlanTaskPointer(options, committed) {
   const { directory, sessionId, stateDir, project, task, expectedState = 'none', expectedRevision } = options;
   const binding = bindingStore(sessionId, stateDir);
-  let lock;
-  try { lock = fsSync.openSync(`${binding.file}.lock`, fsSync.constants.O_CREAT | fsSync.constants.O_EXCL | fsSync.constants.O_WRONLY, 0o600); }
-  catch { return { status: 'reconcile', code: 'PMS_POINTER_BUSY', effectsAuthorized: false }; }
+  const lock = acquirePlanTaskLock(`${binding.file}.lock`);
+  if (!lock) return { status: 'reconcile', code: 'PMS_POINTER_BUSY', effectsAuthorized: false };
   try {
     if (binding.revision() !== expectedState) throw pointerError('PMS_POINTER_CONFLICT');
     const reference = { authority: CONTRACT, itemId: project, operationId: task };
@@ -635,10 +635,11 @@ async function savePlanTaskPointer(options, committed) {
       artifact: { kind: 'project-plan-task', path: context.project.file } });
     // A second read closes changes during validation; Git readback is evidence, never task authority.
     if ((await resolvePlanTask(directory, reference, sessionId)).project.revision !== context.project.revision) throw pointerError('PMS_PROJECT_REVISION_CONFLICT');
+    if (!lock.ownsPath()) throw pointerError('PMS_POINTER_BUSY');
     await writeJarvosSessionState(binding.store, checkpoint);
     return { ...(await readPlanTaskContext({ directory, sessionId, stateDir })), canonicalCommit };
   } catch (error) { return { status: 'reconcile', code: error.code || 'PMS_CHECKPOINT_UNAVAILABLE', effectsAuthorized: false }; }
-  finally { fsSync.closeSync(lock); fsSync.unlinkSync(`${binding.file}.lock`); }
+  finally { lock.release(); }
 }
 
 const selectPlanTask = (options) => savePlanTaskPointer(options, false);
