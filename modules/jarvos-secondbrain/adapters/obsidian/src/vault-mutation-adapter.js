@@ -7,6 +7,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createInternalReceipt, hashUtf8, validateOperation, validateVaultRelativeMarkdownPath } = require('./vault-mutation-contract');
 const { createVaultMutationLedger } = require('./vault-mutation-ledger');
+const { DEFAULT_JOURNAL_PATH, createVaultMutationReconciler } = require('./vault-mutation-reconciler');
 
 const { createJarvosVaultTransforms, journalOriginTransformProgram, journalHeadingTransformProgram } = require('../../../src/vault-transform-registry');
 
@@ -286,7 +287,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (validationReason) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { validationReason } });
     return null;
   }
-  function execute(input, { excludeOperationId, drain = true } = {}) {
+  function execute(input, { excludeOperationId, drain = true } = {}, recoverBlockedJournal = false) {
     const operation = validateOperation(input);
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
@@ -308,7 +309,18 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     // Exclude the just-persisted foreground intent: a drain must not recursively
     // re-dispatch it before this invocation establishes its terminal state.
     if (drain && !draining && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
-    const claim = mutationLedger.claim(operation, ownerId);
+    let claim = mutationLedger.claim(operation, ownerId);
+    if (recoverBlockedJournal && claim.reason === 'prior_operation_blocked' && DEFAULT_JOURNAL_PATH.test(operation.vaultRelativePath)) {
+      // A queued ensure-create can itself be this submission. Resolve only its predecessors.
+      const { resolved } = createReconciler().resolveSatisfiedEnsureCreates({
+        vaultRelativePath: operation.vaultRelativePath,
+        beforeSequence: operation.sequence,
+      });
+      if (resolved.length > 0) {
+        const retry = mutationLedger.claim(operation, ownerId);
+        if (retry.granted) claim = retry;
+      }
+    }
     if (!claim.granted && claim.reason === 'already_acknowledged') {
       const inspection = inspectInvariant(operation);
       if (inspection.status === 'satisfied' && inspection.invariant === true) return createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' });
@@ -362,7 +374,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
     const record = mutationLedger.planNext(operation);
-    return execute(record.operation, options);
+    return execute(record.operation, options, true);
   }
   function acknowledgeIfSatisfied(input) {
     const operation = validateOperation(input);
@@ -381,7 +393,6 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   }
   let publicAdapter;
   function createReconciler(options = {}) {
-    const { createVaultMutationReconciler } = require('./vault-mutation-reconciler');
     return createVaultMutationReconciler({ ...options, adapter: publicAdapter, ledger: mutationLedger, vaultRoot, vaultId, transforms });
   }
   publicAdapter = Object.freeze({ acknowledgeIfSatisfied, capability, createReconciler, execute, inspectFileExists, inspectInvariant, ledger: ledgerView, submit });

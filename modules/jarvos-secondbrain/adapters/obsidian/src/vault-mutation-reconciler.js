@@ -117,7 +117,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
   // Vault content is never compared, written, or deleted. Any other
   // head (transform, replace, delete, a create that is not an ensure) keeps the
   // strict reconcile rules and is only reported.
-  function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists' } = {}) {
+  function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists', vaultRelativePath, beforeSequence = Infinity } = {}) {
     const summary = { dryRun: dryRun === true, resolved: [], skipped: [] };
     if (typeof vaultId !== 'string' || !vaultId) return { ...summary, skipped: [{ reason: 'vault_identity_unavailable' }] };
     if (typeof ledger.peek !== 'function' || typeof ledger.resolve !== 'function') return { ...summary, skipped: [{ reason: 'ledger_resolution_unavailable' }] };
@@ -129,6 +129,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     for (const record of Object.values(data.operations)) {
       const { operation } = record;
       if (operation.vaultId !== vaultId || !journalPathPattern.test(operation.vaultRelativePath) || TERMINAL_STATUSES.has(record.status)) continue;
+      if ((vaultRelativePath !== undefined && operation.vaultRelativePath !== vaultRelativePath) || operation.sequence >= beforeSequence) continue;
       if (!queues.has(operation.vaultRelativePath)) queues.set(operation.vaultRelativePath, []);
       queues.get(operation.vaultRelativePath).push(record);
     }
