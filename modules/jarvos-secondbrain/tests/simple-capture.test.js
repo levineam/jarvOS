@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { buildSimpleCaptureEvent, simpleCapture } = require('../bridge/capture/src/simple-capture');
+const { buildSimpleCaptureEvent, simpleCapture, noteCaptureProgress } = require('../bridge/capture/src/simple-capture');
+const { captureOperationRequest } = require('../packages/jarvos-ambient/src/intent/capture-operation');
 const { normalizeCaptureEvent } = require('../bridge/capture/src/universal-capture');
 const { createAcknowledgedVaultMutationService } = require('./helpers/acknowledged-vault-mutation-service');
 const base = { kind: 'idea', text: '  A test thought about tidal gardens  ', words: 'user', asked: 'explicit', source: 'codex' };
@@ -223,4 +224,15 @@ test('an undated capture pinned to an earlier day reports that day, not today', 
   assert.equal(simpleCapture({ ...base, kind: 'journal' }, { capture: pinned('2000-01-01') }).message, 'Saved to Journal for 2000-01-01.');
   const today = require('../adapters/obsidian/src/vault-storage-adapter').todayDate();
   assert.equal(simpleCapture({ ...base, kind: 'journal' }, { capture: pinned(today) }).message, "Saved to today's Journal.");
+});
+
+test('status and resume find the same operation as the capture, whatever the custom source case', () => {
+  for (const source of ['custom:Guide', 'custom:guide', 'claude-code', 'Claude-Code', 'Some Synthetic Tool']) {
+    const opId = 'synthetic-op-0001';
+    const event = normalizeCaptureEvent(buildSimpleCaptureEvent({ kind: 'note', words: 'user', asked: 'explicit', source, opId, title: 'Synthetic', text: 'A synthetic thought' }));
+    const expected = captureOperationRequest(event).intentId;
+    let seen = null;
+    noteCaptureProgress({ opId, source }, { adapter: { noteCaptureProgress: ({ intentId }) => { seen = intentId; return {}; } } });
+    assert.equal(seen, expected, source);
+  }
 });
