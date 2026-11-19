@@ -19,6 +19,10 @@ function isNonBlockingQuarantine(record) {
     && record.history.every(entry => ['planned', 'blocked', 'quarantined'].includes(entry?.status));
 }
 
+function blocksWriteOrder(record) {
+  return !TERMINAL.has(record.status) && !isNonBlockingQuarantine(record);
+}
+
 function writeAtomic(filePath, value, fsImpl) {
   const directory = path.dirname(filePath);
   fsImpl.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -209,7 +213,7 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     if (!ownerId) throw new Error('claim ownerId is required');
     const data = readUnlocked({ repair: true }); const ensured = ensureUnlocked(data, operation); const { record, created } = ensured; const claimKey = key(record.operation); const stamp = now();
     const persistCreated = () => { if (created) writeAtomic(filePath, data, fsImpl); };
-    const prior = Object.values(data.operations).filter((entry) => key(entry.operation) === claimKey && entry.operation.sequence < record.operation.sequence && !TERMINAL.has(entry.status) && !isNonBlockingQuarantine(entry));
+    const prior = Object.values(data.operations).filter((entry) => key(entry.operation) === claimKey && entry.operation.sequence < record.operation.sequence && blocksWriteOrder(entry));
     if (prior.length) { persistCreated(); return { granted: false, reason: prior.some((entry) => ['unknown_after_dispatch', 'conflict', 'quarantined'].includes(entry.status)) ? 'prior_operation_blocked' : 'prior_operation_pending', record }; }
     if (TERMINAL.has(record.status)) { persistCreated(); return { granted: false, reason: record.status === 'acknowledged' ? 'already_acknowledged' : 'already_terminal', record }; }
     if (record.status === 'quarantined' || record.status === 'conflict' || (record.status === 'unknown_after_dispatch' && !allowAmbiguousRetry)) { persistCreated(); return { granted: false, reason: 'operation_blocked', record }; }
@@ -259,8 +263,8 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     }
     return { ...data, operations, sequences: data.sequences && typeof data.sequences === 'object' && !Array.isArray(data.sequences) ? data.sequences : {} };
   }
-  function active() { return Object.values(read().operations).filter((record) => !TERMINAL.has(record.status) && !isNonBlockingQuarantine(record)).sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
+  function active() { return Object.values(read().operations).filter(blocksWriteOrder).sort((a, b) => key(a.operation).localeCompare(key(b.operation)) || a.operation.sequence - b.operation.sequence); }
   function pruneRetained() { return transaction(() => { const data = readUnlocked({ repair: true }); let changed = false; for (const [id, record] of Object.entries(data.operations)) if (!id.startsWith('capture:op:') && TERMINAL.has(record.status) && now() - record.updatedAt > retentionMs) { delete data.operations[id]; changed = true; } if (changed) writeAtomic(filePath, data, fsImpl); }); }
   return Object.freeze({ active, claim, ensure, get: (id) => read().operations[id] || null, nextSequence, peek, planNext, read, verify, reserveCapture, resolve, transition, quarantine, pruneRetained, filePath });
 }
-module.exports = { BLOCKING, STATES, TERMINAL, isNonBlockingQuarantine, createVaultMutationLedger };
+module.exports = { BLOCKING, STATES, TERMINAL, blocksWriteOrder, isNonBlockingQuarantine, createVaultMutationLedger };

@@ -5,6 +5,7 @@ const { createHash } = require('node:crypto');
 const { readContainedNote } = require('../../../packages/jarvos-secondbrain-notes/src/write-to-vault.js');
 const { parseFrontmatter, frontmatterToObject } = require('../../../packages/jarvos-secondbrain-notes/src/lib/note-schema.js');
 const { normalizeDraftingList } = require('../../../bridge/provenance/src/content-origin-contract.js');
+const { ENSURE_EXISTS_RESOLUTION } = require('./vault-mutation-reconciler');
 
 const BLOCKED = new Set(['conflict', 'abandoned', 'superseded', 'quarantined']);
 const AMBIGUOUS = new Set(['unknown_after_dispatch', 'dispatched', 'local_mutating', 'local_applied']);
@@ -105,7 +106,7 @@ function resumeNoteCapture(storage, service, { intentId, resume = false } = {}) 
     if (AMBIGUOUS.has(record.status) || record.status === 'acknowledged') return 'conflict';
     if (!safeToDispatch && record.status === 'planned') return 'conflict';
     if (mayResume && record.status === 'planned') {
-      adapter.execute(operation, { drain: false });
+      adapter.execute(operation, { drain: false, recoverBlockedJournal: true });
       return verify(snapshot().operations[operation.operationId], false);
     }
     return 'pending';
@@ -141,7 +142,9 @@ function resumeNoteCapture(storage, service, { intentId, resume = false } = {}) 
     return { state: 'unsupported', note: noteState, journal: journalState, ...(notePath ? { notePath } : {}) };
   }
   if (noteState === 'confirmed' && requested) {
-    const ready = journal || !journalCreate || journalCreate.status === 'acknowledged'
+    const createResolved = journalCreate?.status === 'superseded' && journalCreate.operation.operationKind === 'create'
+      && journalCreate.evidence?.reason === ENSURE_EXISTS_RESOLUTION;
+    const ready = journal || !journalCreate || journalCreate.status === 'acknowledged' || createResolved
       ? 'confirmed' : verify(journalCreate, resume);
     if (!journal && ['conflict', 'unavailable'].includes(ready)) journalState = ready;
     if (resume && !journal && ready === 'confirmed') {

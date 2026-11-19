@@ -341,6 +341,21 @@ test('journal write keeps the original refusal when the target is missing', (t) 
   assert.deepEqual(fs.readFileSync(f.ledger.filePath), before);
 });
 
+test('journal write recovers past a retained pre-dispatch quarantine', (t) => {
+  const f = journalWriteFixture(t);
+  const rejected = { ...f.link(1), operationId: 'backlink-quarantined' };
+  f.ledger.ensure(rejected);
+  const quarantine = f.ledger.quarantine(rejected.operationId, 'Synthetic pre-dispatch rejection');
+  f.strand({ ...f.create, sequence: 2 });
+  assert.equal(f.ledger.get(CAPTURE_CREATE).status, 'unknown_after_dispatch');
+
+  assert.equal(f.submitLink().status, 'committed');
+  assert.deepEqual(f.ledger.get(rejected.operationId), quarantine);
+  assert.equal(f.ledger.get(CAPTURE_CREATE).evidence.reason, ENSURE_EXISTS_RESOLUTION);
+  assert.deepEqual(f.claimed, [CAPTURE_LINK, CAPTURE_LINK]);
+  assert.equal(f.ledger.get(CAPTURE_LINK).attempts, 1);
+});
+
 test('journal write cannot resolve a create with a live claim', (t) => {
   const f = journalWriteFixture(t);
   f.strand(f.create);

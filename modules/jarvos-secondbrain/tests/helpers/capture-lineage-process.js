@@ -83,6 +83,9 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
     ...(fault === 'poll_deadline' ? { pollTimeoutMs: 1 } : {}),
     probe: () => ({ state: fault === 'offline_stopped' ? 'app_stopped' : fault === 'before_write' || (['before_receipt', 'after_backlink_before_receipt'].includes(fault) && captureFinished) || (fault === 'after_note_before_journal' && writes.some((name) => name.startsWith('Notes/'))) ? 'app_busy' : 'available', vaultId: 'capture-fixture' }),
     evaluate: (code) => {
+      if (fault === 'journal_presence_unavailable' && code.includes('exists: Boolean(app?.vault?.getFileByPath?.(')) {
+        throw new Error('simulated unavailable journal presence read');
+      }
       const encoded = code.match(/atob\('([^']+)'\)/)?.[1];
       const input = encoded ? JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) : null;
       const mutation = input && !input.inspectionToken;
@@ -106,6 +109,7 @@ const service = createConfiguredVaultMutationService({ vaultRoot, vaultId: 'capt
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
       }
       if (mutation && !faultTriggered && ((fault === 'after_note' && input.vaultRelativePath.startsWith('Notes/'))
+        || (fault === 'after_journal_create' && input.operationKind === 'create' && input.vaultRelativePath.startsWith('Journal/'))
         || (['after_backlink', 'after_backlink_before_receipt'].includes(fault) && journalMutation))) {
         flushAllCallbacks();
         faultTriggered = true;

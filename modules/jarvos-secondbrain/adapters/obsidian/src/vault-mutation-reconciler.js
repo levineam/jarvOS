@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { hashUtf8, resolveVaultTarget } = require('./vault-mutation-contract');
-const { isNonBlockingQuarantine } = require('./vault-mutation-ledger');
+const { blocksWriteOrder, isNonBlockingQuarantine } = require('./vault-mutation-ledger');
 
 // Stuck-operation resolution. An "ensure the journal exists" create has one
 // intent: the day's journal is there. The storage adapter names these
@@ -16,7 +16,6 @@ const ENSURE_EXISTS_ID = /^journal-create-|:create$/;
 const DEFAULT_JOURNAL_PATH = /^Journal\/\d{4}-\d{2}-\d{2}\.md$/;
 const RESOLVABLE_STATUSES = new Set(['planned', 'unknown_after_dispatch', 'conflict', 'blocked']);
 const STUCK_STATUSES = new Set(['unknown_after_dispatch', 'conflict']);
-const TERMINAL_STATUSES = new Set(['acknowledged', 'superseded', 'abandoned']);
 const ENSURE_EXISTS_RESOLUTION = 'ensure_exists_satisfied: target journal exists, create intent met';
 
 function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, journalPathPattern = DEFAULT_JOURNAL_PATH, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability, offlineWriteCapability } = {}) {
@@ -128,7 +127,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     const queues = new Map();
     for (const record of Object.values(data.operations)) {
       const { operation } = record;
-      if (operation.vaultId !== vaultId || !journalPathPattern.test(operation.vaultRelativePath) || TERMINAL_STATUSES.has(record.status)) continue;
+      if (operation.vaultId !== vaultId || !journalPathPattern.test(operation.vaultRelativePath) || !blocksWriteOrder(record)) continue;
       if ((vaultRelativePath !== undefined && operation.vaultRelativePath !== vaultRelativePath) || operation.sequence >= beforeSequence) continue;
       if (!queues.has(operation.vaultRelativePath)) queues.set(operation.vaultRelativePath, []);
       queues.get(operation.vaultRelativePath).push(record);

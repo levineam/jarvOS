@@ -287,7 +287,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (validationReason) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { validationReason } });
     return null;
   }
-  function execute(input, { excludeOperationId, drain = true } = {}, recoverBlockedJournal = false) {
+  function execute(input, { excludeOperationId, drain = true, recoverBlockedJournal = false } = {}) {
     const operation = validateOperation(input);
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
@@ -374,7 +374,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
     const record = mutationLedger.planNext(operation);
-    return execute(record.operation, options, true);
+    return execute(record.operation, { ...options, recoverBlockedJournal: true });
   }
   function acknowledgeIfSatisfied(input) {
     const operation = validateOperation(input);
