@@ -400,6 +400,37 @@ test('journal recovery dispatches queued predecessors in FIFO order before the n
   assert.equal(f.ledger.get(CAPTURE_CREATE).status, 'superseded');
 });
 
+test('journal recovery acknowledges an existing aliased backlink without rewriting it', (t) => {
+  const f = journalWriteFixture(t);
+  const before = EDITED_JOURNAL.replace('\n-\n', '\n- [[Other note]]\n- [[Earlier note|My label]]\n');
+  f.app.file.content = before;
+  f.strand(f.create);
+  const prior = f.link(2);
+  const operationId = 'backlink-already-placed';
+  f.ledger.planNext({ ...prior, operationId, replayPayload: { ...prior.replayPayload, linkTarget: 'Earlier note' } });
+
+  assert.equal(f.submitLink().status, 'committed');
+  assert.equal(f.ledger.get(operationId).status, 'acknowledged');
+  assert.equal(f.app.file.content, before.replace('## 📝 Notes\n', '## 📝 Notes\n- [[Recovered Note]]\n'));
+});
+
+test('journal recovery continues after abandoning a backlink placed in another section', (t) => {
+  const f = journalWriteFixture(t);
+  f.app.file.content = `${EDITED_JOURNAL}\n## Ideas\n- [[Earlier note|My label]]\n`;
+  f.strand(f.create);
+  const prior = f.link(2);
+  const operationId = 'backlink-preserve-placement';
+  f.ledger.planNext({ ...prior, operationId, replayPayload: { ...prior.replayPayload, linkTarget: 'Earlier note', preserveExistingLinks: true } });
+
+  const landed = f.submitLink();
+  const abandoned = f.ledger.get(operationId);
+  assert.equal(abandoned.status, 'abandoned');
+  assert.equal(abandoned.evidence.errorClass, 'backlink_placement_conflict');
+  assert.equal(landed.status, 'committed', landed.adapterEvidence?.reason);
+  assert.equal(f.ledger.get(CAPTURE_LINK).status, 'acknowledged');
+  assert.match(f.app.file.content, /## Ideas\n- \[\[Earlier note\|My label\]\]\n$/);
+});
+
 test('foreground recovery leaves an unmarked synthetic:create with a lost acknowledgement blocked', (t) => {
   const f = journalWriteFixture(t, { present: false });
   f.dropNextAck();

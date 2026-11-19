@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createInternalReceipt, hashUtf8, validateOperation, validateVaultRelativeMarkdownPath } = require('./vault-mutation-contract');
-const { createVaultMutationLedger } = require('./vault-mutation-ledger');
+const { blocksWriteOrder, createVaultMutationLedger } = require('./vault-mutation-ledger');
 const { DEFAULT_JOURNAL_PATH, createVaultMutationReconciler } = require('./vault-mutation-reconciler');
 
 const { createJarvosVaultTransforms, journalOriginTransformProgram, journalHeadingTransformProgram } = require('../../../src/vault-transform-registry');
@@ -296,8 +296,15 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     for (const { operation: prior, status } of mutationLedger.active()) {
       if (prior.vaultId !== vaultId || prior.vaultRelativePath !== vaultRelativePath || prior.sequence >= sequence) continue;
       if (status !== 'planned') return false;
-      const receipt = execute(prior, { drain: false });
-      if (receipt.status !== 'committed' && receipt.status !== 'already_satisfied') return false;
+      if (validationFailure(prior)) return false;
+      const inspection = inspectInvariant(prior);
+      if (inspection.status === 'satisfied' && inspection.invariant === true) {
+        acknowledgeInspected(prior);
+      } else {
+        execute(prior, { drain: false });
+      }
+      const record = mutationLedger.get(prior.operationId);
+      if (record && blocksWriteOrder(record)) return false;
     }
     return true;
   }
@@ -383,11 +390,14 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     const record = mutationLedger.planNext(operation);
     return execute(record.operation, { ...options, recoverBlockedJournal: true });
   }
-  function acknowledgeIfSatisfied(input, { recoverBlockedJournal = false } = {}) {
+  function acknowledgeIfSatisfied(input, options) {
     const operation = validateOperation(input);
     if (validationFailure(operation)) return false;
     const inspection = inspectInvariant(operation);
     if (inspection.status !== 'satisfied' || inspection.invariant !== true) return false;
+    return acknowledgeInspected(operation, options);
+  }
+  function acknowledgeInspected(operation, { recoverBlockedJournal = false } = {}) {
     mutationLedger.ensure(operation);
     let claim = mutationLedger.claim(operation, ownerId, { allowAmbiguousRetry: true });
     if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
