@@ -202,10 +202,13 @@ for (const managed of [false, true]) test(`setup registers direct node once, pre
   const settings = path.join(home, 'settings.json');
   const unrelated = { matcher: 'Bash', hooks: [{ type: 'command', command: 'unrelated-check', timeout: 7 }] };
   const staged = path.join(dir, 'staged');
-  fs.writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: [unrelated, { matcher: 'Edit', hooks: [
-    { type: 'command', command: `node '${staged}/runtimes/claude/jarvos-coordinator-guard-hook.js'` },
-    { type: 'command', command: 'keep-mixed-hook' },
-  ] }] } }));
+  const oldCommand = `node '${dir}/retired/runtimes/claude/jarvos-coordinator-guard-hook.js'`;
+  const mixed = { matcher: 'Edit', hooks: [{ type: 'command', command: `node 'inspect.js' ${oldCommand.slice(5)}` }] };
+  const oldGuard = (command) => ({ matcher: 'Write|Edit|MultiEdit|NotebookEdit|Bash', hooks: [{ type: 'command', command }] });
+  const seed = (...entries) => fs.writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: [
+    unrelated, { ...mixed, hooks: [...mixed.hooks, { type: 'command', command: oldCommand }] }, ...entries,
+  ] } }));
+  seed(oldGuard(`node '${staged}/runtimes/claude/jarvos-coordinator-guard-hook.js'`));
   const env = childEnv(home, {
     CLAUDE_SETTINGS: settings, JARVOS_STEWARDSHIP_ONLY: '1', JARVOS_SKIP_CLAUDE_CODE_MCP: '1', JARVOS_SKIP_CLAUDE_MD: '1',
     JARVOS_STAGED_PUBLIC_RUNTIME_ROOT: staged,
@@ -222,13 +225,15 @@ for (const managed of [false, true]) test(`setup registers direct node once, pre
     return JSON.parse(fs.readFileSync(settings)).hooks.PreToolUse;
   };
   const first = setup(), second = setup(); assert.deepEqual(second, first);
-  assert.deepEqual(first[0], unrelated); assert.equal(first[1].hooks[0].command, 'keep-mixed-hook'); assert.equal(first.length, 3);
+  assert.deepEqual(first.slice(0, 2), [unrelated, mixed]); assert.equal(first.length, 3);
   const guard = first[2]; assert.equal(guard.matcher, 'Write|Edit|MultiEdit|NotebookEdit|Bash');
   assert.equal(guard.hooks[0].timeout, 10); assert.match(guard.hooks[0].command, /^node /); assert.doesNotMatch(guard.hooks[0].command, /dispatcher/);
   const executed = spawnSync('/bin/sh', ['-c', guard.hooks[0].command], { env: { ...env, JARVOS_COORDINATOR: '1' }, input: JSON.stringify(input('Bash', { command: 'npm test' })), encoding: 'utf8' });
   assert.equal(executed.status, 0, executed.stderr); isDenied(JSON.parse(executed.stdout));
   const retained = first.slice(0, 2);
+  seed(guard, oldGuard(guard.hooks[0].command.replace('example', 'retired')));
   assert.deepEqual(setup({ JARVOS_MANAGED_HARNESS_ROLLBACK: '1' }), retained);
+  seed();
   assert.deepEqual(setup({ JARVOS_SKIP_COORDINATOR_GUARD: '1' }), retained);
   setup(); assert.deepEqual(setup({ JARVOS_SKIP_COORDINATOR_GUARD: '1' }), retained);
 });

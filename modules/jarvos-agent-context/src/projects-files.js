@@ -304,6 +304,12 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
   if (!result || result.status !== 'ok') return '## Projects\nUnavailable: the project files could not be read.';
   const projects = result.projects || [];
   const active = projects.filter((item) => item.status === 'active');
+  const stalled = active.flatMap((item) => (item.stalled || []).map((step) => ({ item, step })));
+  const stalledLines = stalled.length ? [
+    `Stalled Plan steps: ${stalled.length}`,
+    ...stalled.slice(0, 8).map(({ item, step }) => `- ${oneLine(item.title, 120)} — ${stalledStepLine(step)}`),
+    ...(stalled.length > 8 ? [`and ${stalled.length - 8} more`] : []),
+  ] : [];
   const titles = new Set(active.map((item) => item.title));
   const children = (parent) => active.filter((item) => (parent === null ? !titles.has(item.parent) : item.parent === parent))
     .sort((a, b) => b.updated.localeCompare(a.updated) || a.title.localeCompare(b.title));
@@ -311,7 +317,7 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
     : (seen.add(item.id), n + 1 + descendants(item.title, seen))), 0);
   // Tighter budgets drop next steps first, then fold child projects into a count, so every top-level
   // project stays listed however large one subtree grows.
-  const build = (withNext, maxDepth = Infinity, compact = false) => {
+  const build = (withNext, maxDepth = Infinity, compact = false, withStalled = false) => {
     const lines = [];
     const walk = (parent, depth, seen) => {
       for (const item of children(parent)) {
@@ -340,8 +346,7 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
       '',
       UNTRUSTED_NOTICE,
       '<untrusted-project-data>',
-      ...(result.summary?.stalled ? [`Stalled Plan steps: ${result.summary.stalled}`,
-        ...projects.flatMap((item) => (item.stalled || []).map((step) => `- ${oneLine(item.title, 120)} — ${stalledStepLine(step)}`))] : []),
+      ...(withStalled ? stalledLines : []),
       `Active (${active.length}):`,
       ...lines,
       ...(paused.length ? [`Paused (${paused.length}): ${paused.join('; ')}`] : []),
@@ -352,7 +357,8 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
       '</untrusted-project-data>',
     ].join('\n');
   };
-  let markdown = build(true);
+  let markdown = build(true, Infinity, false, true);
+  if (stalledLines.length && markdown.length > maxChars) markdown = build(true);
   if (markdown.length > maxChars) markdown = build(false);
   if (markdown.length > maxChars) markdown = build(false, 1);
   if (markdown.length > maxChars) markdown = build(false, 0);
@@ -491,10 +497,31 @@ function bindingStore(sessionId, stateDir = taskStateRoot()) {
 }
 
 function gitRead(cwd, args) {
-  const result = require('node:child_process').spawnSync('/usr/bin/git', ['-C', cwd, ...args], {
-    encoding: 'utf8', timeout: 2000, maxBuffer: 256_000, env: { PATH: '/usr/bin:/bin' },
+  // The input can point at any checkout. Keep Git's ownership check and disable external programs.
+  const result = require('node:child_process').spawnSync('/usr/bin/git', [
+    '--no-pager', '--literal-pathspecs', '-C', cwd, '-c', 'safe.directory=',
+    '-c', 'core.fsmonitor=false', '-c', 'core.untrackedCache=false', '-c', 'core.hooksPath=/dev/null', ...args,
+  ], {
+    encoding: 'utf8', timeout: 2000, maxBuffer: 256_000,
+    env: {
+      PATH: '/usr/bin:/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: '',
+    },
   });
   return result.status === 0 ? result.stdout.trimEnd() : null;
+}
+
+function gitFileChanges(cwd, file, stat) {
+  // Raw bytes give conservative results for filtered files without running their clean filters.
+  if (!stat.isFile()) return null;
+  const index = gitRead(cwd, ['ls-files', '--stage', '-z', '--', file]);
+  if (index === null) return null;
+  const entry = /^(100644|100755) ([a-f0-9]{40,64}) 0\t[^\0]*\0$/.exec(index);
+  if (!entry || (entry[1] === '100755') !== Boolean(stat.mode & 0o100)) return true;
+  const head = gitRead(cwd, ['ls-tree', '-z', 'HEAD', '--', file]);
+  if (!head?.startsWith(`${entry[1]} blob ${entry[2]}\t`)) return true;
+  const blob = gitRead(cwd, ['hash-object', '--no-filters', '--', file]);
+  return blob === null ? null : blob !== entry[2];
 }
 
 function taskArtifacts(task, directory) {
@@ -513,7 +540,7 @@ function taskArtifacts(task, directory) {
     try {
       const stat = fsSync.lstatSync(file);
       if (!stat.isFile()) return { ref, status: 'unavailable' };
-      const dirty = gitRead(path.dirname(file), ['status', '--porcelain', '--', path.basename(file)]);
+      const dirty = gitFileChanges(path.dirname(file), path.basename(file), stat);
       return { ref: file, status: 'present', bytes: stat.size, modifiedAt: stat.mtime.toISOString(),
         workingChanges: dirty === null ? 'unavailable' : dirty ? 'dirty_or_untracked' : 'clean' };
     } catch { return { ref: file, status: 'missing' }; }
@@ -550,9 +577,10 @@ async function resolvePlanTask(directory, reference, sessionId) {
       : artifacts.some((item) => item.status !== 'present') ? 'artifact_read_required' : 'current_owner';
   const section = (heading) => record.body.split(new RegExp(`^## (?:${heading})\\s*$`, 'm'))[1]?.split(/^## /m)[0]?.trim() || '';
   const canonicalDir = await fs.realpath(directory);
-  const dirty = gitRead(canonicalDir, ['status', '--porcelain', '--', record.file]);
+  const file = path.join(canonicalDir, record.file);
+  const dirty = gitFileChanges(canonicalDir, record.file, fsSync.lstatSync(file));
   return { project: { id: record.id, title: record.title, parent: record.parent, status: record.status,
-    file: path.join(canonicalDir, record.file), revision: record.revision,
+    file, revision: record.revision,
     commitState: dirty === null ? 'unavailable' : dirty ? 'uncommitted' : 'clean',
     goal: section('Goal'), acceptance: section('Acceptance criteria|Definition of Done'), newestLog: section('Log').split(/\n- /)[0] },
   task: { ...task, owner, nextAction: task.details.find((line) => line.startsWith('Next:'))?.slice(5).trim() || '', artifacts },
@@ -596,10 +624,9 @@ async function savePlanTaskPointer(options, committed) {
       if (!['current_owner', 'completed'].includes(context.disposition)) throw pointerError('PMS_RETAINED_OWNER_RECONCILIATION');
       if (prior.revision === context.project.revision) throw pointerError('PMS_NO_CANONICAL_PROGRESS');
       const cwd = path.dirname(context.project.file), file = path.basename(context.project.file);
-      const source = gitRead(cwd, ['show', `HEAD:${file}`]);
-      const working = await fs.readFile(context.project.file, 'utf8');
-      if (source === null || source !== working.trimEnd() || gitRead(cwd, ['status', '--porcelain', '--', file]) !== '') throw pointerError('PMS_CANONICAL_UNCOMMITTED');
-      canonicalCommit = gitRead(cwd, ['log', '-1', '--format=%H', '--', file]);
+      if (gitFileChanges(cwd, file, fsSync.lstatSync(context.project.file)) !== false) throw pointerError('PMS_CANONICAL_UNCOMMITTED');
+      canonicalCommit = gitRead(cwd, ['log', '-1', '--format=%H', '--no-patch', '--no-show-signature',
+        '--no-notes', '--no-decorate', '--no-ext-diff', '--no-textconv', '--', file]);
       if (!/^[a-f0-9]{40,64}$/.test(canonicalCommit || '')) throw pointerError('PMS_COMMIT_READBACK_UNAVAILABLE');
     }
     const { buildCodeThreadCheckpoint, writeJarvosSessionState } = require('../../jarvos-coding/src/features/session-state');
