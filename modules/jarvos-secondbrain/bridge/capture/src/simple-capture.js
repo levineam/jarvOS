@@ -126,7 +126,11 @@ function simpleCapture(input, options = {}) {
 
 function noteCaptureProgress({ opId, source, resume = false } = {}, options = {}) {
   if (typeof source !== 'string' || !source.trim()) throw new CaptureValidationError('source is required');
-  const { intentId } = captureOperationRequest({ opId, source: source.trim() });
+  // Hash the source exactly as a capture does: tool and custom: sources are lowercased there
+  // (normalizeSource), free-form labels are kept as typed.
+  const trimmed = source.trim();
+  const key = SOURCE_TOOLS.includes(trimmed) || /^custom:[a-z0-9][a-z0-9-]*$/i.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+  const { intentId } = captureOperationRequest({ opId, source: key });
   const adapter = options.adapter || require('../../../adapters').createStorageAdapter(options);
   return adapter.noteCaptureProgress({ intentId, resume });
 }
