@@ -111,7 +111,7 @@ test('a tight budget keeps every top-level project, and same-named projects both
     { id: 's2', title: 'Shared task', parent: 'B', status: 'active', updated: '2026-11-01', nextSteps: [] },
   ], skipped: [], truncated: true });
   assert.equal((twins.match(/- Shared task/g) || []).length, 2);
-  assert.match(twins, /Some projects were left out[\s\S]*<\/untrusted-project-data>/);
+  assert.match(twins, /Project data was trimmed to fit[\s\S]*<\/untrusted-project-data>/);
 });
 
 test('a short resume packet still lists every top-level project and closes the data block', async (t) => {

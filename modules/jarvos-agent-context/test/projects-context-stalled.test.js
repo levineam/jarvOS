@@ -172,12 +172,29 @@ test('all short progress dates participate and an empty Owner line still tracks 
   assert.deepEqual(stalled[1], { step: 'Empty owner task', lastUpdate: '2026-10-28', days: 19 });
 });
 
-test('large stalled arrays respect orientation and full-record byte limits', async (t) => {
-  const directory = fixture(t, Array.from({ length: 100 }, (_, i) => `- [ ] ${i} ${'x'.repeat(1000)} next install`).join('\n'));
-  for (const options of [{}, { project: 'prj_stall' }]) {
-    const packet = await read(directory, options);
+for (const ownerLength of [1000, 25_000]) {
+  const detailCount = ownerLength === 1000 ? 3 : undefined;
+  test(`large stalled lists preserve projects and counts with ${ownerLength}-character owners`, async (t) => {
+    const plan = Array.from({ length: 100 }, (_, i) => `- [ ] Step ${i}\n  Owner: ${'é'.repeat(ownerLength)}`).join('\n');
+    const directory = fixture(t, plan);
+    const source = fs.readFileSync(path.join(directory, 'project.md'), 'utf8');
+    fs.writeFileSync(path.join(directory, 'other.md'), source.replace('prj_stall', 'prj_other')
+      .replace('Stalled project', 'Unrelated project').replace(plan, '- [ ] Ship the next install'));
+
+    const packet = await read(directory);
     assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 60_000);
     assert.equal(packet.truncated, true);
-    if (packet.projects) assert.equal(packet.summary.stalled, packet.projects.reduce((sum, item) => sum + item.stalled.length, 0));
-  }
-});
+    assert.equal(packet.count, 2);
+    assert.equal(packet.summary.stalled, 101);
+    const large = packet.projects.find((item) => item.id === 'prj_stall');
+    assert.equal(large.stalledCount, 100);
+    assert.equal(large.stalled?.length, detailCount);
+    assert.match(renderProjectsContextMarkdown(packet), /Stalled Plan steps: 101\n/);
+
+    const single = await read(directory, { project: 'prj_stall' });
+    assert.ok(Buffer.byteLength(JSON.stringify(single)) <= 60_000);
+    assert.equal(single.truncated, true);
+    assert.equal(single.project.stalledCount, 100);
+    assert.equal(single.project.stalled?.length, detailCount);
+  });
+}
