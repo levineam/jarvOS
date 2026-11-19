@@ -4,7 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { hashUtf8, resolveVaultTarget } = require('./vault-mutation-contract');
-const { isNonBlockingQuarantine } = require('./vault-mutation-ledger');
+const { blocksWriteOrder, isNonBlockingQuarantine } = require('./vault-mutation-ledger');
 
 // Stuck-operation resolution. An "ensure the journal exists" create has one
 // intent: the day's journal is there. The storage adapter names these
@@ -16,7 +16,6 @@ const ENSURE_EXISTS_ID = /^journal-create-|:create$/;
 const DEFAULT_JOURNAL_PATH = /^Journal\/\d{4}-\d{2}-\d{2}\.md$/;
 const RESOLVABLE_STATUSES = new Set(['planned', 'unknown_after_dispatch', 'conflict', 'blocked']);
 const STUCK_STATUSES = new Set(['unknown_after_dispatch', 'conflict']);
-const TERMINAL_STATUSES = new Set(['acknowledged', 'superseded', 'abandoned']);
 const ENSURE_EXISTS_RESOLUTION = 'ensure_exists_satisfied: target journal exists, create intent met';
 
 function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, journalPathPattern = DEFAULT_JOURNAL_PATH, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability, offlineWriteCapability } = {}) {
@@ -97,16 +96,17 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     return summary;
   }
 
-  function isEnsureExistsCreate(operation) {
+  function isEnsureExistsCreate(operation, requireEnsureMarker) {
     return operation.operationKind === 'create'
       && typeof operation.content === 'string'
-      && ENSURE_EXISTS_ID.test(operation.operationId)
+      && (requireEnsureMarker ? operation.ensureExists === true : ENSURE_EXISTS_ID.test(operation.operationId))
       && journalPathPattern.test(operation.vaultRelativePath);
   }
   // Plans (and, unless dryRun, applies) the safe resolution of stuck ensure-exists
   // creates on journal paths. Rule, per (vault, path) queue in FIFO order:
   //   1. take the leading run of ensure-exists creates (create, journal path,
-  //      ensure id, status planned|unknown_after_dispatch|conflict|blocked, no
+  //      ensure marker when required or legacy id by default,
+  //      status planned|unknown_after_dispatch|conflict|blocked, no
   //      live dispatch claim);
   //   2. act only if the run contains a stuck op (unknown_after_dispatch or conflict);
   //   3. act only if the target is verified present by the adapter's read of the
@@ -117,7 +117,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
   // Vault content is never compared, written, or deleted. Any other
   // head (transform, replace, delete, a create that is not an ensure) keeps the
   // strict reconcile rules and is only reported.
-  function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists' } = {}) {
+  function resolveSatisfiedEnsureCreates({ dryRun = false, operatorId = 'reconciler.ensure-exists', vaultRelativePath, beforeSequence = Infinity, requireEnsureMarker = false } = {}) {
     const summary = { dryRun: dryRun === true, resolved: [], skipped: [] };
     if (typeof vaultId !== 'string' || !vaultId) return { ...summary, skipped: [{ reason: 'vault_identity_unavailable' }] };
     if (typeof ledger.peek !== 'function' || typeof ledger.resolve !== 'function') return { ...summary, skipped: [{ reason: 'ledger_resolution_unavailable' }] };
@@ -128,7 +128,8 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     const queues = new Map();
     for (const record of Object.values(data.operations)) {
       const { operation } = record;
-      if (operation.vaultId !== vaultId || !journalPathPattern.test(operation.vaultRelativePath) || TERMINAL_STATUSES.has(record.status)) continue;
+      if (operation.vaultId !== vaultId || !journalPathPattern.test(operation.vaultRelativePath) || !blocksWriteOrder(record)) continue;
+      if ((vaultRelativePath !== undefined && operation.vaultRelativePath !== vaultRelativePath) || operation.sequence >= beforeSequence) continue;
       if (!queues.has(operation.vaultRelativePath)) queues.set(operation.vaultRelativePath, []);
       queues.get(operation.vaultRelativePath).push(record);
     }
@@ -139,7 +140,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
       const claimed = (record) => Boolean(claim && claim.operationId === record.operation.operationId && claim.expiresAt > now());
       const run = [];
       for (const record of queue) {
-        if (!isEnsureExistsCreate(record.operation) || !RESOLVABLE_STATUSES.has(record.status) || claimed(record)) break;
+        if (!isEnsureExistsCreate(record.operation, requireEnsureMarker) || !RESOLVABLE_STATUSES.has(record.status) || claimed(record)) break;
         run.push(record);
       }
       const head = queue[0];

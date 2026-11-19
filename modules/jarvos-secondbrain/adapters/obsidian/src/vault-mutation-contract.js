@@ -70,6 +70,7 @@ function validateOperation(input, { identityPolicy } = {}) {
   if (!Number.isSafeInteger(input.sequence) || input.sequence < 1) fail('Invalid operation sequence');
   if (!['create', 'transform', 'replace', 'delete'].includes(input.operationKind)) fail('Invalid operation kind');
   if (input.createOnly !== undefined && (typeof input.createOnly !== 'boolean' || input.operationKind !== 'create')) fail('createOnly must be a boolean on a create operation');
+  if (input.ensureExists !== undefined && (typeof input.ensureExists !== 'boolean' || input.operationKind !== 'create')) fail('ensureExists must be a boolean on a create operation');
   const operation = { ...input, vaultRelativePath: validateVaultRelativeMarkdownPath(input.vaultRelativePath) };
   if (operation.expectedHash !== undefined && !isHash(operation.expectedHash)) fail('Invalid expectedHash');
   if (operation.intendedHash !== undefined && !isHash(operation.intendedHash)) fail('Invalid intendedHash');

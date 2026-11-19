@@ -694,6 +694,7 @@ function submitJournalCreate({ journalPath, mutationService, intentId, vaultRoot
     vaultRelativePath,
     sequence: context.sequence,
     operationKind: 'create',
+    ensureExists: true,
     content,
     source: context.source,
   });

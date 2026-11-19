@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createInternalReceipt, hashUtf8, validateOperation, validateVaultRelativeMarkdownPath } = require('./vault-mutation-contract');
-const { createVaultMutationLedger } = require('./vault-mutation-ledger');
+const { blocksWriteOrder, createVaultMutationLedger } = require('./vault-mutation-ledger');
+const { DEFAULT_JOURNAL_PATH, createVaultMutationReconciler } = require('./vault-mutation-reconciler');
 
 const { createJarvosVaultTransforms, journalOriginTransformProgram, journalHeadingTransformProgram } = require('../../../src/vault-transform-registry');
 
@@ -286,7 +287,30 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (validationReason) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { validationReason } });
     return null;
   }
-  function execute(input, { excludeOperationId, drain = true } = {}) {
+  function recoverJournalPredecessors(operation, { reason }) {
+    const { vaultRelativePath, sequence } = operation;
+    if (!DEFAULT_JOURNAL_PATH.test(vaultRelativePath)) return false;
+    if (reason === 'prior_operation_blocked') {
+      const { resolved } = createReconciler().resolveSatisfiedEnsureCreates({ vaultRelativePath, beforeSequence: sequence, requireEnsureMarker: true });
+      if (!resolved.length) return false;
+    } else if (reason !== 'prior_operation_pending') return false;
+    // Bound the drain to one FIFO snapshot of the foreground operation's predecessors.
+    for (const { operation: prior, status } of mutationLedger.active()) {
+      if (prior.vaultId !== vaultId || prior.vaultRelativePath !== vaultRelativePath || prior.sequence >= sequence) continue;
+      if (status !== 'planned') return false;
+      if (validationFailure(prior)) return false;
+      const inspection = inspectInvariant(prior);
+      if (inspection.status === 'satisfied' && inspection.invariant === true) {
+        acknowledgeInspected(prior);
+      } else {
+        execute(prior, { drain: false });
+      }
+      const record = mutationLedger.get(prior.operationId);
+      if (record && blocksWriteOrder(record)) return false;
+    }
+    return true;
+  }
+  function execute(input, { excludeOperationId, drain = true, recoverBlockedJournal = false } = {}) {
     const operation = validateOperation(input);
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
@@ -308,7 +332,11 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     // Exclude the just-persisted foreground intent: a drain must not recursively
     // re-dispatch it before this invocation establishes its terminal state.
     if (drain && !draining && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
-    const claim = mutationLedger.claim(operation, ownerId);
+    let claim = mutationLedger.claim(operation, ownerId);
+    if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
+      const retry = mutationLedger.claim(operation, ownerId);
+      if (retry.granted || retry.reason === 'already_acknowledged') claim = retry;
+    }
     if (!claim.granted && claim.reason === 'already_acknowledged') {
       const inspection = inspectInvariant(operation);
       if (inspection.status === 'satisfied' && inspection.invariant === true) return createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' });
@@ -362,15 +390,24 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
     const record = mutationLedger.planNext(operation);
-    return execute(record.operation, options);
+    return execute(record.operation, { ...options, recoverBlockedJournal: true });
   }
-  function acknowledgeIfSatisfied(input) {
+  function acknowledgeIfSatisfied(input, options) {
     const operation = validateOperation(input);
     if (validationFailure(operation)) return false;
     const inspection = inspectInvariant(operation);
     if (inspection.status !== 'satisfied' || inspection.invariant !== true) return false;
+    return acknowledgeInspected(operation, options);
+  }
+  function acknowledgeInspected(operation, { recoverBlockedJournal = false } = {}) {
     mutationLedger.ensure(operation);
-    const claim = mutationLedger.claim(operation, ownerId, { allowAmbiguousRetry: true });
+    let claim = mutationLedger.claim(operation, ownerId, { allowAmbiguousRetry: true });
+    if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
+      // An earlier write may have changed the invariant since the first inspection.
+      const recheck = inspectInvariant(operation);
+      if (recheck.status !== 'satisfied' || recheck.invariant !== true) return false;
+      claim = mutationLedger.claim(operation, ownerId, { allowAmbiguousRetry: true });
+    }
     if (!claim.granted) return claim.reason === 'already_acknowledged';
     mutationLedger.transition(operation.operationId, 'acknowledged', {
       ownerId,
@@ -381,7 +418,6 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   }
   let publicAdapter;
   function createReconciler(options = {}) {
-    const { createVaultMutationReconciler } = require('./vault-mutation-reconciler');
     return createVaultMutationReconciler({ ...options, adapter: publicAdapter, ledger: mutationLedger, vaultRoot, vaultId, transforms });
   }
   publicAdapter = Object.freeze({ acknowledgeIfSatisfied, capability, createReconciler, execute, inspectFileExists, inspectInvariant, ledger: ledgerView, submit });

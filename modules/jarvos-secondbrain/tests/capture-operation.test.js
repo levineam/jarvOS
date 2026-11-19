@@ -10,6 +10,7 @@ const { execFile, execFileSync, spawnSync } = require('node:child_process');
 const { normalizeCaptureEvent } = require('../bridge/capture/src/universal-capture');
 const { buildSimpleCaptureEvent } = require('../bridge/capture/src/simple-capture');
 const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
+const { ENSURE_EXISTS_RESOLUTION } = require('../adapters/obsidian/src/vault-mutation-reconciler');
 
 const base = { kind: 'idea', text: 'An invented tidal garden.', words: 'user', asked: 'explicit',
   source: 'codex', date: '2030-02-03', opId: 'test-operation-001' };
@@ -68,6 +69,103 @@ test('note status and resume use the original ID after a dropped create acknowle
   assert.deepEqual(changed.writes, []);
   assert.equal(changed.notes[0].content, later);
   assert.equal(changed.journal, recovered.journal);
+});
+
+function interruptJournalCreate(run) {
+  const capture = { ...base, kind: 'note', title: 'Invented note with a lost journal acknowledgement' };
+  const first = run({ capture, fault: 'after_journal_create' });
+  const intentId = Object.keys(first.ledger.captures)[0];
+  const createId = `${intentId}:note-link:create`;
+  const linkId = `${intentId}:note-link:section`;
+  const journalPath = `Journal/${capture.date}.md`;
+  assert.equal(first.faultTriggered, true);
+  assert.deepEqual(first.writes, [`Notes/${capture.title}.md`, journalPath]);
+  assert.equal(first.ledger.operations[`${intentId}:note`].status, 'acknowledged');
+  assert.equal(first.ledger.operations[createId].status, 'unknown_after_dispatch');
+  assert.equal(first.ledger.operations[linkId], undefined);
+  fs.appendFileSync(path.join(run.root, 'vault', journalPath), '\nAn invented journal edit.\n');
+  return { capture, first, createId, linkId, journalPath };
+}
+
+test('resume links an earlier note after a later capture resolves its stuck journal create', (t) => {
+  const run = fixture(t);
+  const { capture, first, createId, linkId, journalPath } = interruptJournalCreate(run);
+  const later = run({ capture: { ...base, opId: 'test-later-idea' } });
+  assert.equal(later.result.ok, true);
+  assert.equal(later.ledger.operations[createId].status, 'superseded');
+  assert.equal(later.ledger.operations[createId].evidence.reason, ENSURE_EXISTS_RESOLUTION);
+  assert.equal(later.ledger.operations[linkId], undefined);
+
+  const progress = { opId: capture.opId, source: capture.source };
+  const status = run({ progress });
+  const recovered = run({ progress: { ...progress, resume: true } });
+  assert.equal(recovered.result.state, 'complete');
+  assert.equal(status.result.state, 'pending');
+  assert.deepEqual(status.ledger, later.ledger);
+  assert.deepEqual(recovered.notes, first.notes);
+  assert.deepEqual(recovered.writes, [journalPath]);
+  assert.equal(recovered.journal.split(`[[${capture.title}]]`).length - 1, 1);
+  assert.match(recovered.journal, /An invented journal edit\./);
+  assert.deepEqual(run({ progress: { ...progress, resume: true } }).writes, []);
+});
+
+test('resume keeps journal creates with other terminal resolutions in conflict', (t) => {
+  for (const status of ['superseded', 'abandoned']) {
+    const run = fixture(t);
+    const { capture, createId, linkId } = interruptJournalCreate(run);
+    const ledger = createVaultMutationLedger({ filePath: path.join(run.root, 'ledger.json') });
+    ledger.resolve('test-operator', createId, status, 'Synthetic manual resolution');
+    const resumed = run({ progress: { opId: capture.opId, source: capture.source, resume: true } });
+    assert.equal(resumed.result.state, 'conflict');
+    assert.equal(resumed.ledger.operations[linkId], undefined);
+    assert.deepEqual(resumed.writes, []);
+  }
+});
+
+test('resume recovers a queued backlink behind a stuck journal create', (t) => {
+  const run = fixture(t);
+  const { createId, journalPath } = interruptJournalCreate(run);
+  const capture = { ...base, kind: 'note', opId: 'test-queued-backlink', title: 'Invented note with a queued backlink' };
+  const queued = run({ capture, fault: 'journal_presence_unavailable' });
+  const link = Object.values(queued.ledger.operations).find(record => record.operation.transformName === 'journal-backlink');
+  assert.equal(queued.result.ok, false);
+  assert.equal(queued.ledger.operations[createId].status, 'unknown_after_dispatch');
+  assert.equal(link.status, 'planned');
+  assert.equal(link.attempts, 0);
+
+  const progress = { opId: capture.opId, source: capture.source, resume: true };
+  const recovered = run({ progress });
+  assert.equal(recovered.result.state, 'complete');
+  assert.equal(recovered.ledger.operations[createId].evidence.reason, ENSURE_EXISTS_RESOLUTION);
+  assert.equal(recovered.ledger.operations[link.operation.operationId].attempts, 1);
+  assert.deepEqual(recovered.notes, queued.notes);
+  assert.deepEqual(recovered.writes, [journalPath]);
+  assert.equal(recovered.journal.split(`[[${capture.title}]]`).length - 1, 1);
+  assert.deepEqual(run({ progress }).writes, []);
+});
+
+test('resume acknowledges an already-present queued backlink behind a stuck journal create', (t) => {
+  const run = fixture(t);
+  const { createId, journalPath } = interruptJournalCreate(run);
+  const capture = { ...base, kind: 'note', opId: 'test-already-linked', title: 'Invented note linked in Obsidian' };
+  const queued = run({ capture, fault: 'journal_presence_unavailable' });
+  const link = Object.values(queued.ledger.operations).find(record => record.operation.transformName === 'journal-backlink');
+  assert.equal(link.status, 'planned');
+  assert.equal(queued.ledger.operations[createId].status, 'unknown_after_dispatch');
+  const journal = queued.journal.replace(/^- ?$/m, `- [[${capture.title}]]`);
+  fs.writeFileSync(path.join(run.root, 'vault', journalPath), journal);
+
+  const progress = { opId: capture.opId, source: capture.source };
+  const status = run({ progress });
+  assert.equal(status.result.journal, 'unconfirmed');
+  assert.deepEqual(status.ledger, queued.ledger);
+  const recovered = run({ progress: { ...progress, resume: true } });
+  assert.equal(recovered.result.state, 'complete');
+  assert.equal(recovered.ledger.operations[createId].evidence.reason, ENSURE_EXISTS_RESOLUTION);
+  assert.equal(recovered.ledger.operations[link.operation.operationId].status, 'acknowledged');
+  assert.deepEqual(recovered.writes, []);
+  assert.equal(recovered.journal, journal);
+  assert.deepEqual(run({ progress: { ...progress, resume: true } }).ledger, recovered.ledger);
 });
 
 test('legacy capture inherits validated provenance in place before linking, with a durable original-operation audit', (t) => {
