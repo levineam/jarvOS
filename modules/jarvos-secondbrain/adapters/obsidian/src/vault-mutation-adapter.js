@@ -218,7 +218,7 @@ function buildObsidianInvariantProgram(operation, inspectionToken, inspectionNon
 function tokenProgram(operationId) { return `JSON.stringify(globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}] || null)`; }
 function cleanupProgram(operationId) { return `delete globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}]; JSON.stringify(true)`; }
 
-function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS, probe, ownerId = crypto.randomUUID(), opportunisticDrain, headReconcile, allowDeleteOperation, now = () => Date.now() } = {}) {
+function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS, probe, ownerId = crypto.randomUUID(), opportunisticDrain, headReconcile, allowDeleteOperation } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof vaultId !== 'string' || !vaultId) throw new Error('vaultId is required');
   // Keep operational intent outside authored vault content. Hosts normally supply
@@ -238,6 +238,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
   let retryingHead = false;
+  let creatingMissingJournal = false;
   function unavailableCapabilityDetails(check) {
     const obsidian = check?.state === 'available' ? 'wrong_vault' : (CAPABILITY_STATES.includes(check?.state) ? check.state : 'app_unreachable');
     const capabilityReason = CAPABILITY_REASONS.includes(check?.reason) ? check.reason : undefined;
@@ -400,13 +401,10 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (!claim.granted) {
       const adapterEvidence = { reason: claim.reason };
       if (claim.reason === 'prior_operation_pending') {
+        // Only the blocker's state leaves the adapter: its id and age belong to
+        // another request (operators read them from the ledger and health output).
         const blocker = blockingHeadFor(operation);
-        if (blocker) {
-          adapterEvidence.blockingOperationId = blocker.operation.operationId;
-          adapterEvidence.blockingStatus = blocker.status;
-          const timestamp = Number.isFinite(blocker.createdAt) ? blocker.createdAt : blocker.updatedAt;
-          if (Number.isFinite(timestamp)) adapterEvidence.blockingAgeMs = Math.max(0, now() - timestamp);
-        }
+        if (blocker) adapterEvidence.blockingStatus = blocker.status;
       }
       return createInternalReceipt({ operation, status: 'blocked', lifecycleState: 'blocked', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence });
     }
@@ -435,6 +433,22 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
         const failure = failureEvidence('missing_target', result.error);
         try { run(cleanupProgram(operation.operationId)); } catch {}
         mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: failure });
+        // A journal removed while this line waited: run the queued ensure-create
+        // for that journal first (it may go ahead of planned transforms), then
+        // retry this line once.
+        if (!creatingMissingJournal && DEFAULT_JOURNAL_PATH.test(operation.vaultRelativePath)
+          && !fs.existsSync(path.join(vaultRoot, operation.vaultRelativePath))) {
+          const queuedCreate = mutationLedger.active().find((entry) => entry.operation.vaultId === operation.vaultId
+            && entry.operation.vaultRelativePath === operation.vaultRelativePath
+            && entry.status === 'planned' && entry.operation.operationKind === 'create' && entry.operation.ensureExists === true);
+          if (queuedCreate) {
+            creatingMissingJournal = true;
+            try {
+              const created = execute(queuedCreate.operation, { drain: false, allowHeadRetry: false });
+              if (created.status === 'committed' || created.status === 'already_satisfied') return execute(operation, { drain: false, allowHeadRetry: false });
+            } finally { creatingMissingJournal = false; }
+          }
+        }
         return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure });
       }
       if (result?.status === 'error' || result?.status === 'done') {

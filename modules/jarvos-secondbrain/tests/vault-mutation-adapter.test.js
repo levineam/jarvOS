@@ -1026,7 +1026,7 @@ test('targeted head retry acknowledges an already-satisfied planned head without
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('failed head reconcile returns blocked receipt with blockingOperationId, blockingStatus, and blockingAgeMs', () => {
+test('failed head reconcile returns a blocked receipt with the blocker status only, never its id or age', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stuck-head-fail-'));
   try {
     const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
@@ -1082,9 +1082,10 @@ test('failed head reconcile returns blocked receipt with blockingOperationId, bl
     const receiptB = service.adapter.submit(opB, { drain: false });
     assert.equal(receiptB.status, 'blocked');
     assert.equal(receiptB.adapterEvidence.reason, 'prior_operation_pending');
-    assert.equal(receiptB.adapterEvidence.blockingOperationId, opA.operationId);
     assert.equal(receiptB.adapterEvidence.blockingStatus, 'conflict');
-    assert.equal(receiptB.adapterEvidence.blockingAgeMs, 5_000);
+    assert.equal(receiptB.adapterEvidence.blockingOperationId, undefined);
+    assert.equal(receiptB.adapterEvidence.blockingAgeMs, undefined);
+    assert.doesNotMatch(JSON.stringify(receiptB), new RegExp(opA.operationId));
     assert.equal(ledger.get(opA.operationId).status, 'conflict');
     assert.equal(ledger.get(opB.operationId).attempts, 0);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
@@ -1185,7 +1186,7 @@ test('targeted head retry does not recurse when the head retry itself encounters
     assert.equal(hookCalls, 1, 'headReconcile must never recurse');
     assert.equal(receipt3.status, 'blocked');
     assert.equal(receipt3.adapterEvidence.reason, 'prior_operation_pending');
-    assert.equal(receipt3.adapterEvidence.blockingOperationId, op1.operationId);
+    assert.equal(receipt3.adapterEvidence.blockingStatus, 'planned');
     assert.equal(receipt3.adapterEvidence.blockingStatus, 'planned');
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -1318,5 +1319,47 @@ test('an ensure-create does not jump queued transforms when the journal file exi
     const receipt = adapter.execute({ schemaVersion: 1, operationId: 'op-on-disk-02', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 2, operationKind: 'create', ensureExists: true, content: '# Journal\n' }, { drain: false, allowHeadRetry: false });
     assert.equal(receipt.status, 'blocked');
     assert.equal(receipt.adapterEvidence.reason, 'prior_operation_pending');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a queued ensure-create behind a line waiting on a removed journal runs first, then the line', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-queued-create-'));
+  try {
+    const journalPath = 'Journal/2026-01-06.md';
+    const files = new Map();
+    let available = false;
+    const context = {
+      TextDecoder, Uint8Array, JSON,
+      atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+      app: {
+        vault: {
+          getFileByPath: (target) => files.get(target) || null,
+          create: (target, content) => { const entry = { path: target, content }; files.set(target, entry); return settled(entry); },
+          process: (entry, transform) => { entry.content = transform(entry.content); return settled(entry); },
+          read: (entry) => settled(entry.content),
+        },
+      },
+    };
+    context.globalThis = context;
+    const adapter = createVaultMutationAdapter({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      ledgerPath: path.join(root, '.state', 'ledger.json'),
+      transforms: createJarvosVaultTransforms(),
+      probe: () => ({ state: available ? 'available' : 'app_stopped', vaultId: 'vault-a' }),
+      evaluate: (code) => { const raw = vm.runInNewContext(code, context); return typeof raw === 'string' ? JSON.parse(raw) : raw; },
+      pollIntervalMs: 1,
+    });
+    const queued = { schemaVersion: 1, operationId: 'op-queued-create-01', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 1, operationKind: 'transform', transformName: 'append-line', transformVersion: 1, replayPayload: { line: '- queued synthetic idea' } };
+    const create = { schemaVersion: 1, operationId: 'op-queued-create-02', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 2, operationKind: 'create', ensureExists: true, content: '# Journal\n' };
+    assert.equal(adapter.submit(queued, { drain: false }).status, 'unavailable');
+    assert.equal(adapter.submit(create, { drain: false }).status, 'unavailable');
+    available = true;
+    // Any caller retrying the waiting line (drain, head retry or journal recovery) unblocks the day.
+    const retried = adapter.execute(queued, { drain: false, allowHeadRetry: false });
+    assert.equal(retried.status, 'committed');
+    assert.equal(adapter.ledger.get(create.operationId).status, 'acknowledged');
+    assert.equal(adapter.ledger.get(queued.operationId).status, 'acknowledged');
+    assert.match(files.get(journalPath).content, /^# Journal\n[\s\S]*- queued synthetic idea/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
