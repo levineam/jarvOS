@@ -90,8 +90,8 @@ test('missing journal creates before its acknowledged section transform', () => 
   });
 });
 
-function appAwareService(root, state) {
-  const service = fakeService(root);
+function appAwareService(root, state, options) {
+  const service = fakeService(root, options);
   service.asked = [];
   service.vaultFileState = (vaultRelativePath) => { service.asked.push(vaultRelativePath); return state; };
   return service;
@@ -128,8 +128,8 @@ test('a genuinely missing journal still creates, without asking the app', () => 
   });
 });
 
-test('a journal only on disk, or one the app cannot confirm, keeps its ensure create', () => {
-  for (const state of ['absent', 'unavailable', undefined]) {
+test('a journal only on disk keeps its ensure create when the app confirms absent or has no presence check', () => {
+  for (const state of ['absent', undefined]) {
     withVault(({ root, journalDir }) => {
       fs.mkdirSync(journalDir, { recursive: true });
       fs.writeFileSync(path.join(journalDir, '2030-02-03.md'), '## 💡 Ideas\n-\n', 'utf8');
@@ -137,6 +137,97 @@ test('a journal only on disk, or one the app cannot confirm, keeps its ensure cr
       createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir })
         .appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- New idea' });
       assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['create', 'transform'], `app state ${state}`);
+    });
+  }
+});
+
+test('capability unavailable with an existing journal on disk plans no create and persists the line operation durably', () => {
+  const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+  // 1. Minimal service whose vaultFileState reports unavailable.
+  withVault(({ root, journalDir }) => {
+    fs.mkdirSync(journalDir, { recursive: true });
+    fs.writeFileSync(path.join(journalDir, '2030-02-03.md'), '## 💡 Ideas\n-\n', 'utf8');
+    const service = appAwareService(root, 'unavailable', { unavailable: true });
+    const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+    const appended = adapter.appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- New idea' });
+    assert.equal(appended.acknowledged, false);
+    assert.equal(appended.receipt.status, 'unavailable');
+    assert.equal(appended.artifactReceipt.artifacts[0].outcome, 'failed');
+    assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['transform'], 'skips ensure-create and queues the line transform');
+
+    const linked = adapter.linkNoteToJournal({ noteTitle: 'Queued Note', date: '2030-02-03' });
+    assert.equal(linked.acknowledged, false);
+    assert.equal(linked.receipt.status, 'unavailable');
+    assert.equal(linked.artifactReceipt.artifacts[0].outcome, 'failed');
+    assert.deepEqual(service.operations.map((operation) => operation.operationKind), ['transform', 'transform'], 'linkNoteToJournal skips ensure-create and queues the backlink transform');
+  });
+
+  // 2. Real configured mutation service with capability failure/unavailability.
+  for (const [label, adapterOptions, expectedObsidian, expectedReason] of [
+    ['null capability response', { evaluate: () => null }, 'app_unreachable', 'capability_no_result'],
+    ['malformed capability response', { evaluate: () => 'not-an-object' }, 'app_unreachable', 'capability_malformed_result'],
+    ['stopped app probe', { probe: () => ({ state: 'app_stopped' }), evaluate: () => assert.fail('must not eval when probe stopped') }, 'app_stopped', undefined],
+    ['hostile probe sanitized', { probe: () => ({ state: 'HOSTILE-SENTINEL', reason: 'HOSTILE-REASON' }), evaluate: () => assert.fail('must not eval') }, 'app_unreachable', undefined],
+  ]) {
+    withVault(({ root, journalDir }) => {
+      fs.mkdirSync(journalDir, { recursive: true });
+      const journalPath = path.join(journalDir, '2030-02-03.md');
+      const existingContent = '## 💡 Ideas\n- Existing idea\n';
+      fs.writeFileSync(journalPath, existingContent, 'utf8');
+      const service = createConfiguredVaultMutationService({
+        vaultRoot: root,
+        vaultId: 'vault-unavailable-test',
+        adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), ...adapterOptions },
+      });
+      const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+      const result = adapter.appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- Queued idea' });
+      assert.equal(result.acknowledged, false, label);
+      assert.equal(result.receipt.status, 'unavailable', label);
+      assert.equal(result.receipt.persistence, 'durable', label);
+      assert.equal(result.receipt.lifecycleState, 'planned', label);
+      assert.equal(result.receipt.obsidian, expectedObsidian, label);
+      assert.equal(result.receipt.adapterEvidence?.capabilityReason, expectedReason, label);
+      assert.equal(result.artifactReceipt.artifacts[0].outcome, 'failed', label);
+      assert.doesNotMatch(JSON.stringify(result), /HOSTILE/, label);
+      const active = service.adapter.ledger.active();
+      assert.equal(active.length, 1, `only the line operation is planned in ledger (${label})`);
+      assert.equal(active[0].status, 'planned', label);
+      assert.equal(active[0].operation.operationKind, 'transform', label);
+      assert.equal(active[0].operation.transformName, 'journal-section-line', label);
+      assert.equal(active[0].operation.replayPayload.line, '- Queued idea', label);
+      assert.equal(fs.readFileSync(journalPath, 'utf8'), existingContent, `journal untouched (${label})`);
+    });
+  }
+});
+
+test('capability unavailable with journal missing on disk plans ensure-create before the line', () => {
+  const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+  for (const [label, adapterOptions, expectedReason] of [
+    ['null capability response', { evaluate: () => null }, 'capability_no_result'],
+    ['malformed capability response', { evaluate: () => 'not-an-object' }, 'capability_malformed_result'],
+  ]) {
+    withVault(({ root, journalDir }) => {
+      const journalPath = path.join(journalDir, '2030-02-03.md');
+      const service = createConfiguredVaultMutationService({
+        vaultRoot: root,
+        vaultId: 'vault-unavailable-missing-test',
+        adapterOptions: { ledgerPath: path.join(root, '.state', 'ledger.json'), ...adapterOptions },
+      });
+      const adapter = createVaultStorageAdapter({ mutationService: service, vaultRoot: root, journalDir });
+      const result = adapter.appendLineToJournalSection({ date: '2030-02-03', heading: '## 💡 Ideas', line: '- Missing journal idea' });
+      assert.equal(result.acknowledged, false, label);
+      assert.equal(result.receipt.status, 'unavailable', label);
+      assert.equal(result.receipt.persistence, 'durable', label);
+      assert.equal(result.receipt.lifecycleState, 'planned', label);
+      assert.equal(result.receipt.obsidian, 'app_unreachable', label);
+      assert.equal(result.receipt.adapterEvidence?.capabilityReason, expectedReason, label);
+      assert.equal(result.artifactReceipt.artifacts[0].outcome, 'failed', label);
+      const active = service.adapter.ledger.active();
+      assert.equal(active.length, 1, `ensure-create planned first (${label})`);
+      assert.equal(active[0].status, 'planned', label);
+      assert.equal(active[0].operation.operationKind, 'create', label);
+      assert.equal(active[0].operation.ensureExists, true, label);
+      assert.equal(fs.existsSync(journalPath), false, `journal not written raw (${label})`);
     });
   }
 });

@@ -510,4 +510,98 @@ test('capture exit code and stderr message are derived from the result, not from
     captureFailureMessage({ ok: false, artifactReceipt: { artifacts: [] }, journalEntry: { receipt: { adapterEvidence: { reason: 'prior_operation_blocked' } } } }),
     'Capture not acknowledged (prior_operation_blocked)',
   );
+  assert.equal(
+    captureFailureMessage({
+      ok: false,
+      artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-10-28.md', outcome: 'deferred' }] },
+      journalEntry: { receipt: { status: 'unavailable', obsidian: 'app_unreachable', adapterEvidence: { capabilityReason: 'capability_no_result' } } },
+    }),
+    'Capture not acknowledged: journal Journal/2026-10-28.md: deferred (capability_no_result)',
+  );
+  assert.equal(
+    captureFailureMessage({
+      ok: false,
+      artifactReceipt: { artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/Synthetic.md', outcome: 'failed' }] },
+      note: { receipt: { status: 'unavailable', obsidian: 'app_unreachable', adapterEvidence: { capabilityReason: 'capability_malformed_result' } } },
+    }),
+    'Capture not acknowledged: note Notes/Synthetic.md: failed (capability_malformed_result)',
+  );
+  const blockedMessage = captureFailureMessage({
+    ok: false,
+    artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-10-28.md', outcome: 'failed' }] },
+    journalEntry: {
+      receipt: {
+        status: 'blocked',
+        operation: { content: 'SECRET_SYNTHETIC_BODY_DO_NOT_LEAK' },
+        adapterEvidence: {
+          reason: 'prior_operation_pending',
+          blockingOperationId: 'op-stuck-head-01',
+          blockingStatus: 'conflict',
+          blockingAgeMs: 12_000,
+        },
+      },
+    },
+  });
+  assert.equal(
+    blockedMessage,
+    'Capture not acknowledged: journal Journal/2026-10-28.md: failed (prior_operation_pending: blocked by operation op-stuck-head-01 with status conflict)',
+  );
+  assert.doesNotMatch(blockedMessage, /SECRET_SYNTHETIC_BODY_DO_NOT_LEAK/);
+  assert.equal(
+    captureFailureMessage({
+      ok: false,
+      artifactReceipt: { artifacts: [] },
+      journalEntry: {
+        receipt: {
+          status: 'blocked',
+          adapterEvidence: {
+            reason: 'prior_operation_pending',
+            blockingOperationId: 'op-planned-head',
+            blockingStatus: 'planned',
+            capabilityReason: 'capability_no_result',
+          },
+        },
+      },
+    }),
+    'Capture not acknowledged (prior_operation_pending: blocked by operation op-planned-head with status planned; capability_no_result)',
+  );
+});
+
+test('captureWithJarvos persists the journal line durably without planning a create when capability is unavailable and journal exists on disk', () => {
+  const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+  const vault = makeTempVault();
+  try {
+    const journalPath = path.join(vault.journalDir, `${TEST_DATE}.md`);
+    fs.writeFileSync(journalPath, '## 💡 Ideas\n- Existing synthetic idea\n', 'utf8');
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: vault.root,
+      vaultId: 'vault-capture-unavailable',
+      adapterOptions: {
+        ledgerPath: path.join(vault.root, '.state', 'ledger.json'),
+        evaluate: () => null,
+      },
+    });
+    const result = captureWithJarvos(baseCapture('codex', {
+      text: 'idea: queued synthetic thought',
+      substantive: false,
+    }), { mutationService: service, vaultRoot: vault.root, journalDir: vault.journalDir });
+    assert.equal(result.ok, false);
+    assert.equal(result.journalEntry.acknowledged, false);
+    assert.equal(result.journalEntry.receipt.status, 'unavailable');
+    assert.equal(result.journalEntry.receipt.persistence, 'durable');
+    assert.equal(result.journalEntry.receipt.lifecycleState, 'planned');
+    assert.equal(result.journalEntry.receipt.adapterEvidence?.capabilityReason, 'capability_no_result');
+    assert.equal(result.artifactReceipt.artifacts[0].outcome, 'failed');
+    const active = service.adapter.ledger.active();
+    assert.equal(active.length, 1, 'line transform operation is planned durably with no journal-create');
+    assert.equal(active[0].status, 'planned');
+    assert.equal(active[0].operation.operationKind, 'transform');
+    assert.equal(active[0].operation.transformName, 'journal-section-line');
+    assert.equal(
+      captureFailureMessage(result),
+      `Capture not acknowledged: journal Journal/${TEST_DATE}.md: failed (capability_no_result)`,
+    );
+  } finally {
+    fs.rmSync(vault.root, { recursive: true, force: true });
+  }
 });

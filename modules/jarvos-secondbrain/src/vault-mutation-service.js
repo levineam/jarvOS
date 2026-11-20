@@ -121,14 +121,22 @@ function createConfiguredVaultMutationService({
 } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof source !== 'string' || !source) throw new Error('mutation source is required');
-  const adapter = suppliedAdapter || createVaultMutationAdapter({ vaultRoot, vaultId, transforms, ...adapterOptions, allowDeleteOperation });
+  let reconciler;
+  const adapter = suppliedAdapter || createVaultMutationAdapter({
+    vaultRoot,
+    vaultId,
+    transforms,
+    headReconcile: (vaultRelativePath, options) => reconciler?.drainFile?.(vaultRelativePath, options),
+    ...adapterOptions,
+    allowDeleteOperation,
+  });
   if (typeof adapter.submit !== 'function') throw new Error('vault mutation adapter must support atomic operation planning');
   // Only an explicit stopped-app signal is a default absence proof. A missing
   // CLI, timeout, busy app, or generic transport failure cannot establish that
   // Obsidian is not concurrently mutating the vault.
   const absenceProof = proveObsidianAbsent || (() => adapter.capability().state === 'app_stopped');
   const offlineWriteCapability = Object.freeze({});
-  const reconciler = suppliedReconciler || adapter.createReconciler({
+  reconciler = suppliedReconciler || adapter.createReconciler({
     // Offline fallback remains closed unless this composition host supplies a
     // proof that Obsidian is absent. A caller cannot smuggle this authority in
     // operation data.
@@ -333,12 +341,24 @@ function createConfiguredVaultMutationService({
       : receipt;
   }
 
-  // 'present' | 'absent' | 'unavailable', read from the app's vault index.
-  function vaultFileState(vaultRelativePath) {
-    return typeof adapter.inspectFileExists === 'function' ? adapter.inspectFileExists(vaultRelativePath).status : 'unavailable';
+  // { status: 'present' | 'absent' | 'unavailable', obsidian?, capabilityReason? },
+  // read from the app's vault index with only allowlisted capability codes.
+  function inspectVaultFile(vaultRelativePath) {
+    if (typeof adapter.inspectFileExists !== 'function') return { status: 'unavailable' };
+    const inspected = adapter.inspectFileExists(vaultRelativePath);
+    if (inspected?.status === 'present' || inspected?.status === 'absent') return { status: inspected.status };
+    const details = {};
+    if (CAPABILITY_STATES.includes(inspected?.obsidian)) details.obsidian = inspected.obsidian;
+    if (CAPABILITY_REASONS.includes(inspected?.capabilityReason)) details.capabilityReason = inspected.capabilityReason;
+    return { status: 'unavailable', ...details };
   }
 
-  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, reserveCaptureOperation, source, transforms, vaultFileState, vaultId, vaultRoot });
+  // 'present' | 'absent' | 'unavailable', read from the app's vault index.
+  function vaultFileState(vaultRelativePath) {
+    return inspectVaultFile(vaultRelativePath).status;
+  }
+
+  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, inspectVaultFile, reconciler, reserveCaptureOperation, source, transforms, vaultFileState, vaultId, vaultRoot });
 }
 
 module.exports = { PACKAGE_TEMPORARY_SHIMS, WRITER_INVENTORY, assertNoUnclassifiedVaultWrites, assertPackageImportBoundary, assertWriterInventory, configuredVaultId, createConfiguredVaultMutationService };

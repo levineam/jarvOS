@@ -862,3 +862,328 @@ test('the Obsidian CLI never inherits ELECTRON_RUN_AS_NODE from an Electron-host
   assert.ok(seen, 'execute received an env');
   assert.equal(seen.ELECTRON_RUN_AS_NODE, undefined);
 });
+
+test('targeted head retry drains a planned head on the same file even under exact drain:false submission', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stuck-head-'));
+  try {
+    const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+    const journalPath = 'Journal/2026-01-02.md';
+    const otherPath = 'Notes/Other.md';
+    const files = new Map([[journalPath, { path: journalPath, content: '# Journal\n' }]]);
+    let available = false;
+    const context = {
+      TextDecoder,
+      Uint8Array,
+      atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+      JSON,
+      app: {
+        vault: {
+          getFileByPath: (target) => files.get(target) || null,
+          process: (entry, transform) => { entry.content = transform(entry.content); return settled(entry); },
+          read: (entry) => settled(entry.content),
+        },
+      },
+    };
+    context.globalThis = context;
+    const hookPaths = [];
+    let service;
+    service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      adapterOptions: {
+        ledgerPath: path.join(root, 'ledger.json'),
+        probe: () => ({ state: available ? 'available' : 'app_stopped', vaultId: 'vault-a' }),
+        evaluate: (code) => {
+          const raw = vm.runInNewContext(code, context);
+          return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        },
+        headReconcile: (targetPath, options) => {
+          hookPaths.push(targetPath);
+          return service.reconciler.drainFile(targetPath, options);
+        },
+      },
+    });
+    const opA = {
+      schemaVersion: 1,
+      operationId: 'op-stuck-head-a',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- first capture' },
+      source: service.source,
+    };
+    const unrelated = {
+      schemaVersion: 1,
+      operationId: 'op-unrelated-other',
+      vaultId: 'vault-a',
+      vaultRelativePath: otherPath,
+      sequence: 1,
+      operationKind: 'create',
+      content: 'other file',
+      source: service.source,
+    };
+    assert.equal(service.adapter.submit(opA, { drain: false }).status, 'unavailable');
+    assert.equal(service.adapter.submit(unrelated, { drain: false }).status, 'unavailable');
+    assert.equal(service.adapter.ledger.get(opA.operationId).status, 'planned');
+    assert.equal(service.adapter.ledger.get(unrelated.operationId).status, 'planned');
+
+    available = true;
+    const opB = {
+      schemaVersion: 1,
+      operationId: 'op-stuck-head-b',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- second capture' },
+      source: service.source,
+    };
+    const exactCtx = service.createWriteContext({ vaultRelativePath: journalPath, operationId: opB.operationId, exact: true });
+    const receiptB = exactCtx.mutationExecutor(opB);
+    assert.equal(receiptB.status, 'committed');
+    assert.equal(receiptB.obsidian, 'acknowledged');
+    assert.deepEqual(hookPaths, [journalPath]);
+    assert.equal(service.adapter.ledger.get(opA.operationId).status, 'acknowledged');
+    assert.equal(service.adapter.ledger.get(opB.operationId).status, 'acknowledged');
+    assert.equal(service.adapter.ledger.get(unrelated.operationId).status, 'planned');
+    assert.match(files.get(journalPath).content, /- first capture/);
+    assert.match(files.get(journalPath).content, /- second capture/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('targeted head retry acknowledges an already-satisfied planned head without re-dispatching', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stuck-head-satisfied-'));
+  try {
+    const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+    const journalPath = 'Journal/2026-01-02.md';
+    const files = new Map([[journalPath, { path: journalPath, content: '# Journal\n- already present\n' }]]);
+    let available = false;
+    let processCalls = 0;
+    const context = {
+      TextDecoder,
+      Uint8Array,
+      atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+      JSON,
+      app: {
+        vault: {
+          getFileByPath: (target) => files.get(target) || null,
+          process: (entry, transform) => { processCalls += 1; entry.content = transform(entry.content); return settled(entry); },
+          read: (entry) => settled(entry.content),
+        },
+      },
+    };
+    context.globalThis = context;
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      adapterOptions: {
+        ledgerPath: path.join(root, 'ledger.json'),
+        probe: () => ({ state: available ? 'available' : 'app_stopped', vaultId: 'vault-a' }),
+        evaluate: (code) => {
+          const raw = vm.runInNewContext(code, context);
+          return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        },
+      },
+    });
+    const opA = {
+      schemaVersion: 1,
+      operationId: 'op-already-sat-a',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- already present' },
+      source: service.source,
+    };
+    assert.equal(service.adapter.submit(opA, { drain: false }).status, 'unavailable');
+    available = true;
+    const opB = {
+      schemaVersion: 1,
+      operationId: 'op-already-sat-b',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- next line' },
+      source: service.source,
+    };
+    const receiptB = service.adapter.submit(opB, { drain: false });
+    assert.equal(receiptB.status, 'committed');
+    assert.equal(processCalls, 1, 'only B was dispatched; A was acknowledged via readback');
+    assert.equal(service.adapter.ledger.get(opA.operationId).status, 'acknowledged');
+    assert.equal(service.adapter.ledger.get(opB.operationId).status, 'acknowledged');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('failed head reconcile returns blocked receipt with blockingOperationId, blockingStatus, and blockingAgeMs', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stuck-head-fail-'));
+  try {
+    const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+    const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
+    const journalPath = 'Journal/2026-01-02.md';
+    let clock = 10_000;
+    let available = false;
+    const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json'), now: () => clock });
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      adapterOptions: {
+        ledger,
+        now: () => clock,
+        probe: () => ({ state: available ? 'available' : 'app_stopped', vaultId: 'vault-a' }),
+        maxPollAttempts: 1,
+        evaluate: (code) => {
+          if (code.includes('inspectionToken')) return { queued: true, token: inspectionToken(code) };
+          if (code.includes(':inspect:')) return code.startsWith('delete ') ? true : { status: 'unsatisfied', invariant: false };
+          if (code.startsWith('(() =>')) return { queued: true, token: 'op-head-fail-a' };
+          if (code.startsWith('delete ')) return true;
+          return { status: 'error', errorClass: 'process_failed', error: 'synthetic app error' };
+        },
+      },
+    });
+    const opA = {
+      schemaVersion: 1,
+      operationId: 'op-head-fail-a',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- broken head' },
+      source: service.source,
+    };
+    assert.equal(service.adapter.submit(opA, { drain: false }).status, 'unavailable');
+    clock = 15_000;
+    available = true;
+    const opB = {
+      schemaVersion: 1,
+      operationId: 'op-head-fail-b',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- blocked follower' },
+      source: service.source,
+    };
+    const receiptB = service.adapter.submit(opB, { drain: false });
+    assert.equal(receiptB.status, 'blocked');
+    assert.equal(receiptB.adapterEvidence.reason, 'prior_operation_pending');
+    assert.equal(receiptB.adapterEvidence.blockingOperationId, opA.operationId);
+    assert.equal(receiptB.adapterEvidence.blockingStatus, 'conflict');
+    assert.equal(receiptB.adapterEvidence.blockingAgeMs, 5_000);
+    assert.equal(ledger.get(opA.operationId).status, 'conflict');
+    assert.equal(ledger.get(opB.operationId).attempts, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('prior_operation_blocked with an unknown_after_dispatch head is never retried by headReconcile', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stuck-head-blocked-'));
+  try {
+    const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
+    const journalPath = 'Journal/2026-01-02.md';
+    const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json') });
+    const opA = {
+      schemaVersion: 1,
+      operationId: 'op-ambiguous-head',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- ambiguous' },
+    };
+    ledger.ensure(opA);
+    const claimA = ledger.claim(opA, 'prior-owner');
+    ledger.transition(opA.operationId, 'unknown_after_dispatch', { ownerId: 'prior-owner', fence: claimA.fence });
+    let headReconcileCalls = 0;
+    const adapter = createVaultMutationAdapter({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      ledger,
+      transforms: createJarvosVaultTransforms(),
+      probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+      evaluate: () => { throw new Error('must not dispatch while prior head is unknown_after_dispatch'); },
+      headReconcile: () => { headReconcileCalls += 1; },
+    });
+    const opB = {
+      schemaVersion: 1,
+      operationId: 'op-after-ambiguous',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 2,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- follower' },
+    };
+    const receiptB = adapter.submit(opB, { drain: false });
+    assert.equal(receiptB.status, 'blocked');
+    assert.equal(receiptB.adapterEvidence.reason, 'prior_operation_blocked');
+    assert.equal(headReconcileCalls, 0);
+    assert.equal(ledger.get(opA.operationId).status, 'unknown_after_dispatch');
+    assert.equal(ledger.get(opB.operationId).attempts, 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('targeted head retry does not recurse when the head retry itself encounters prior_operation_pending', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stuck-head-norecurse-'));
+  try {
+    const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
+    const filePath = 'Journal/2026-01-02.md';
+    const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json') });
+    const makeOp = (id, sequence, line) => ({
+      schemaVersion: 1,
+      operationId: id,
+      vaultId: 'vault-a',
+      vaultRelativePath: filePath,
+      sequence,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line },
+    });
+    const op1 = makeOp('op-norecurse-01', 1, '- first');
+    const op2 = makeOp('op-norecurse-02', 2, '- second');
+    const op3 = makeOp('op-norecurse-03', 3, '- third');
+    ledger.ensure(op1);
+    ledger.ensure(op2);
+
+    let hookCalls = 0;
+    let adapter;
+    adapter = createVaultMutationAdapter({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      ledger,
+      transforms: createJarvosVaultTransforms(),
+      probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+      evaluate: () => { throw new Error('must not dispatch blocked op2'); },
+      headReconcile: () => {
+        hookCalls += 1;
+        // Deliberately execute op2 (still behind planned op1) to force a nested prior_operation_pending.
+        const nested = adapter.execute(op2, { drain: false });
+        assert.equal(nested.status, 'blocked');
+        assert.equal(nested.adapterEvidence.reason, 'prior_operation_pending');
+      },
+    });
+
+    const receipt3 = adapter.submit(op3, { drain: false });
+    assert.equal(hookCalls, 1, 'headReconcile must never recurse');
+    assert.equal(receipt3.status, 'blocked');
+    assert.equal(receipt3.adapterEvidence.reason, 'prior_operation_pending');
+    assert.equal(receipt3.adapterEvidence.blockingOperationId, op1.operationId);
+    assert.equal(receipt3.adapterEvidence.blockingStatus, 'planned');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
