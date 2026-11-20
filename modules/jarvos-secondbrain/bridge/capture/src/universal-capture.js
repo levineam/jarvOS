@@ -296,13 +296,10 @@ function captureFailureMessage(result) {
     const errorMessage = plainDetailToken(evidence.errorMessage);
     const capabilityReason = plainDetailToken(evidence.capabilityReason);
     if (primary === 'prior_operation_pending' && (!receipt?.status || receipt.status === 'blocked')) {
-      const blockingId = plainDetailToken(evidence.blockingOperationId);
+      // The blocking operation's id belongs to another request; it stays in the
+      // internal receipt and operator health output, never in caller-facing text.
       const blockingStatus = plainDetailToken(evidence.blockingStatus);
-      if (blockingId && blockingStatus) {
-        detailParts.push(`${primary}: blocked by operation ${blockingId} with status ${blockingStatus}`);
-      } else if (blockingId) {
-        detailParts.push(`${primary}: blocked by operation ${blockingId}`);
-      } else if (blockingStatus) {
+      if (blockingStatus) {
         detailParts.push(`${primary}: blocked by prior operation with status ${blockingStatus}`);
       } else {
         detailParts.push(primary);

@@ -364,7 +364,13 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     // Exclude the just-persisted foreground intent: a drain must not recursively
     // re-dispatch it before this invocation establishes its terminal state.
     if (drain && !draining && !retryingHead && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
-    let claim = mutationLedger.claim(operation, ownerId, claimOnlyIfStatus ? { onlyIfStatus: claimOnlyIfStatus } : undefined);
+    // A journal ensure-create whose file is missing on disk may go ahead of
+    // queued line transforms for that journal (they wait on a missing target).
+    const createMissingJournal = operation.operationKind === 'create' && operation.ensureExists === true
+      && DEFAULT_JOURNAL_PATH.test(operation.vaultRelativePath)
+      && !fs.existsSync(path.join(vaultRoot, operation.vaultRelativePath));
+    const claimOptions = { ...(claimOnlyIfStatus ? { onlyIfStatus: claimOnlyIfStatus } : {}), ...(createMissingJournal ? { aheadOfPlannedTransforms: true } : {}) };
+    let claim = mutationLedger.claim(operation, ownerId, claimOptions);
     const runHeadReconcile = () => {
       try {
         retryingHead = true;

@@ -544,7 +544,7 @@ test('capture exit code and stderr message are derived from the result, not from
   });
   assert.equal(
     blockedMessage,
-    'Capture not acknowledged: journal Journal/2026-10-28.md: failed (prior_operation_pending: blocked by operation op-stuck-head-01 with status conflict)',
+    'Capture not acknowledged: journal Journal/2026-10-28.md: failed (prior_operation_pending: blocked by prior operation with status conflict)',
   );
   assert.doesNotMatch(blockedMessage, /SECRET_SYNTHETIC_BODY_DO_NOT_LEAK/);
   assert.equal(
@@ -563,7 +563,7 @@ test('capture exit code and stderr message are derived from the result, not from
         },
       },
     }),
-    'Capture not acknowledged (prior_operation_pending: blocked by operation op-planned-head with status planned; capability_no_result)',
+    'Capture not acknowledged (prior_operation_pending: blocked by prior operation with status planned; capability_no_result)',
   );
 });
 

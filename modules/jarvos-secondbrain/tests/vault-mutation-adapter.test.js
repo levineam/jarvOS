@@ -1244,3 +1244,79 @@ test('a transform whose target Obsidian has not indexed yet stays planned and co
     assert.match(files.get(journalPath).content, /- synthetic idea/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('a journal deleted while its line was queued can be recreated, and both queued and new lines land', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-deleted-journal-'));
+  try {
+    const journalPath = 'Journal/2026-01-04.md';
+    const files = new Map();
+    let available = false;
+    const context = {
+      TextDecoder,
+      Uint8Array,
+      atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+      JSON,
+      app: {
+        vault: {
+          getFileByPath: (target) => files.get(target) || null,
+          create: (target, content) => { const entry = { path: target, content }; files.set(target, entry); return settled(entry); },
+          process: (entry, transform) => { entry.content = transform(entry.content); return settled(entry); },
+          read: (entry) => settled(entry.content),
+        },
+      },
+    };
+    context.globalThis = context;
+    const adapter = createVaultMutationAdapter({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      ledgerPath: path.join(root, '.state', 'ledger.json'),
+      transforms: createJarvosVaultTransforms(),
+      probe: () => ({ state: available ? 'available' : 'app_stopped', vaultId: 'vault-a' }),
+      evaluate: (code) => {
+        const raw = vm.runInNewContext(code, context);
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      },
+      pollIntervalMs: 1,
+    });
+    const line = (id, sequence, text) => ({
+      schemaVersion: 1, operationId: id, vaultId: 'vault-a', vaultRelativePath: journalPath, sequence,
+      operationKind: 'transform', transformName: 'append-line', transformVersion: 1, replayPayload: { line: text },
+    });
+    const queued = line('op-deleted-journal-01', 1, '- queued synthetic idea');
+    assert.equal(adapter.submit(queued, { drain: false }).status, 'unavailable');
+    assert.equal(adapter.ledger.get(queued.operationId).status, 'planned');
+
+    // The journal is gone from disk and from the app when Obsidian returns.
+    available = true;
+    const create = { schemaVersion: 1, operationId: 'op-deleted-journal-02', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 2, operationKind: 'create', ensureExists: true, content: '# Journal\n' };
+    assert.equal(adapter.submit(create, { drain: false }).status, 'committed');
+    const fresh = line('op-deleted-journal-03', 3, '- new synthetic idea');
+    assert.equal(adapter.submit(fresh, { drain: false }).status, 'committed');
+    assert.equal(adapter.ledger.get(queued.operationId).status, 'acknowledged');
+    assert.match(files.get(journalPath).content, /- queued synthetic idea/);
+    assert.match(files.get(journalPath).content, /- new synthetic idea/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('an ensure-create does not jump queued transforms when the journal file exists on disk', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-journal-on-disk-'));
+  try {
+    const journalPath = 'Journal/2026-01-05.md';
+    fs.mkdirSync(path.join(root, 'Journal'), { recursive: true });
+    fs.writeFileSync(path.join(root, journalPath), '# Journal\n');
+    const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
+    const ledger = createVaultMutationLedger({ filePath: path.join(root, '.state', 'ledger.json') });
+    const adapter = createVaultMutationAdapter({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      ledger,
+      transforms: createJarvosVaultTransforms(),
+      probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+      evaluate: () => { throw new Error('must not dispatch'); },
+    });
+    ledger.ensure({ schemaVersion: 1, operationId: 'op-on-disk-01', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 1, operationKind: 'transform', transformName: 'append-line', transformVersion: 1, replayPayload: { line: '- synthetic' } });
+    const receipt = adapter.execute({ schemaVersion: 1, operationId: 'op-on-disk-02', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 2, operationKind: 'create', ensureExists: true, content: '# Journal\n' }, { drain: false, allowHeadRetry: false });
+    assert.equal(receipt.status, 'blocked');
+    assert.equal(receipt.adapterEvidence.reason, 'prior_operation_pending');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

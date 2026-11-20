@@ -211,11 +211,15 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     writeAtomic(filePath, data, fsImpl);
     return sequence;
   }); }
-  function claim(operation, ownerId, { allowAmbiguousRetry = false, local = false, onlyIfStatus } = {}) { return transaction(() => {
+  function claim(operation, ownerId, { allowAmbiguousRetry = false, local = false, onlyIfStatus, aheadOfPlannedTransforms = false } = {}) { return transaction(() => {
     if (!ownerId) throw new Error('claim ownerId is required');
     const data = readUnlocked({ repair: true }); const ensured = ensureUnlocked(data, operation); const { record, created } = ensured; const claimKey = key(record.operation); const stamp = now();
     const persistCreated = () => { if (created) writeAtomic(filePath, data, fsImpl); };
-    const prior = Object.values(data.operations).filter((entry) => key(entry.operation) === claimKey && entry.operation.sequence < record.operation.sequence && blocksWriteOrder(entry));
+    // aheadOfPlannedTransforms: an ensure-exists create of a file that is missing
+    // may run before never-dispatched transforms of that same file; they cannot
+    // have applied to a file that does not exist, and they apply after it.
+    const skippable = (entry) => aheadOfPlannedTransforms && entry.status === 'planned' && entry.operation.operationKind === 'transform';
+    const prior = Object.values(data.operations).filter((entry) => key(entry.operation) === claimKey && entry.operation.sequence < record.operation.sequence && blocksWriteOrder(entry) && !skippable(entry));
     if (prior.length) { persistCreated(); return { granted: false, reason: prior.some((entry) => ['unknown_after_dispatch', 'conflict', 'quarantined'].includes(entry.status)) ? 'prior_operation_blocked' : 'prior_operation_pending', record }; }
     if (TERMINAL.has(record.status)) { persistCreated(); return { granted: false, reason: record.status === 'acknowledged' ? 'already_acknowledged' : 'already_terminal', record }; }
     // onlyIfStatus: a record whose state changed since the caller chose it (for
