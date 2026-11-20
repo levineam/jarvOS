@@ -96,21 +96,27 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     }
     return summary;
   }
-  function drainFile(vaultRelativePath, { excludeOperationId, vaultId: targetVaultId = vaultId } = {}) {
+  function drainFile(vaultRelativePath, { excludeOperationId, vaultId: targetVaultId = vaultId, limit = 4 } = {}) {
     const summary = { processed: 0, acknowledged: 0, conflicts: 0, blocked: 0, quarantined: 0, pending: 0 };
     if (typeof vaultRelativePath !== 'string' || !vaultRelativePath) return summary;
-    const head = ledger.active().find((record) => (
-      record.operation.vaultRelativePath === vaultRelativePath
-      && (!targetVaultId || record.operation.vaultId === targetVaultId)
-    ));
-    if (!head || head.operation.operationId === excludeOperationId) return summary;
-    const result = reconcileOne(head);
-    summary.processed += 1;
-    if (result === 'acknowledged') summary.acknowledged += 1;
-    else if (result === 'conflict') summary.conflicts += 1;
-    else if (result === 'quarantined') summary.quarantined += 1;
-    else if (result === 'blocked') summary.blocked += 1;
-    else summary.pending += 1;
+    // Only never-dispatched (planned) heads are retried here. Anything else,
+    // such as an offline local_applied save, stays readback-only so a new
+    // capture can never replay content the person has since deleted.
+    for (let index = 0; index < limit; index += 1) {
+      const head = ledger.active().find((record) => (
+        record.operation.vaultRelativePath === vaultRelativePath
+        && (!targetVaultId || record.operation.vaultId === targetVaultId)
+      ));
+      if (!head || head.status !== 'planned' || head.operation.operationId === excludeOperationId) break;
+      const result = reconcileOne(head);
+      summary.processed += 1;
+      if (result === 'acknowledged') { summary.acknowledged += 1; continue; }
+      if (result === 'conflict') summary.conflicts += 1;
+      else if (result === 'quarantined') summary.quarantined += 1;
+      else if (result === 'blocked') summary.blocked += 1;
+      else summary.pending += 1;
+      break;
+    }
     return summary;
   }
 

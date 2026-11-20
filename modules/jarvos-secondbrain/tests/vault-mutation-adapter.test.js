@@ -947,7 +947,9 @@ test('targeted head retry drains a planned head on the same file even under exac
     const receiptB = exactCtx.mutationExecutor(opB);
     assert.equal(receiptB.status, 'committed');
     assert.equal(receiptB.obsidian, 'acknowledged');
-    assert.deepEqual(hookPaths, [journalPath]);
+    // Journal paths keep the dedicated journal predecessor recovery, which can
+    // clear several planned predecessors; the per-file head retry is for other notes.
+    assert.deepEqual(hookPaths, []);
     assert.equal(service.adapter.ledger.get(opA.operationId).status, 'acknowledged');
     assert.equal(service.adapter.ledger.get(opB.operationId).status, 'acknowledged');
     assert.equal(service.adapter.ledger.get(unrelated.operationId).status, 'planned');
@@ -1142,7 +1144,7 @@ test('targeted head retry does not recurse when the head retry itself encounters
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-stuck-head-norecurse-'));
   try {
     const { createVaultMutationLedger } = require('../adapters/obsidian/src/vault-mutation-ledger');
-    const filePath = 'Journal/2026-01-02.md';
+    const filePath = 'Notes/Session Thread.md';
     const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json') });
     const makeOp = (id, sequence, line) => ({
       schemaVersion: 1,
@@ -1185,5 +1187,60 @@ test('targeted head retry does not recurse when the head retry itself encounters
     assert.equal(receipt3.adapterEvidence.reason, 'prior_operation_pending');
     assert.equal(receipt3.adapterEvidence.blockingOperationId, op1.operationId);
     assert.equal(receipt3.adapterEvidence.blockingStatus, 'planned');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a transform whose target Obsidian has not indexed yet stays planned and commits once the file appears', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-missing-target-'));
+  try {
+    const journalPath = 'Journal/2026-01-03.md';
+    const files = new Map();
+    const context = {
+      TextDecoder,
+      Uint8Array,
+      atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+      JSON,
+      app: {
+        vault: {
+          getFileByPath: (target) => files.get(target) || null,
+          process: (entry, transform) => { entry.content = transform(entry.content); return settled(entry); },
+          read: (entry) => settled(entry.content),
+        },
+      },
+    };
+    context.globalThis = context;
+    const adapter = createVaultMutationAdapter({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      ledgerPath: path.join(root, 'ledger.json'),
+      transforms: createJarvosVaultTransforms(),
+      probe: () => ({ state: 'available', vaultId: 'vault-a' }),
+      evaluate: (code) => {
+        const raw = vm.runInNewContext(code, context);
+        return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      },
+      pollIntervalMs: 1,
+    });
+    const line = {
+      schemaVersion: 1,
+      operationId: 'op-missing-target-01',
+      vaultId: 'vault-a',
+      vaultRelativePath: journalPath,
+      sequence: 1,
+      operationKind: 'transform',
+      transformName: 'append-line',
+      transformVersion: 1,
+      replayPayload: { line: '- synthetic idea' },
+    };
+    const first = adapter.submit(line, { drain: false });
+    assert.equal(first.status, 'unavailable');
+    assert.equal(first.adapterEvidence.errorClass, 'missing_target');
+    assert.equal(adapter.ledger.get(line.operationId).status, 'planned');
+
+    files.set(journalPath, { path: journalPath, content: '# Journal\n' });
+    const retried = adapter.execute(line, { drain: false });
+    assert.equal(retried.status, 'committed');
+    assert.equal(adapter.ledger.get(line.operationId).status, 'acknowledged');
+    assert.match(files.get(journalPath).content, /- synthetic idea/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
