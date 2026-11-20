@@ -60,7 +60,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
       return { status: 'conflict', errorClass: error.code === 'EEXIST' ? 'create_collision' : 'local_mutation_failed' };
     }
   }
-  function reconcileOne(record) {
+  function reconcileOne(record, { onlyIfPlanned = false } = {}) {
     const { operation } = record;
     if (record.status === 'quarantined') return 'blocked';
     // Lack of a composed registry is an unavailable dependency, not grounds to
@@ -74,7 +74,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     if (record.status === 'unknown_after_dispatch') return 'blocked'; // ambiguity may not be retried until app readback proves the invariant
     if (record.status === 'local_mutating') return 'blocked'; // crash boundary: no automatic disk retry
     if (record.status === 'conflict' || record.status === 'quarantined') return 'blocked';
-    const result = adapter.execute(operation, { excludeOperationId: operation.operationId, drain: false, allowHeadRetry: false });
+    const result = adapter.execute(operation, { excludeOperationId: operation.operationId, drain: false, allowHeadRetry: false, ...(onlyIfPlanned ? { claimOnlyIfStatus: ['planned'] } : {}) });
     return result.status === 'committed' || result.status === 'already_satisfied' ? 'acknowledged' : result.status;
   }
   function drain({ limit = 8, timeMs = 1_000, excludeOperationId } = {}) {
@@ -108,7 +108,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
         && (!targetVaultId || record.operation.vaultId === targetVaultId)
       ));
       if (!head || head.status !== 'planned' || head.operation.operationId === excludeOperationId) break;
-      const result = reconcileOne(head);
+      const result = reconcileOne(head, { onlyIfPlanned: true });
       summary.processed += 1;
       if (result === 'acknowledged') { summary.acknowledged += 1; continue; }
       if (result === 'conflict') summary.conflicts += 1;

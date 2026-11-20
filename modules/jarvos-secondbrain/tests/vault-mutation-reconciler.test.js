@@ -237,3 +237,17 @@ test('health reports stalePlanned and oldestPlannedAgeMs with an injected clock'
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('drainFile asks the adapter to claim only a still-planned head', () => {
+  const f = fixture();
+  try {
+    f.ledger.ensure(op('op-claim-planned-01', 1, { vaultRelativePath: 'Notes/Race.md' }));
+    const seen = [];
+    f.adapter.acknowledgeIfSatisfied = () => false;
+    f.adapter.execute = (operation, options) => { seen.push(options.claimOnlyIfStatus); return { status: 'blocked' }; };
+    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, vaultId: 'vault' });
+    const summary = reconciler.drainFile('Notes/Race.md');
+    assert.deepEqual(seen, [['planned']]);
+    assert.equal(summary.blocked, 1);
+  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+});

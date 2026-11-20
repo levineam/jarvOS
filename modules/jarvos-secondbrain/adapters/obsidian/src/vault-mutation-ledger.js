@@ -211,13 +211,16 @@ function createVaultMutationLedger({ filePath, fsImpl = fs, now = () => Date.now
     writeAtomic(filePath, data, fsImpl);
     return sequence;
   }); }
-  function claim(operation, ownerId, { allowAmbiguousRetry = false, local = false } = {}) { return transaction(() => {
+  function claim(operation, ownerId, { allowAmbiguousRetry = false, local = false, onlyIfStatus } = {}) { return transaction(() => {
     if (!ownerId) throw new Error('claim ownerId is required');
     const data = readUnlocked({ repair: true }); const ensured = ensureUnlocked(data, operation); const { record, created } = ensured; const claimKey = key(record.operation); const stamp = now();
     const persistCreated = () => { if (created) writeAtomic(filePath, data, fsImpl); };
     const prior = Object.values(data.operations).filter((entry) => key(entry.operation) === claimKey && entry.operation.sequence < record.operation.sequence && blocksWriteOrder(entry));
     if (prior.length) { persistCreated(); return { granted: false, reason: prior.some((entry) => ['unknown_after_dispatch', 'conflict', 'quarantined'].includes(entry.status)) ? 'prior_operation_blocked' : 'prior_operation_pending', record }; }
     if (TERMINAL.has(record.status)) { persistCreated(); return { granted: false, reason: record.status === 'acknowledged' ? 'already_acknowledged' : 'already_terminal', record }; }
+    // onlyIfStatus: a record whose state changed since the caller chose it (for
+    // example a planned head that another writer saved offline) is left alone.
+    if (onlyIfStatus && !onlyIfStatus.includes(record.status)) { persistCreated(); return { granted: false, reason: 'status_changed', record }; }
     if (record.status === 'quarantined' || record.status === 'conflict' || (record.status === 'unknown_after_dispatch' && !allowAmbiguousRetry)) { persistCreated(); return { granted: false, reason: 'operation_blocked', record }; }
     const existing = data.claims[claimKey];
     if (existing && existing.expiresAt > stamp) { persistCreated(); return { granted: false, reason: 'claim_active', record }; }

@@ -343,7 +343,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     }
     return true;
   }
-  function execute(input, { excludeOperationId, drain = true, recoverBlockedJournal = false, allowHeadRetry = true } = {}) {
+  function execute(input, { excludeOperationId, drain = true, recoverBlockedJournal = false, allowHeadRetry = true, claimOnlyIfStatus } = {}) {
     const operation = validateOperation(input);
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
@@ -364,7 +364,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     // Exclude the just-persisted foreground intent: a drain must not recursively
     // re-dispatch it before this invocation establishes its terminal state.
     if (drain && !draining && !retryingHead && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
-    let claim = mutationLedger.claim(operation, ownerId);
+    let claim = mutationLedger.claim(operation, ownerId, claimOnlyIfStatus ? { onlyIfStatus: claimOnlyIfStatus } : undefined);
     const runHeadReconcile = () => {
       try {
         retryingHead = true;
@@ -424,9 +424,11 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       if (result?.status === 'error' && result.errorClass === 'missing_target' && operation.operationKind === 'transform') {
         // The app has not indexed the target yet (for example a journal created
         // on disk while Obsidian was away). Nothing changed; keep it retryable.
+        // Clear the result token before releasing the claim, so a retry that
+        // claims next can never have its own result erased by this cleanup.
         const failure = failureEvidence('missing_target', result.error);
-        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: failure });
         try { run(cleanupProgram(operation.operationId)); } catch {}
+        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: failure });
         return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure });
       }
       if (result?.status === 'error' || result?.status === 'done') {
