@@ -27,15 +27,6 @@ function classifyCapabilityResult(inspected, vaultName, vaultId) {
   if (inspected.hasVault !== true) return { state: 'api_incompatible' };
   return inspected.vaultName && inspected.vaultName !== vaultName ? { state: 'wrong_vault' } : { state: 'available', vaultId };
 }
-function classifyCapabilityError(error) {
-  const message = String(error?.message || '');
-  if (error?.code === 'ENOENT') return { state: 'cli_missing' };
-  if (error?.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' };
-  if (/disabled/i.test(message)) return { state: 'cli_disabled' };
-  if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' };
-  if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' };
-  return { state: 'app_unreachable' };
-}
 
 // Operator diagnostics for a failed dispatch. The raw exception can carry the
 // whole eval program (note content, base64), absolute home or vault paths and
@@ -218,7 +209,7 @@ function buildObsidianInvariantProgram(operation, inspectionToken, inspectionNon
 function tokenProgram(operationId) { return `JSON.stringify(globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}] || null)`; }
 function cleanupProgram(operationId) { return `delete globalThis.${RESULT_STORE}?.[${JSON.stringify(operationId)}]; JSON.stringify(true)`; }
 
-function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS, probe, ownerId = crypto.randomUUID(), opportunisticDrain, headReconcile, allowDeleteOperation } = {}) {
+function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basename(vaultRoot || ''), ledger, ledgerPath, transforms, evaluate, maxPollAttempts = 40, pollIntervalMs = 50, pollTimeoutMs = DEFAULT_POLL_TIMEOUT_MS, probeTimeoutMs = DEFAULT_PROBE_TIMEOUT_MS, probe, ownerId = crypto.randomUUID(), opportunisticDrain, allowDeleteOperation } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof vaultId !== 'string' || !vaultId) throw new Error('vaultId is required');
   // Keep operational intent outside authored vault content. Hosts normally supply
@@ -237,13 +228,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const run = evaluate || ((code, timeoutMs = pollTimeoutMs) => runObsidianEval(code, { vaultName, timeoutMs }));
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
-  let retryingHead = false;
-  function unavailableCapabilityDetails(check) {
-    const obsidian = check?.state === 'available' ? 'wrong_vault' : (CAPABILITY_STATES.includes(check?.state) ? check.state : 'app_unreachable');
-    const capabilityReason = CAPABILITY_REASONS.includes(check?.reason) ? check.reason : undefined;
-    return { obsidian, ...(capabilityReason ? { capabilityReason } : {}) };
-  }
-  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); return classifyCapabilityResult(inspected, vaultName, vaultId); } catch (error) { return classifyCapabilityError(error); } }
+  function capability() { if (probe) return probe(); try { const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.create && app?.vault?.process && app?.vault?.read) })`, probeTimeoutMs); return classifyCapabilityResult(inspected, vaultName, vaultId); } catch (error) { const message = String(error.message || ''); if (error.code === 'ENOENT') return { state: 'cli_missing' }; if (error.code === 'ETIMEDOUT' || /timed?\s*out|busy|temporar/i.test(message)) return { state: 'app_busy' }; if (/disabled/i.test(message)) return { state: 'cli_disabled' }; if (/unsupported|unknown command|eval/i.test(message)) return { state: 'cli_unsupported' }; if (/not running|no running|connection refused|failed to connect/i.test(message)) return { state: 'app_stopped' }; return { state: 'app_unreachable' }; } }
   function inspectInvariant(input) {
     const operation = validateOperation(input);
     if (operation.vaultId !== vaultId) return { status: 'unavailable' };
@@ -302,13 +287,6 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (validationReason) return createInternalReceipt({ operation, status: 'failed', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { validationReason } });
     return null;
   }
-  function blockingHeadFor(operation) {
-    return mutationLedger.active().find((entry) => (
-      entry.operation.vaultId === operation.vaultId
-      && entry.operation.vaultRelativePath === operation.vaultRelativePath
-      && entry.operation.sequence < operation.sequence
-    )) || null;
-  }
   function recoverJournalPredecessors(operation, { reason }) {
     const { vaultRelativePath, sequence } = operation;
     if (!DEFAULT_JOURNAL_PATH.test(vaultRelativePath)) return false;
@@ -325,14 +303,14 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       if (inspection.status === 'satisfied' && inspection.invariant === true) {
         acknowledgeInspected(prior);
       } else {
-        execute(prior, { drain: false, allowHeadRetry: false });
+        execute(prior, { drain: false });
       }
       const record = mutationLedger.get(prior.operationId);
       if (record && blocksWriteOrder(record)) return false;
     }
     return true;
   }
-  function execute(input, { excludeOperationId, drain = true, recoverBlockedJournal = false, allowHeadRetry = true, claimOnlyIfStatus } = {}) {
+  function execute(input, { excludeOperationId, drain = true, recoverBlockedJournal = false } = {}) {
     const operation = validateOperation(input);
     const rejected = validationFailure(operation);
     if (rejected) return rejected;
@@ -345,33 +323,17 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     if (!check || !CAPABILITY_STATES.includes(check.state) || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) {
       // Only allowlisted state and reason codes leave the probe; an unknown
       // state is an unreachable transport, never an echoed probe string.
-      const { obsidian, capabilityReason } = unavailableCapabilityDetails(check);
+      const obsidian = check?.state === 'available' ? 'wrong_vault' : (CAPABILITY_STATES.includes(check?.state) ? check.state : 'app_unreachable');
+      const capabilityReason = CAPABILITY_REASONS.includes(check?.reason) ? check.reason : undefined;
       return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian, adapterEvidence: capabilityReason ? { capabilityReason } : undefined });
     }
     // A successful connection is a bounded opportunity, never an unbounded
     // startup writer. The host supplies the reconciler to avoid a module cycle.
     // Exclude the just-persisted foreground intent: a drain must not recursively
     // re-dispatch it before this invocation establishes its terminal state.
-    if (drain && !draining && !retryingHead && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
-    let claim = mutationLedger.claim(operation, ownerId, claimOnlyIfStatus ? { onlyIfStatus: claimOnlyIfStatus } : undefined);
-    const runHeadReconcile = () => {
-      try {
-        retryingHead = true;
-        headReconcile(operation.vaultRelativePath, { excludeOperationId: operation.operationId });
-      } catch { /* the foreground mutation remains authoritative */ }
-      finally { retryingHead = false; }
-      const retry = mutationLedger.claim(operation, ownerId);
-      if (retry.granted || retry.reason === 'already_acknowledged') claim = retry;
-    };
-    const useHeadReconcile = !claim.granted
-      && claim.reason === 'prior_operation_pending'
-      && !retryingHead
-      && allowHeadRetry
-      && typeof headReconcile === 'function'
-      && !(recoverBlockedJournal && DEFAULT_JOURNAL_PATH.test(operation.vaultRelativePath));
-    if (useHeadReconcile) {
-      runHeadReconcile();
-    } else if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
+    if (drain && !draining && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
+    let claim = mutationLedger.claim(operation, ownerId);
+    if (recoverBlockedJournal && recoverJournalPredecessors(operation, claim)) {
       const retry = mutationLedger.claim(operation, ownerId);
       if (retry.granted || retry.reason === 'already_acknowledged') claim = retry;
     }
@@ -382,10 +344,11 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     }
     if (!claim.granted) {
       const adapterEvidence = { reason: claim.reason };
-      if (claim.reason === 'prior_operation_pending') {
-        // Only the blocker's state leaves the adapter: its id and age belong to
-        // another request (operators read them from the ledger and health output).
-        const blocker = blockingHeadFor(operation);
+      // Name only the blocking operation's state: its id and age belong to
+      // another request (operators read them from the ledger and health output).
+      if (claim.reason === 'prior_operation_pending' || claim.reason === 'prior_operation_blocked') {
+        const blocker = mutationLedger.active().find((entry) => entry.operation.vaultId === operation.vaultId
+          && entry.operation.vaultRelativePath === operation.vaultRelativePath && entry.operation.sequence < operation.sequence);
         if (blocker) adapterEvidence.blockingStatus = blocker.status;
       }
       return createInternalReceipt({ operation, status: 'blocked', lifecycleState: 'blocked', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence });

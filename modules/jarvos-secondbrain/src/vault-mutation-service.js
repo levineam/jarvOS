@@ -121,22 +121,14 @@ function createConfiguredVaultMutationService({
 } = {}) {
   if (typeof vaultRoot !== 'string' || !path.isAbsolute(vaultRoot)) throw new Error('vaultRoot must be absolute');
   if (typeof source !== 'string' || !source) throw new Error('mutation source is required');
-  let reconciler;
-  const adapter = suppliedAdapter || createVaultMutationAdapter({
-    vaultRoot,
-    vaultId,
-    transforms,
-    headReconcile: (vaultRelativePath, options) => reconciler?.drainFile?.(vaultRelativePath, options),
-    ...adapterOptions,
-    allowDeleteOperation,
-  });
+  const adapter = suppliedAdapter || createVaultMutationAdapter({ vaultRoot, vaultId, transforms, ...adapterOptions, allowDeleteOperation });
   if (typeof adapter.submit !== 'function') throw new Error('vault mutation adapter must support atomic operation planning');
   // Only an explicit stopped-app signal is a default absence proof. A missing
   // CLI, timeout, busy app, or generic transport failure cannot establish that
   // Obsidian is not concurrently mutating the vault.
   const absenceProof = proveObsidianAbsent || (() => adapter.capability().state === 'app_stopped');
   const offlineWriteCapability = Object.freeze({});
-  reconciler = suppliedReconciler || adapter.createReconciler({
+  const reconciler = suppliedReconciler || adapter.createReconciler({
     // Offline fallback remains closed unless this composition host supplies a
     // proof that Obsidian is absent. A caller cannot smuggle this authority in
     // operation data.

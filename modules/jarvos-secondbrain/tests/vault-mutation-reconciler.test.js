@@ -111,57 +111,6 @@ test('disk bytes never acknowledge a stale Obsidian readback', () => {
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
 
-test('drainFile reconciles consecutive planned heads for the target file only, up to its limit', () => {
-  const f = fixture();
-  try {
-    const journalPath = 'Journal/2026-01-02.md';
-    const otherPath = 'Notes/Other.md';
-    f.ledger.ensure(op('op-file-head-01', 1, { vaultRelativePath: journalPath }));
-    f.ledger.ensure(op('op-file-next-02', 2, { vaultRelativePath: journalPath }));
-    f.ledger.ensure(op('op-other-file-01', 1, { vaultRelativePath: otherPath }));
-    const executed = [];
-    f.adapter.execute = (operation) => {
-      executed.push(operation.operationId);
-      const claim = f.ledger.claim(operation, 'drain-file-adapter');
-      f.ledger.transition(operation.operationId, 'acknowledged', { ownerId: 'drain-file-adapter', fence: claim.fence });
-      return { status: 'committed' };
-    };
-    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, vaultId: 'vault' });
-    const limited = reconciler.drainFile(journalPath, { limit: 1 });
-    assert.equal(limited.processed, 1);
-    assert.deepEqual(executed, ['op-file-head-01']);
-    assert.equal(f.ledger.get('op-file-next-02').status, 'planned');
-    const summary = reconciler.drainFile(journalPath);
-    assert.equal(summary.processed, 1);
-    assert.equal(summary.acknowledged, 1);
-    assert.deepEqual(executed, ['op-file-head-01', 'op-file-next-02']);
-    assert.equal(f.ledger.get('op-file-head-01').status, 'acknowledged');
-    assert.equal(f.ledger.get('op-file-next-02').status, 'acknowledged');
-    assert.equal(f.ledger.get('op-other-file-01').status, 'planned');
-    assert.equal(reconciler.drainFile('Notes/Missing.md').processed, 0);
-  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
-});
-
-test('drainFile leaves a local_applied head readback-only so deleted content is never replayed', () => {
-  const f = fixture();
-  try {
-    const notePath = 'Notes/Offline.md';
-    const head = op('op-offline-head-01', 1, { vaultRelativePath: notePath });
-    f.ledger.ensure(head);
-    const claim = f.ledger.claim(head, 'offline-writer');
-    f.ledger.transition(head.operationId, 'local_mutating', { ownerId: 'offline-writer', fence: claim.fence });
-    f.ledger.transition(head.operationId, 'local_applied', { ownerId: 'offline-writer', fence: claim.fence, evidence: { localHash: 'synthetic' } });
-    const executed = [];
-    f.adapter.execute = (operation) => { executed.push(operation.operationId); return { status: 'committed' }; };
-    f.adapter.acknowledgeIfSatisfied = () => false;
-    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, vaultId: 'vault' });
-    const summary = reconciler.drainFile(notePath);
-    assert.equal(summary.processed, 0);
-    assert.deepEqual(executed, []);
-    assert.equal(f.ledger.get(head.operationId).status, 'local_applied');
-  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
-});
-
 test('health reports stalePlanned and oldestPlannedAgeMs with an injected clock', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-reconcile-health-'));
   try {
@@ -236,18 +185,4 @@ test('health reports stalePlanned and oldestPlannedAgeMs with an injected clock'
       process.stdout.write = originalWrite;
     }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});
-
-test('drainFile asks the adapter to claim only a still-planned head', () => {
-  const f = fixture();
-  try {
-    f.ledger.ensure(op('op-claim-planned-01', 1, { vaultRelativePath: 'Notes/Race.md' }));
-    const seen = [];
-    f.adapter.acknowledgeIfSatisfied = () => false;
-    f.adapter.execute = (operation, options) => { seen.push(options.claimOnlyIfStatus); return { status: 'blocked' }; };
-    const reconciler = createVaultMutationReconciler({ adapter: f.adapter, ledger: f.ledger, vaultRoot: f.root, vaultId: 'vault' });
-    const summary = reconciler.drainFile('Notes/Race.md');
-    assert.deepEqual(seen, [['planned']]);
-    assert.equal(summary.blocked, 1);
-  } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });

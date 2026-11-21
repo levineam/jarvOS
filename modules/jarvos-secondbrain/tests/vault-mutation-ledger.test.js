@@ -257,18 +257,3 @@ for (const state of ['planned', 'dispatched', 'local_mutating', 'local_applied',
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 }
-
-test('claim with onlyIfStatus refuses a record whose state changed since the caller chose it', () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-ledger-onlyif-'));
-  try {
-    const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json') });
-    const head = { ...op('op-onlyif-01'), content: 'synthetic' };
-    ledger.ensure(head);
-    const offline = ledger.claim(head, 'offline-writer', { local: true });
-    ledger.transition(head.operationId, 'local_applied', { ownerId: 'offline-writer', fence: offline.fence, evidence: { localHash: 'synthetic' } });
-    const refused = ledger.claim(head, 'head-retry', { onlyIfStatus: ['planned'] });
-    assert.equal(refused.granted, false);
-    assert.equal(refused.reason, 'status_changed');
-    assert.equal(ledger.get(head.operationId).status, 'local_applied');
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
-});

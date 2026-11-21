@@ -60,7 +60,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
       return { status: 'conflict', errorClass: error.code === 'EEXIST' ? 'create_collision' : 'local_mutation_failed' };
     }
   }
-  function reconcileOne(record, { onlyIfPlanned = false } = {}) {
+  function reconcileOne(record) {
     const { operation } = record;
     if (record.status === 'quarantined') return 'blocked';
     // Lack of a composed registry is an unavailable dependency, not grounds to
@@ -74,7 +74,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     if (record.status === 'unknown_after_dispatch') return 'blocked'; // ambiguity may not be retried until app readback proves the invariant
     if (record.status === 'local_mutating') return 'blocked'; // crash boundary: no automatic disk retry
     if (record.status === 'conflict' || record.status === 'quarantined') return 'blocked';
-    const result = adapter.execute(operation, { excludeOperationId: operation.operationId, drain: false, allowHeadRetry: false, ...(onlyIfPlanned ? { claimOnlyIfStatus: ['planned'] } : {}) });
+    const result = adapter.execute(operation, { excludeOperationId: operation.operationId });
     return result.status === 'committed' || result.status === 'already_satisfied' ? 'acknowledged' : result.status;
   }
   function drain({ limit = 8, timeMs = 1_000, excludeOperationId } = {}) {
@@ -93,29 +93,6 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
       else if (result === 'quarantined') summary.quarantined += 1;
       else if (result === 'blocked') summary.blocked += 1;
       else summary.pending += 1;
-    }
-    return summary;
-  }
-  function drainFile(vaultRelativePath, { excludeOperationId, vaultId: targetVaultId = vaultId, limit = 4 } = {}) {
-    const summary = { processed: 0, acknowledged: 0, conflicts: 0, blocked: 0, quarantined: 0, pending: 0 };
-    if (typeof vaultRelativePath !== 'string' || !vaultRelativePath) return summary;
-    // Only never-dispatched (planned) heads are retried here. Anything else,
-    // such as an offline local_applied save, stays readback-only so a new
-    // capture can never replay content the person has since deleted.
-    for (let index = 0; index < limit; index += 1) {
-      const head = ledger.active().find((record) => (
-        record.operation.vaultRelativePath === vaultRelativePath
-        && (!targetVaultId || record.operation.vaultId === targetVaultId)
-      ));
-      if (!head || head.status !== 'planned' || head.operation.operationId === excludeOperationId) break;
-      const result = reconcileOne(head, { onlyIfPlanned: true });
-      summary.processed += 1;
-      if (result === 'acknowledged') { summary.acknowledged += 1; continue; }
-      if (result === 'conflict') summary.conflicts += 1;
-      else if (result === 'quarantined') summary.quarantined += 1;
-      else if (result === 'blocked') summary.blocked += 1;
-      else summary.pending += 1;
-      break;
     }
     return summary;
   }
@@ -209,7 +186,7 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     }
     return counts;
   }
-  return Object.freeze({ drain, drainFile, health, reconcileOne, resolveSatisfiedEnsureCreates, safeOfflineSave });
+  return Object.freeze({ drain, health, reconcileOne, resolveSatisfiedEnsureCreates, safeOfflineSave });
 }
 
 module.exports = { DEFAULT_JOURNAL_PATH, ENSURE_EXISTS_RESOLUTION, STALE_PLANNED_AGE_MS, createVaultMutationReconciler };
