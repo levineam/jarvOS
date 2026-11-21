@@ -272,6 +272,11 @@ function captureExitCode(result) {
   return EXIT_NOT_ACKNOWLEDGED;
 }
 
+function plainDetailToken(value) {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[\0-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 // Stderr line for a non-ok result: the first non-acknowledged artifact plus the
 // sanitized adapter failure text, when the mutation adapter recorded one.
 function captureFailureMessage(result) {
@@ -282,10 +287,31 @@ function captureFailureMessage(result) {
   const artifacts = result?.artifactReceipt?.artifacts || [];
   const failed = artifacts.filter((artifact) => !['committed', 'already_satisfied'].includes(artifact.outcome));
   const parts = failed.map((artifact) => `${artifact.kind} ${artifact.vaultRelativePath}: ${artifact.outcome}`);
-  const evidence = [result?.journalEntry?.receipt, result?.note?.receipt, result?.noteLink?.receipt]
-    .map((receipt) => receipt?.adapterEvidence)
-    .find((entry) => entry?.errorClass || entry?.reason);
-  const detail = evidence ? ` (${evidence.errorClass || evidence.reason}${evidence.errorMessage ? `: ${evidence.errorMessage}` : ''})` : '';
+  const receipt = [result?.journalEntry?.receipt, result?.note?.receipt, result?.noteLink?.receipt]
+    .find((entry) => entry?.adapterEvidence?.errorClass || entry?.adapterEvidence?.reason || entry?.adapterEvidence?.capabilityReason);
+  const evidence = receipt?.adapterEvidence;
+  const detailParts = [];
+  if (evidence) {
+    const primary = plainDetailToken(evidence.errorClass || evidence.reason);
+    const errorMessage = plainDetailToken(evidence.errorMessage);
+    const capabilityReason = plainDetailToken(evidence.capabilityReason);
+    if (primary === 'prior_operation_pending' && (!receipt?.status || receipt.status === 'blocked')) {
+      // The blocking operation's id belongs to another request; it stays in the
+      // internal receipt and operator health output, never in caller-facing text.
+      const blockingStatus = plainDetailToken(evidence.blockingStatus);
+      if (blockingStatus) {
+        detailParts.push(`${primary}: blocked by prior operation with status ${blockingStatus}`);
+      } else {
+        detailParts.push(primary);
+      }
+    } else if (primary) {
+      detailParts.push(errorMessage ? `${primary}: ${errorMessage}` : primary);
+    }
+    if (capabilityReason && capabilityReason !== primary) {
+      detailParts.push(capabilityReason);
+    }
+  }
+  const detail = detailParts.length ? ` (${detailParts.join('; ')})` : '';
   return `Capture not acknowledged${parts.length ? `: ${parts.join('; ')}` : ''}${detail}`;
 }
 

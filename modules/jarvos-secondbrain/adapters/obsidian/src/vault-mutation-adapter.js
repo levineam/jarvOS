@@ -342,7 +342,17 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
       if (inspection.status === 'satisfied' && inspection.invariant === true) return createInternalReceipt({ operation, status: 'already_satisfied', lifecycleState: 'acknowledged', persistence: 'durable', obsidian: 'acknowledged' });
       return createInternalReceipt({ operation, status: inspection.status === 'unavailable' ? 'unavailable' : 'conflict', lifecycleState: 'blocked', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { reason: 'acknowledged_record_invariant_not_current' } });
     }
-    if (!claim.granted) return createInternalReceipt({ operation, status: 'blocked', lifecycleState: 'blocked', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: { reason: claim.reason } });
+    if (!claim.granted) {
+      const adapterEvidence = { reason: claim.reason };
+      // Name only the blocking operation's state: its id and age belong to
+      // another request (operators read them from the ledger and health output).
+      if (claim.reason === 'prior_operation_pending' || claim.reason === 'prior_operation_blocked') {
+        const blocker = mutationLedger.active().find((entry) => entry.operation.vaultId === operation.vaultId
+          && entry.operation.vaultRelativePath === operation.vaultRelativePath && entry.operation.sequence < operation.sequence);
+        if (blocker) adapterEvidence.blockingStatus = blocker.status;
+      }
+      return createInternalReceipt({ operation, status: 'blocked', lifecycleState: 'blocked', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence });
+    }
     try {
       const deadline = Date.now() + pollTimeoutMs;
       const queued = run(buildObsidianMutationProgram(operation), Math.max(1, deadline - Date.now()));

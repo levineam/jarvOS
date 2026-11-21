@@ -6,18 +6,25 @@ const path = require('node:path');
 const { createObsidianSyncInspector } = require('../adapters/obsidian/src/obsidian-sync-inspector');
 const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
 
-function main() {
-  const vaultRoot = process.env.JARVOS_VAULT_ROOT;
+function main(env = process.env, serviceFactory = createConfiguredVaultMutationService) {
+  const vaultRoot = env.JARVOS_VAULT_ROOT;
   if (!vaultRoot) throw new Error('JARVOS_VAULT_ROOT is required');
-  const service = createConfiguredVaultMutationService({ vaultRoot: path.resolve(vaultRoot), source: 'operator.vault-health' });
-  const result = { mutations: service.reconciler.health() };
+  const service = serviceFactory({ vaultRoot: path.resolve(vaultRoot), source: 'operator.vault-health' });
+  const mutations = service.reconciler.health();
+  const result = {
+    mutations: {
+      ...mutations,
+      stalePlanned: mutations.stalePlanned ?? 0,
+      oldestPlannedAgeMs: mutations.oldestPlannedAgeMs ?? null,
+    },
+  };
 
-  const sampleModule = process.env.JARVOS_PRIVATE_SYNC_SAMPLE_MODULE;
+  const sampleModule = env.JARVOS_PRIVATE_SYNC_SAMPLE_MODULE;
   if (sampleModule) {
     if (!path.isAbsolute(sampleModule)) throw new Error('JARVOS_PRIVATE_SYNC_SAMPLE_MODULE must be absolute');
     const reader = require(fs.realpathSync(sampleModule)).readPrivateSyncState;
-    const vaultRelativePath = process.env.JARVOS_SYNC_VAULT_RELATIVE_PATH;
-    const expectedHash = process.env.JARVOS_SYNC_EXPECTED_HASH;
+    const vaultRelativePath = env.JARVOS_SYNC_VAULT_RELATIVE_PATH;
+    const expectedHash = env.JARVOS_SYNC_EXPECTED_HASH;
     const inspector = createObsidianSyncInspector({
       vaultId: service.vaultId,
       vaultRelativePath,

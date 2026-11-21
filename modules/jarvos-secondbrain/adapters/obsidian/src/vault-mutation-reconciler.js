@@ -17,6 +17,7 @@ const DEFAULT_JOURNAL_PATH = /^Journal\/\d{4}-\d{2}-\d{2}\.md$/;
 const RESOLVABLE_STATUSES = new Set(['planned', 'unknown_after_dispatch', 'conflict', 'blocked']);
 const STUCK_STATUSES = new Set(['unknown_after_dispatch', 'conflict']);
 const ENSURE_EXISTS_RESOLUTION = 'ensure_exists_satisfied: target journal exists, create intent met';
+const STALE_PLANNED_AGE_MS = 15 * 60 * 1000;
 
 function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, journalPathPattern = DEFAULT_JOURNAL_PATH, transforms, fsImpl = fs, now = () => Date.now(), ownerId = crypto.randomUUID(), offlineSourceAllowlist = [], proveObsidianAbsent, exclusiveWriterCapability, offlineWriteCapability } = {}) {
   if (!ledger || typeof ledger.active !== 'function') throw new Error('ledger is required');
@@ -164,17 +165,28 @@ function createVaultMutationReconciler({ adapter, ledger, vaultRoot, vaultId, jo
     return summary;
   }
   function health() {
-    const counts = { pending: 0, ambiguous: 0, conflict: 0, quarantined: 0, retainedTerminal: 0 };
+    const current = now();
+    const counts = { pending: 0, ambiguous: 0, conflict: 0, quarantined: 0, retainedTerminal: 0, stalePlanned: 0, oldestPlannedAgeMs: null };
     for (const record of Object.values(ledger.read().operations)) {
       if (record.status === 'unknown_after_dispatch') counts.ambiguous += 1;
       else if (record.status === 'conflict') counts.conflict += 1;
       else if (record.status === 'quarantined') counts.quarantined += 1;
       else if (['acknowledged', 'superseded', 'abandoned'].includes(record.status)) counts.retainedTerminal += 1;
-      else counts.pending += 1;
+      else {
+        counts.pending += 1;
+        if (record.status === 'planned') {
+          const timestamp = Number.isFinite(record.createdAt) ? record.createdAt : record.updatedAt;
+          if (Number.isFinite(timestamp)) {
+            const ageMs = Math.max(0, current - timestamp);
+            if (counts.oldestPlannedAgeMs === null || ageMs > counts.oldestPlannedAgeMs) counts.oldestPlannedAgeMs = ageMs;
+            if (ageMs > STALE_PLANNED_AGE_MS) counts.stalePlanned += 1;
+          }
+        }
+      }
     }
     return counts;
   }
   return Object.freeze({ drain, health, reconcileOne, resolveSatisfiedEnsureCreates, safeOfflineSave });
 }
 
-module.exports = { DEFAULT_JOURNAL_PATH, ENSURE_EXISTS_RESOLUTION, createVaultMutationReconciler };
+module.exports = { DEFAULT_JOURNAL_PATH, ENSURE_EXISTS_RESOLUTION, STALE_PLANNED_AGE_MS, createVaultMutationReconciler };

@@ -110,3 +110,79 @@ test('disk bytes never acknowledge a stale Obsidian readback', () => {
     assert.equal(f.calls(), 0);
   } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
 });
+
+test('health reports stalePlanned and oldestPlannedAgeMs with an injected clock', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-reconcile-health-'));
+  try {
+    let clock = 1_000_000;
+    const ledger = createVaultMutationLedger({ filePath: path.join(root, 'ledger.json'), now: () => clock });
+    const adapter = { execute: () => ({ status: 'committed' }) };
+    const reconciler = createVaultMutationReconciler({ adapter, ledger, vaultRoot: root, vaultId: 'vault', now: () => clock });
+
+    assert.deepEqual(reconciler.health(), {
+      pending: 0,
+      ambiguous: 0,
+      conflict: 0,
+      quarantined: 0,
+      retainedTerminal: 0,
+      stalePlanned: 0,
+      oldestPlannedAgeMs: null,
+    });
+
+    ledger.ensure(op('op-health-01', 1, { vaultRelativePath: 'Journal/2026-01-02.md' }));
+    clock += 10 * 60 * 1000;
+    ledger.ensure(op('op-health-02', 2, { vaultRelativePath: 'Journal/2026-01-02.md' }));
+    assert.deepEqual(reconciler.health(), {
+      pending: 2,
+      ambiguous: 0,
+      conflict: 0,
+      quarantined: 0,
+      retainedTerminal: 0,
+      stalePlanned: 0,
+      oldestPlannedAgeMs: 10 * 60 * 1000,
+    });
+
+    // Advance 10 more minutes: op-health-01 is 20m old (>15m), op-health-02 is 10m old.
+    clock += 10 * 60 * 1000;
+    assert.deepEqual(reconciler.health(), {
+      pending: 2,
+      ambiguous: 0,
+      conflict: 0,
+      quarantined: 0,
+      retainedTerminal: 0,
+      stalePlanned: 1,
+      oldestPlannedAgeMs: 20 * 60 * 1000,
+    });
+
+    // Acknowledge op-health-01 and add a non-planned ambiguous op; only planned ops count toward stalePlanned/oldestPlannedAgeMs.
+    const claim1 = ledger.claim(op('op-health-01', 1, { vaultRelativePath: 'Journal/2026-01-02.md' }), 'owner-1');
+    ledger.transition('op-health-01', 'acknowledged', { ownerId: 'owner-1', fence: claim1.fence });
+    const op3 = op('op-health-03', 1, { vaultRelativePath: 'Notes/B.md' });
+    ledger.ensure(op3);
+    const claim3 = ledger.claim(op3, 'owner-3');
+    ledger.transition(op3.operationId, 'unknown_after_dispatch', { ownerId: 'owner-3', fence: claim3.fence });
+
+    assert.deepEqual(reconciler.health(), {
+      pending: 1,
+      ambiguous: 1,
+      conflict: 0,
+      quarantined: 0,
+      retainedTerminal: 1,
+      stalePlanned: 0,
+      oldestPlannedAgeMs: 10 * 60 * 1000,
+    });
+
+    // Verify scripts/vault-mutation-health.js exposes the new fields while preserving existing ones.
+    const { main: healthMain } = require('../scripts/vault-mutation-health');
+    const originalWrite = process.stdout.write;
+    let written = '';
+    process.stdout.write = (chunk) => { written += String(chunk); return true; };
+    try {
+      const output = healthMain({ JARVOS_VAULT_ROOT: root }, () => ({ reconciler, vaultId: 'vault' }));
+      assert.deepEqual(output.mutations, reconciler.health());
+      assert.deepEqual(JSON.parse(written), output);
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

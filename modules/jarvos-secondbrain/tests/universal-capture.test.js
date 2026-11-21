@@ -510,4 +510,59 @@ test('capture exit code and stderr message are derived from the result, not from
     captureFailureMessage({ ok: false, artifactReceipt: { artifacts: [] }, journalEntry: { receipt: { adapterEvidence: { reason: 'prior_operation_blocked' } } } }),
     'Capture not acknowledged (prior_operation_blocked)',
   );
+  assert.equal(
+    captureFailureMessage({
+      ok: false,
+      artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-10-28.md', outcome: 'deferred' }] },
+      journalEntry: { receipt: { status: 'unavailable', obsidian: 'app_unreachable', adapterEvidence: { capabilityReason: 'capability_no_result' } } },
+    }),
+    'Capture not acknowledged: journal Journal/2026-10-28.md: deferred (capability_no_result)',
+  );
+  assert.equal(
+    captureFailureMessage({
+      ok: false,
+      artifactReceipt: { artifacts: [{ kind: 'note', vaultRelativePath: 'Notes/Synthetic.md', outcome: 'failed' }] },
+      note: { receipt: { status: 'unavailable', obsidian: 'app_unreachable', adapterEvidence: { capabilityReason: 'capability_malformed_result' } } },
+    }),
+    'Capture not acknowledged: note Notes/Synthetic.md: failed (capability_malformed_result)',
+  );
+  const blockedMessage = captureFailureMessage({
+    ok: false,
+    artifactReceipt: { artifacts: [{ kind: 'journal', vaultRelativePath: 'Journal/2026-10-28.md', outcome: 'failed' }] },
+    journalEntry: {
+      receipt: {
+        status: 'blocked',
+        operation: { content: 'SECRET_SYNTHETIC_BODY_DO_NOT_LEAK' },
+        adapterEvidence: {
+          reason: 'prior_operation_pending',
+          blockingOperationId: 'op-stuck-head-01',
+          blockingStatus: 'conflict',
+          blockingAgeMs: 12_000,
+        },
+      },
+    },
+  });
+  assert.equal(
+    blockedMessage,
+    'Capture not acknowledged: journal Journal/2026-10-28.md: failed (prior_operation_pending: blocked by prior operation with status conflict)',
+  );
+  assert.doesNotMatch(blockedMessage, /SECRET_SYNTHETIC_BODY_DO_NOT_LEAK/);
+  assert.equal(
+    captureFailureMessage({
+      ok: false,
+      artifactReceipt: { artifacts: [] },
+      journalEntry: {
+        receipt: {
+          status: 'blocked',
+          adapterEvidence: {
+            reason: 'prior_operation_pending',
+            blockingOperationId: 'op-planned-head',
+            blockingStatus: 'planned',
+            capabilityReason: 'capability_no_result',
+          },
+        },
+      },
+    }),
+    'Capture not acknowledged (prior_operation_pending: blocked by prior operation with status planned; capability_no_result)',
+  );
 });
