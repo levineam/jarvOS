@@ -882,3 +882,47 @@ test('a blocked receipt names only the blocking operation status, never its id',
     assert.doesNotMatch(JSON.stringify(receipt), /op-blocking-head-01/);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test('incident regression: a journal ensure-create left planned by an outage does not block a later exact capture', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvos-planned-create-incident-'));
+  try {
+    const { createConfiguredVaultMutationService } = require('../src/vault-mutation-service');
+    const journalPath = 'Journal/2026-01-07.md';
+    const files = new Map([[journalPath, { path: journalPath, content: '# Journal\n' }]]);
+    let available = false;
+    const context = {
+      TextDecoder, Uint8Array, JSON,
+      atob: (value) => Buffer.from(value, 'base64').toString('binary'),
+      app: {
+        vault: {
+          getFileByPath: (target) => files.get(target) || null,
+          create: (target, content) => { const entry = { path: target, content }; files.set(target, entry); return settled(entry); },
+          process: (entry, transform) => { entry.content = transform(entry.content); return settled(entry); },
+          read: (entry) => settled(entry.content),
+        },
+      },
+    };
+    context.globalThis = context;
+    const service = createConfiguredVaultMutationService({
+      vaultRoot: root,
+      vaultId: 'vault-a',
+      adapterOptions: {
+        ledgerPath: path.join(root, '.state', 'ledger.json'),
+        probe: () => ({ state: available ? 'available' : 'app_stopped', vaultId: 'vault-a' }),
+        evaluate: (code) => { const raw = vm.runInNewContext(code, context); return typeof raw === 'string' ? JSON.parse(raw) : raw; },
+        pollIntervalMs: 1,
+      },
+    });
+    const create = { schemaVersion: 1, operationId: 'op-incident-create', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 1, operationKind: 'create', ensureExists: true, content: '# Journal\n', source: service.source };
+    assert.equal(service.adapter.submit(create, { drain: false }).status, 'unavailable');
+    assert.equal(service.adapter.ledger.get(create.operationId).status, 'planned');
+
+    available = true;
+    const line = { schemaVersion: 1, operationId: 'op-incident-line', vaultId: 'vault-a', vaultRelativePath: journalPath, sequence: 2, operationKind: 'transform', transformName: 'append-line', transformVersion: 1, replayPayload: { line: '- synthetic idea' }, source: service.source };
+    const exact = service.createWriteContext({ vaultRelativePath: journalPath, operationId: line.operationId, exact: true });
+    const receipt = exact.mutationExecutor(line);
+    assert.equal(receipt.status, 'committed', receipt.adapterEvidence?.reason);
+    assert.equal(service.adapter.ledger.get(create.operationId).status, 'acknowledged');
+    assert.match(files.get(journalPath).content, /- synthetic idea/);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
