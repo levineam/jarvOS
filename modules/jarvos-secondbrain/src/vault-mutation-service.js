@@ -341,24 +341,12 @@ function createConfiguredVaultMutationService({
       : receipt;
   }
 
-  // { status: 'present' | 'absent' | 'unavailable', obsidian?, capabilityReason? },
-  // read from the app's vault index with only allowlisted capability codes.
-  function inspectVaultFile(vaultRelativePath) {
-    if (typeof adapter.inspectFileExists !== 'function') return { status: 'unavailable' };
-    const inspected = adapter.inspectFileExists(vaultRelativePath);
-    if (inspected?.status === 'present' || inspected?.status === 'absent') return { status: inspected.status };
-    const details = {};
-    if (CAPABILITY_STATES.includes(inspected?.obsidian)) details.obsidian = inspected.obsidian;
-    if (CAPABILITY_REASONS.includes(inspected?.capabilityReason)) details.capabilityReason = inspected.capabilityReason;
-    return { status: 'unavailable', ...details };
-  }
-
   // 'present' | 'absent' | 'unavailable', read from the app's vault index.
   function vaultFileState(vaultRelativePath) {
-    return inspectVaultFile(vaultRelativePath).status;
+    return typeof adapter.inspectFileExists === 'function' ? adapter.inspectFileExists(vaultRelativePath).status : 'unavailable';
   }
 
-  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, inspectVaultFile, reconciler, reserveCaptureOperation, source, transforms, vaultFileState, vaultId, vaultRoot });
+  return Object.freeze({ adapter, applyMarkdownMutation, createMarkdownFile, createWriteContext, deleteMarkdownFile, execute, reconciler, reserveCaptureOperation, source, transforms, vaultFileState, vaultId, vaultRoot });
 }
 
 module.exports = { PACKAGE_TEMPORARY_SHIMS, WRITER_INVENTORY, assertNoUnclassifiedVaultWrites, assertPackageImportBoundary, assertWriterInventory, configuredVaultId, createConfiguredVaultMutationService };

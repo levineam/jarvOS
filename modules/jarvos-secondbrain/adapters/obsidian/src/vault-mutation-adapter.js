@@ -199,7 +199,7 @@ function buildObsidianMutationProgram(operation) {
   operation = preparedJournalOperation(operation);
   if (operation.operationKind === 'delete') return buildObsidianDeleteProgram(operation);
   const encoded = payload(operation);
-  return `(() => { const input = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), c => c.charCodeAt(0)))); const store = globalThis.${RESULT_STORE} ||= {}; const token = input.operationId; store[token] = { status: 'pending' }; ${mutationTransformProgram(operation)} if (!globalThis.app?.vault?.read || !app.vault.getFileByPath) { store[token] = { status: 'error', errorClass: 'api_incompatible' }; return JSON.stringify({ queued: true, token }); } const finish = (file) => app.vault.read(file).then((readback) => { const exact = input.operationKind === 'create' || input.operationKind === 'replace' ? readback === input.content : transform?.invariant(readback) === true; store[token] = { status: exact ? 'done' : 'error', invariant: exact, errorClass: exact ? undefined : 'readback_mismatch' }; }).catch((e) => { store[token] = { status: 'error', errorClass: 'readback_failed', error: String(e?.message || e) }; }); const existing = app.vault.getFileByPath(input.vaultRelativePath); if (input.operationKind === 'create') { if (existing) { if (input.createOnly) store[token] = { status: 'error', errorClass: 'note_exists' }; else finish(existing); } else app.vault.create(input.vaultRelativePath, input.content).then(finish).catch((e) => { const raced = app.vault.getFileByPath(input.vaultRelativePath); if (raced) { if (input.createOnly) store[token] = { status: 'error', errorClass: 'note_exists' }; else finish(raced); } else store[token] = { status: 'error', errorClass: 'create_failed', error: String(e?.message || e) }; }); } else if (input.operationKind === 'transform') { if (!transform) store[token] = { status: 'error', errorClass: 'api_incompatible' }; else if (!existing) store[token] = { status: 'error', errorClass: 'missing_target' }; else { let preservedPlacement = false; app.vault.process(existing, current => { const next = transform.apply(current); preservedPlacement = input.transformName === 'journal-backlink' && input.replayPayload.preserveExistingLinks === true && next === current && !transform.invariant(current); return next; }).then(() => { if (preservedPlacement) store[token] = { status: 'error', errorClass: 'backlink_placement_conflict' }; else finish(existing); }).catch((e) => { store[token] = { status: 'error', errorClass: 'process_failed', error: String(e?.message || e) }; }); } } else if (input.operationKind === 'replace') { if (!existing) store[token] = { status: 'error', errorClass: 'missing_target' }; else app.vault.process(existing, current => current === input.expectedContent ? input.content : current).then(() => finish(existing)).catch((e) => { store[token] = { status: 'error', errorClass: 'replace_failed', error: String(e?.message || e) }; }); } else store[token] = { status: 'error', errorClass: 'invalid_operation' }; return JSON.stringify({ queued: true, token }); })()`;
+  return `(() => { const input = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('${encoded}'), c => c.charCodeAt(0)))); const store = globalThis.${RESULT_STORE} ||= {}; const token = input.operationId; store[token] = { status: 'pending' }; ${mutationTransformProgram(operation)} if (!globalThis.app?.vault?.read || !app.vault.getFileByPath) { store[token] = { status: 'error', errorClass: 'api_incompatible' }; return JSON.stringify({ queued: true, token }); } const finish = (file) => app.vault.read(file).then((readback) => { const exact = input.operationKind === 'create' || input.operationKind === 'replace' ? readback === input.content : transform?.invariant(readback) === true; store[token] = { status: exact ? 'done' : 'error', invariant: exact, errorClass: exact ? undefined : 'readback_mismatch' }; }).catch((e) => { store[token] = { status: 'error', errorClass: 'readback_failed', error: String(e?.message || e) }; }); const existing = app.vault.getFileByPath(input.vaultRelativePath); if (input.operationKind === 'create') { if (existing) { if (input.createOnly) store[token] = { status: 'error', errorClass: 'note_exists' }; else finish(existing); } else app.vault.create(input.vaultRelativePath, input.content).then(finish).catch((e) => { const raced = app.vault.getFileByPath(input.vaultRelativePath); if (raced) { if (input.createOnly) store[token] = { status: 'error', errorClass: 'note_exists' }; else finish(raced); } else store[token] = { status: 'error', errorClass: 'create_failed', error: String(e?.message || e) }; }); } else if (input.operationKind === 'transform') { if (!existing || !transform) store[token] = { status: 'error', errorClass: 'api_incompatible' }; else { let preservedPlacement = false; app.vault.process(existing, current => { const next = transform.apply(current); preservedPlacement = input.transformName === 'journal-backlink' && input.replayPayload.preserveExistingLinks === true && next === current && !transform.invariant(current); return next; }).then(() => { if (preservedPlacement) store[token] = { status: 'error', errorClass: 'backlink_placement_conflict' }; else finish(existing); }).catch((e) => { store[token] = { status: 'error', errorClass: 'process_failed', error: String(e?.message || e) }; }); } } else if (input.operationKind === 'replace') { if (!existing) store[token] = { status: 'error', errorClass: 'missing_target' }; else app.vault.process(existing, current => current === input.expectedContent ? input.content : current).then(() => finish(existing)).catch((e) => { store[token] = { status: 'error', errorClass: 'replace_failed', error: String(e?.message || e) }; }); } else store[token] = { status: 'error', errorClass: 'invalid_operation' }; return JSON.stringify({ queued: true, token }); })()`;
 }
 // Read-only companion to the mutation program.  Node-visible disk bytes are
 // intentionally not consulted: acknowledgement belongs to Obsidian's vault.
@@ -238,7 +238,6 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   const deleteAllowed = (operation) => operation.operationKind !== 'delete' || (typeof allowDeleteOperation === 'function' && allowDeleteOperation(operation) === true);
   let draining = false;
   let retryingHead = false;
-  let creatingMissingJournal = false;
   function unavailableCapabilityDetails(check) {
     const obsidian = check?.state === 'available' ? 'wrong_vault' : (CAPABILITY_STATES.includes(check?.state) ? check.state : 'app_unreachable');
     const capabilityReason = CAPABILITY_REASONS.includes(check?.reason) ? check.reason : undefined;
@@ -278,24 +277,13 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
   // not yet registered with Obsidian). It is bound to the configured vault name
   // and never throws: anything but a clean yes/no answer is `unavailable`.
   function inspectFileExists(vaultRelativePath) {
-    let relativePath;
-    try { relativePath = validateVaultRelativeMarkdownPath(vaultRelativePath); }
-    catch { return { status: 'unavailable' }; }
     try {
-      if (probe) {
-        const check = probe();
-        if (!check || !CAPABILITY_STATES.includes(check.state) || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) {
-          return { status: 'unavailable', ...unavailableCapabilityDetails(check) };
-        }
-      }
+      const relativePath = validateVaultRelativeMarkdownPath(vaultRelativePath);
+      if (probe) { const check = probe(); if (!check || check.state !== 'available' || (check.vaultId && check.vaultId !== vaultId)) return { status: 'unavailable' }; }
       const inspected = run(`JSON.stringify({ vaultName: app?.vault?.getName?.(), hasVault: Boolean(app?.vault?.getFileByPath), exists: Boolean(app?.vault?.getFileByPath?.(${JSON.stringify(relativePath)})) })`, probeTimeoutMs);
-      const classified = classifyCapabilityResult(inspected, vaultName, vaultId);
-      if (classified.state !== 'available') return { status: 'unavailable', ...unavailableCapabilityDetails(classified) };
-      if (typeof inspected.exists !== 'boolean') return { status: 'unavailable', obsidian: 'app_unreachable', capabilityReason: 'capability_malformed_result' };
+      if (classifyCapabilityResult(inspected, vaultName, vaultId).state !== 'available' || typeof inspected.exists !== 'boolean') return { status: 'unavailable' };
       return { status: inspected.exists ? 'present' : 'absent' };
-    } catch (error) {
-      return { status: 'unavailable', ...unavailableCapabilityDetails(classifyCapabilityError(error)) };
-    }
+    } catch { return { status: 'unavailable' }; }
   }
   function failureEvidence(errorClass, cause) {
     const errorMessage = sanitizeErrorMessage(cause, { vaultRoot });
@@ -365,13 +353,7 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
     // Exclude the just-persisted foreground intent: a drain must not recursively
     // re-dispatch it before this invocation establishes its terminal state.
     if (drain && !draining && !retryingHead && typeof opportunisticDrain === 'function') { try { draining = true; opportunisticDrain({ limit: 2, timeMs: 100, excludeOperationId: excludeOperationId || operation.operationId }); } catch { /* the foreground mutation remains authoritative */ } finally { draining = false; } }
-    // A journal ensure-create whose file is missing on disk may go ahead of
-    // queued line transforms for that journal (they wait on a missing target).
-    const createMissingJournal = operation.operationKind === 'create' && operation.ensureExists === true
-      && DEFAULT_JOURNAL_PATH.test(operation.vaultRelativePath)
-      && !fs.existsSync(path.join(vaultRoot, operation.vaultRelativePath));
-    const claimOptions = { ...(claimOnlyIfStatus ? { onlyIfStatus: claimOnlyIfStatus } : {}), ...(createMissingJournal ? { aheadOfPlannedTransforms: true } : {}) };
-    let claim = mutationLedger.claim(operation, ownerId, claimOptions);
+    let claim = mutationLedger.claim(operation, ownerId, claimOnlyIfStatus ? { onlyIfStatus: claimOnlyIfStatus } : undefined);
     const runHeadReconcile = () => {
       try {
         retryingHead = true;
@@ -424,32 +406,6 @@ function createVaultMutationAdapter({ vaultRoot, vaultId, vaultName = path.basen
         mutationLedger.transition(operation.operationId, 'acknowledged', { ownerId, fence: claim.fence, evidence: { acknowledgedBy: 'app.vault.read' } });
         try { run(cleanupProgram(operation.operationId)); } catch { /* acknowledgement is already durable */ }
         return createInternalReceipt({ operation, status: 'committed', persistence: 'durable', obsidian: 'acknowledged' });
-      }
-      if (result?.status === 'error' && result.errorClass === 'missing_target' && operation.operationKind === 'transform') {
-        // The app has not indexed the target yet (for example a journal created
-        // on disk while Obsidian was away). Nothing changed; keep it retryable.
-        // Clear the result token before releasing the claim, so a retry that
-        // claims next can never have its own result erased by this cleanup.
-        const failure = failureEvidence('missing_target', result.error);
-        try { run(cleanupProgram(operation.operationId)); } catch {}
-        mutationLedger.transition(operation.operationId, 'planned', { ownerId, fence: claim.fence, evidence: failure });
-        // A journal removed while this line waited: run the queued ensure-create
-        // for that journal first (it may go ahead of planned transforms), then
-        // retry this line once.
-        if (!creatingMissingJournal && DEFAULT_JOURNAL_PATH.test(operation.vaultRelativePath)
-          && !fs.existsSync(path.join(vaultRoot, operation.vaultRelativePath))) {
-          const queuedCreate = mutationLedger.active().find((entry) => entry.operation.vaultId === operation.vaultId
-            && entry.operation.vaultRelativePath === operation.vaultRelativePath
-            && entry.status === 'planned' && entry.operation.operationKind === 'create' && entry.operation.ensureExists === true);
-          if (queuedCreate) {
-            creatingMissingJournal = true;
-            try {
-              const created = execute(queuedCreate.operation, { drain: false, allowHeadRetry: false });
-              if (created.status === 'committed' || created.status === 'already_satisfied') return execute(operation, { drain: false, allowHeadRetry: false });
-            } finally { creatingMissingJournal = false; }
-          }
-        }
-        return createInternalReceipt({ operation, status: 'unavailable', lifecycleState: 'planned', persistence: 'durable', obsidian: 'unacknowledged', adapterEvidence: failure });
       }
       if (result?.status === 'error' || result?.status === 'done') {
         const failure = failureEvidence(result.errorClass || 'readback_mismatch', result.error);

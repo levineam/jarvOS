@@ -58,40 +58,12 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
   // journal is already there: its ack can fail on a flaky Obsidian CLI and leave
   // an ambiguous head operation that blocks every later write to that day. Disk
   // bytes alone are not proof the app has registered the file, so presence is
-  // confirmed by the service's read of the app vault index. When the presence
-  // check cannot answer ('unknown'), fall back to local disk existence so an
-  // existing journal does not queue a redundant create while the journal write
-  // itself is still planned durably in the ledger.
-  function journalExistsOnDisk(journalPath) {
-    const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
-    return vaultFileExists({ vaultRoot: path.resolve(vaultRoot), vaultRelativePath });
-  }
+  // confirmed by the service's read of the app vault index. Anything short of a
+  // clean "present" (no such read, app unreachable, absent) keeps the create.
   function journalIsPresent(journalPath) {
     const vaultRelativePath = relativeToVault(vaultRoot, journalPath);
     if (!vaultFileExists({ vaultRoot: path.resolve(vaultRoot), vaultRelativePath })) return false;
-    if (typeof service.inspectVaultFile === 'function') {
-      let inspected;
-      try { inspected = service.inspectVaultFile(vaultRelativePath); }
-      catch { return 'unknown'; }
-      if (inspected?.status === 'present') return true;
-      if (inspected?.status === 'absent') return false;
-      return 'unknown';
-    }
-    if (typeof service.vaultFileState !== 'function') return false;
-    let state;
-    try { state = service.vaultFileState(vaultRelativePath); }
-    catch { return 'unknown'; }
-    if (state === 'present') return true;
-    if (state === 'absent') return false;
-    if (state && typeof state === 'object') {
-      if (state.status === 'present') return true;
-      if (state.status === 'absent') return false;
-    }
-    return 'unknown';
-  }
-  function resolveJournalPresence(journalPath) {
-    const presence = journalIsPresent(journalPath);
-    return presence === 'unknown' ? journalExistsOnDisk(journalPath) : presence;
+    return typeof service.vaultFileState === 'function' && service.vaultFileState(vaultRelativePath) === 'present';
   }
   function contextFor(vaultRelativePath, intentId, requestHash, exact) { return service.createWriteContext({ vaultRelativePath, intentId, requestHash, exact, operationSource: service.source }); }
   function executeTransform({ date, transformName, transformVersion = 1, replayPayload, intentId, requestHash, exact }) {
@@ -141,11 +113,8 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
       const contentOriginPayload = contentOrigin ? { ...contentOrigin } : null;
       const invalid = createJarvosVaultTransforms().quarantine({ transformName: 'journal-section-line', transformVersion: contentOriginPayload ? 2 : 1, replayPayload: { heading, line, ...(contentOriginPayload ? { contentOrigin: contentOriginPayload } : {}) } });
       if (contentOriginPayload && !invalid) contentOriginPayload.clean_text_digest = digestText(normalizeJournalEntry(line).text);
-      const journalPath = path.join(journalDir, `${date}.md`);
-      const presence = invalid || (requestHash && fs.existsSync(journalPath))
-        ? true
-        : resolveJournalPresence(journalPath);
-      const ensured = presence ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash, exact });
+      const journalExists = invalid || (requestHash && fs.existsSync(path.join(journalDir, `${date}.md`))) || journalIsPresent(path.join(journalDir, `${date}.md`));
+      const ensured = journalExists ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined, requestHash, exact });
       if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, heading, line: String(line).trim(), receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
       const exactLink = safeBacklink && linkTitle && !contentOriginPayload;
       const outcome = executeTransform({
@@ -180,9 +149,7 @@ function createVaultStorageAdapter({ mutationService, vaultRoot = getVaultDir(),
     linkNoteToJournal({ noteTitle, noteId, date = todayDate(), heading = NOTES_HEADING, intentId, journalPolicy, explicitBacklink, frontmatter, notePath } = {}) {
       if (resolveJournalLinkPolicy({ noteTitle, notePath, frontmatter, journalPolicy, explicitBacklink, vaultRoot, source }) === 'none') return { status: 'not_requested', linked: false, acknowledged: false };
       if (!noteTitle) throw new Error('noteTitle is required');
-      const journalPath = path.join(journalDir, `${date}.md`);
-      const presence = resolveJournalPresence(journalPath);
-      const ensured = presence ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
+      const ensured = journalIsPresent(path.join(journalDir, `${date}.md`)) ? null : this.ensureJournal({ date, intentId: intentId ? `${intentId}:create` : undefined });
       if (ensured && !receiptIsAcknowledged(ensured.receipt)) return { journalPath: ensured.journalPath, receipt: ensured.receipt, acknowledged: false, artifactReceipt: ensured.artifactReceipt };
       const outcome = executeTransform({ date, transformName: 'journal-backlink', replayPayload: { linkTarget: noteTitle, section: heading, ...(noteId ? { noteId } : {}) }, intentId: intentId ? `${intentId}:backlink` : undefined });
       return {
