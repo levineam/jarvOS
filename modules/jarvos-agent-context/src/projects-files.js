@@ -163,6 +163,25 @@ function unavailable() {
   return { status: 'unavailable', code: 'PROJECTS_FILES_UNAVAILABLE', reason: 'Project files are unavailable', packet: null };
 }
 
+const stalledCount = (project) => project.stalledCount ?? project.stalled?.length ?? 0;
+
+function trimStalledDetails(packet, projects, oversized) {
+  if (!oversized()) return;
+  for (const project of projects) {
+    if (project.stalled.length <= 3) continue;
+    project.stalledCount = project.stalled.length;
+    project.stalled.length = 3;
+    packet.truncated = true;
+  }
+  for (let i = projects.length - 1; i >= 0 && oversized(); i--) {
+    const project = projects[i];
+    if (!project.stalled.length) continue;
+    project.stalledCount = stalledCount(project);
+    delete project.stalled;
+    packet.truncated = true;
+  }
+}
+
 async function readProjectSource(root, rootStat, name, maxBytes) {
   // Node has no openat(); retain file/root identity checks for both readers.
   const filename = path.join(root, name);
@@ -260,14 +279,12 @@ async function readProjectsFiles(directory, { project, now = new Date(), stallAf
       project: { ...fields, file: record.file, revision: record.revision, private: record.private, sessions, stalled: orientation(record, { now, stallAfterDays }).stalled, body: record.body.slice(0, 40_000) },
     };
     if (record.body.length > 40_000 || record.sessions.length > 50) result.truncated = true;
-    while (Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PACKET_BYTES && result.project.body) {
+    const oversized = () => Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PACKET_BYTES;
+    while (oversized() && result.project.body) {
       result.truncated = true;
       result.project.body = result.project.body.slice(0, Math.floor(result.project.body.length * 0.8));
     }
-    while (Buffer.byteLength(JSON.stringify(result), 'utf8') > MAX_PACKET_BYTES && result.project.stalled.length) {
-      result.truncated = true;
-      result.project.stalled.pop();
-    }
+    trimStalledDetails(result, [result.project], oversized);
     return result;
   }
 
@@ -286,11 +303,11 @@ async function readProjectsFiles(directory, { project, now = new Date(), stallAf
     delete projects[i].goal;
     delete projects[i].lastLog;
   }
+  trimStalledDetails(packet, projects, oversized);
   while (oversized() && projects.length) {
     packet.truncated = true;
-    projects.pop();
+    packet.summary.stalled -= stalledCount(projects.pop());
     packet.count = projects.length;
-    packet.summary.stalled = projects.reduce((count, item) => count + item.stalled.length, 0);
   }
   while (oversized() && skipped.length) { packet.truncated = true; skipped.pop(); }
   return packet;
@@ -306,10 +323,12 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
   const projects = result.projects || [];
   const active = projects.filter((item) => item.status === 'active');
   const stalled = active.flatMap((item) => (item.stalled || []).map((step) => ({ item, step })));
-  const stalledLines = stalled.length ? [
-    `Stalled Plan steps: ${stalled.length}`,
-    ...stalled.slice(0, 8).map(({ item, step }) => `- ${oneLine(item.title, 120)} — ${stalledStepLine(step)}`),
-    ...(stalled.length > 8 ? [`and ${stalled.length - 8} more`] : []),
+  const activeStalledCount = active.reduce((count, item) => count + stalledCount(item), 0);
+  const shownStalled = stalled.slice(0, 8);
+  const stalledLines = activeStalledCount ? [
+    `Stalled Plan steps: ${activeStalledCount}`,
+    ...shownStalled.map(({ item, step }) => `- ${oneLine(item.title, 120)} — ${stalledStepLine(step)}`),
+    ...(shownStalled.length && activeStalledCount > shownStalled.length ? [`and ${activeStalledCount - shownStalled.length} more`] : []),
   ] : [];
   const titles = new Set(active.map((item) => item.title));
   const children = (parent) => active.filter((item) => (parent === null ? !titles.has(item.parent) : item.parent === parent))
@@ -354,7 +373,7 @@ function renderProjectsFilesMarkdown(result, { directory = '', maxChars = 3600 }
       ...(done.length ? [`Done (${done.length}): ${done.join('; ')}`] : []),
       // File names are data too, so they stay inside the block.
       ...(unread.length ? [`Not read: ${unread.map((item) => `${oneLine(item.file, 120)} (${item.reason})`).join('; ')}`] : []),
-      ...(result.truncated ? ['Some projects were left out to stay within the size limit; read the folder for the rest.'] : []),
+      ...(result.truncated ? ['Project data was trimmed to fit. Read the project files for the rest.'] : []),
       '</untrusted-project-data>',
     ].join('\n');
   };
